@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>정답풀이 테스트</title>
+<h1>정답풀이 (OpenRouter + Netlify)</h1>
+<button id="ping">함수 호출 테스트</button>
+<pre id="out">아직 응답 없음</pre>
+<script>
+document.getElementById('ping').onclick = async () => {
+  const r = await fetch('/.netlify/functions/solve', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({question: 'ping test'})
+  });
+  document.getElementById('out').textContent = await r.text();
+};
+</script>
+</html>
