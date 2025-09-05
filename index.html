@@ -28,7 +28,27 @@
   <h3>결과</h3>
   <div id="out" class="out"></div>
 
+  <!-- ===== 여기까지가 기존 폼/결과 영역 ===== -->
+
+  <hr>
+  <h3>카메라 · OCR · 음성</h3>
+
+  <div class="row" style="flex-wrap:wrap; gap:12px">
+    <button id="camStart">카메라 켜기</button>
+    <button id="camShot" disabled>캡처 → OCR</button>
+    <button id="camStop" disabled>카메라 끄기</button>
+    <button id="speak" disabled>결과 읽어주기(TTS)</button>
+    <span id="ocrStatus" class="muted"></span>
+  </div>
+
+  <video id="preview" autoplay playsinline style="max-width:100%; border-radius:8px; display:none;"></video>
+  <canvas id="frame" style="display:none"></canvas>
+
+  <!-- Tesseract.js (OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
   <script>
+    // ====== 기존 질문 전송 스크립트 ======
     const $q = document.getElementById('q');
     const $btn = document.getElementById('send');
     const $out = document.getElementById('out');
@@ -75,6 +95,91 @@
     $q.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
     });
+
+    // ====== 카메라 + OCR + TTS ======
+    const $video = document.getElementById('preview');
+    const $canvas = document.getElementById('frame');
+    const $camStart = document.getElementById('camStart');
+    const $camShot  = document.getElementById('camShot');
+    const $camStop  = document.getElementById('camStop');
+    const $speak    = document.getElementById('speak');
+    const $ocrStatus = document.getElementById('ocrStatus');
+
+    let stream;
+
+    async function startCamera() {
+      try {
+        $ocrStatus.textContent = '카메라 권한 요청 중...';
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+        $video.srcObject = stream;
+        $video.style.display = 'block';
+        $camShot.disabled = false;
+        $camStop.disabled = false;
+        $ocrStatus.textContent = '카메라 ON';
+      } catch (e) {
+        console.error(e);
+        $ocrStatus.textContent = '카메라 접근 실패: ' + e.message;
+      }
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      $video.srcObject = null;
+      $video.style.display = 'none';
+      $camShot.disabled = true;
+      $camStop.disabled = true;
+      $ocrStatus.textContent = '카메라 OFF';
+    }
+
+    async function captureAndOCR() {
+      if (!$video.srcObject) return;
+      $ocrStatus.textContent = '캡처 중...';
+
+      const w = $video.videoWidth || 1280;
+      const h = $video.videoHeight || 720;
+      $canvas.width = w; $canvas.height = h;
+      const ctx = $canvas.getContext('2d');
+      ctx.drawImage($video, 0, 0, w, h);
+
+      $ocrStatus.textContent = 'OCR 인식 중... (조금 걸릴 수 있음)';
+      try {
+        const { data } = await Tesseract.recognize($canvas, 'eng'); // 한글도 인식 원하면 'kor' 추가 가능 (다음 단계에서 세팅)
+        const text = (data && data.text || '').trim();
+        if (text) {
+          document.getElementById('q').value = text; // OCR 결과를 질문 칸에 넣기
+          $ocrStatus.textContent = 'OCR 완료 ✅';
+        } else {
+          $ocrStatus.textContent = '문자 인식 실패. 더 밝은 곳에서 다시 시도해보세요.';
+        }
+      } catch (e) {
+        console.error(e);
+        $ocrStatus.textContent = 'OCR 오류: ' + e.message;
+      }
+    }
+
+    function speakResult() {
+      const text = document.getElementById('out').textContent.trim();
+      if (!text) { $ocrStatus.textContent = '읽을 결과가 없습니다.'; return; }
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ko-KR'; // 영어 결과 위주면 'en-US'로 바꿔도 됨
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    }
+
+    $camStart.addEventListener('click', startCamera);
+    $camStop .addEventListener('click', stopCamera);
+    $camShot .addEventListener('click', captureAndOCR);
+    $speak  .addEventListener('click', speakResult);
+
+    // 결과 박스가 채워지면 TTS 버튼 자동 활성화
+    const outObserver = new MutationObserver(() => {
+      const hasText = (document.getElementById('out').textContent || '').trim().length > 0;
+      $speak.disabled = !hasText;
+    });
+    outObserver.observe(document.getElementById('out'), { childList: true, subtree: true, characterData: true });
   </script>
 </body>
 </html>
