@@ -6,20 +6,27 @@
   <title>Answer Site</title>
   <style>
     :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    body { max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    body { max-width: 820px; margin: 32px auto; padding: 0 16px; }
     textarea { width: 100%; min-height: 120px; padding: 12px; font-size: 16px; }
     button { padding: 10px 16px; font-size: 16px; cursor: pointer; }
-    .row { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
     .out { white-space: pre-wrap; background: #f6f7f8; padding: 12px; border-radius: 8px; min-height: 48px; }
     .muted { color: #666; font-size: 14px; }
     .error { color: #b00020; }
+    .cam-wrap { position: relative; display: inline-block; max-width: 100%; }
+    #preview { max-width: 100%; border-radius: 8px; display: none; }
+    #roiCanvas {
+      position: absolute; inset: 0; display: none;
+      touch-action: none; /* 모바일 드래그 허용 */
+    }
+    .hint { font-size: 13px; color:#555; }
   </style>
 </head>
 <body>
   <h1>정답 풀이 테스트</h1>
   <p class="muted">질문을 적고 <b>보내기</b>를 누르면 <code>/.netlify/functions/solve</code>로 POST합니다.</p>
 
-  <textarea id="q" placeholder="여기에 질문을 입력하세요. (예: 2x+3=7, x는?)"></textarea>
+  <textarea id="q" placeholder="여기에 질문/문제 텍스트를 입력하거나 OCR로 채워보세요."></textarea>
   <div class="row">
     <button id="send">보내기</button>
     <span id="status" class="muted"></span>
@@ -31,15 +38,28 @@
   <hr>
   <h3>카메라 · OCR · 음성</h3>
 
-  <div class="row" style="flex-wrap:wrap; gap:12px">
+  <div class="row">
     <button id="camStart">카메라 켜기</button>
     <button id="camShot" disabled>캡처 → OCR</button>
     <button id="camStop" disabled>카메라 끄기</button>
-    <button id="speak" disabled>결과 읽어주기(TTS)</button>
+    <button id="speak" disabled>정답만 읽어주기(TTS)</button>
     <span id="ocrStatus" class="muted"></span>
   </div>
 
-  <video id="preview" autoplay playsinline style="max-width:100%; border-radius:8px; display:none;"></video>
+  <div class="row" style="align-items:center">
+    <label style="display:flex; gap:8px; align-items:center">
+      <input type="checkbox" id="autoMode">
+      <span>자동 모드(5초 안정 시 자동 풀이)</span>
+    </label>
+    <span id="autoStatus" class="muted"></span>
+  </div>
+
+  <div class="hint">TIP: 비디오 위를 <b>드래그</b>하면 파란 박스로 <b>영역 지정</b>이 됩니다. 지정한 영역만 OCR합니다.</div>
+
+  <div class="cam-wrap">
+    <video id="preview" autoplay playsinline></video>
+    <canvas id="roiCanvas"></canvas>
+  </div>
   <canvas id="frame" style="display:none"></canvas>
 
   <!-- Tesseract.js (OCR) -->
@@ -71,15 +91,16 @@
         });
 
         const ct = res.headers.get('content-type') || '';
+        let answerText = '';
         if (ct.includes('application/json')) {
           const data = await res.json();
-          $out.textContent = data.answer ?? JSON.stringify(data, null, 2);
+          answerText = data.answer ?? JSON.stringify(data, null, 2);
         } else {
           const text = await res.text();
-          try { const maybe = JSON.parse(text); $out.textContent = maybe.answer ?? text; }
-          catch { $out.textContent = text; }
+          try { const maybe = JSON.parse(text); answerText = maybe.answer ?? text; }
+          catch { answerText = text; }
         }
-
+        $out.textContent = answerText;
         $status.textContent = res.ok ? '완료' : `에러: ${res.status}`;
       } catch (err) {
         console.error(err);
@@ -94,9 +115,10 @@
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
     });
 
-    // ===== 카메라 + OCR + TTS =====
+    // ===== 카메라 + ROI(영역 지정) + OCR + TTS =====
     const $video = document.getElementById('preview');
     const $canvas = document.getElementById('frame');
+    const $roiCanvas = document.getElementById('roiCanvas');
     const $camStart = document.getElementById('camStart');
     const $camShot  = document.getElementById('camShot');
     const $camStop  = document.getElementById('camStop');
@@ -111,6 +133,8 @@
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
         $video.srcObject = stream;
         $video.style.display = 'block';
+        $roiCanvas.style.display = 'block';
+        resizeOverlay();
         $camShot.disabled = false;
         $camStop.disabled = false;
         $ocrStatus.textContent = '카메라 ON';
@@ -127,27 +151,114 @@
       }
       $video.srcObject = null;
       $video.style.display = 'none';
+      $roiCanvas.style.display = 'none';
       $camShot.disabled = true;
       $camStop.disabled = true;
       $ocrStatus.textContent = '카메라 OFF';
     }
 
+    // ROI 드래그 선택
+    let dragging = false;
+    let roi = null; // {x,y,w,h} in overlay canvas coords
+
+    function resizeOverlay() {
+      // 비디오 표시 크기에 맞춰 ROI 캔버스 사이즈 조정
+      const rect = $video.getBoundingClientRect();
+      $roiCanvas.width  = rect.width;
+      $roiCanvas.height = rect.height;
+      $roiCanvas.style.width  = rect.width + 'px';
+      $roiCanvas.style.height = rect.height + 'px';
+      $roiCanvas.style.left = $video.offsetLeft + 'px';
+      $roiCanvas.style.top  = $video.offsetTop + 'px';
+      drawROI();
+    }
+
+    window.addEventListener('resize', () => { if ($video.style.display !== 'none') resizeOverlay(); });
+
+    function drawROI() {
+      const ctx = $roiCanvas.getContext('2d');
+      ctx.clearRect(0,0,$roiCanvas.width,$roiCanvas.height);
+      if (!roi) return;
+      // 반투명 마스킹
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(0,0,$roiCanvas.width,$roiCanvas.height);
+      // 선택 영역 클리어
+      ctx.clearRect(roi.x, roi.y, roi.w, roi.h);
+      // 테두리
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
+    }
+
+    function startDrag(e) {
+      dragging = true;
+      const p = pointerPos(e);
+      roi = { x:p.x, y:p.y, w:0, h:0 };
+      drawROI();
+    }
+    function moveDrag(e) {
+      if (!dragging) return;
+      const p = pointerPos(e);
+      roi.w = p.x - roi.x;
+      roi.h = p.y - roi.y;
+      // 정규화(음수 드래그 처리)
+      const nx = Math.min(roi.x, roi.x + roi.w);
+      const ny = Math.min(roi.y, roi.y + roi.h);
+      const nw = Math.abs(roi.w);
+      const nh = Math.abs(roi.h);
+      roi = { x:nx, y:ny, w:nw, h:nh };
+      drawROI();
+    }
+    function endDrag() { dragging = false; }
+
+    function pointerPos(e) {
+      const rect = $roiCanvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: Math.max(0, Math.min(rect.width, clientX - rect.left)),
+               y: Math.max(0, Math.min(rect.height, clientY - rect.top)) };
+    }
+
+    $roiCanvas.addEventListener('mousedown', startDrag);
+    $roiCanvas.addEventListener('mousemove', moveDrag);
+    window.addEventListener('mouseup', endDrag);
+    $roiCanvas.addEventListener('touchstart', (e)=>{ e.preventDefault(); startDrag(e); }, {passive:false});
+    $roiCanvas.addEventListener('touchmove',  (e)=>{ e.preventDefault(); moveDrag(e);  }, {passive:false});
+    $roiCanvas.addEventListener('touchend',   (e)=>{ e.preventDefault(); endDrag();    }, {passive:false});
+
     async function captureAndOCR() {
       if (!$video.srcObject) return;
 
-      // 1) 캡처
       $ocrStatus.textContent = '캡처 중...';
-      const w = $video.videoWidth || 1280;
-      const h = $video.videoHeight || 720;
-      $canvas.width = w; 
-      $canvas.height = h;
-      const ctx = $canvas.getContext('2d');
-      ctx.drawImage($video, 0, 0, w, h);
 
-      // 2) OCR
+      // 원본 프레임 캡처(비디오 실제 해상도)
+      const vw = $video.videoWidth  || 1280;
+      const vh = $video.videoHeight || 720;
+      $canvas.width = vw; 
+      $canvas.height = vh;
+      const ctx = $canvas.getContext('2d');
+      ctx.drawImage($video, 0, 0, vw, vh);
+
+      // ROI가 있으면 그 영역만 잘라 재구성
+      let sourceCanvas = $canvas;
+      if (roi && roi.w > 8 && roi.h > 8) {
+        // 화면좌표 → 비디오 픽셀좌표로 변환
+        const vis = $video.getBoundingClientRect();
+        const sx = Math.round(roi.x * (vw / vis.width));
+        const sy = Math.round(roi.y * (vh / vis.height));
+        const sw = Math.round(roi.w * (vw / vis.width));
+        const sh = Math.round(roi.h * (vh / vis.height));
+        const crop = document.createElement('canvas');
+        crop.width = sw; crop.height = sh;
+        crop.getContext('2d').drawImage($canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        sourceCanvas = crop;
+      }
+
+      // OCR (kor+eng)
       $ocrStatus.textContent = 'OCR 인식 중...';
       try {
-        const { data } = await Tesseract.recognize($canvas, 'eng', {
+        const { data } = await Tesseract.recognize(sourceCanvas, 'kor+eng', {
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0',
           logger: (m) => {
             if (m.status === 'recognizing text' && typeof m.progress === 'number') {
               $ocrStatus.textContent = `OCR 진행률: ${Math.round(m.progress * 100)}%`;
@@ -170,11 +281,26 @@
       }
     }
 
+    // 정답만 추출해서 읽기
+    function extractAnswerOnly(fullText) {
+      if (!fullText) return '';
+      // 1) "정답: ..." 또는 "answer: ..." 패턴 우선
+      const m1 = fullText.match(/(?:정답|answer)\s*[:：]\s*([^\n]+)/i);
+      if (m1) return m1[1].trim();
+      // 2) 라인 단위에서 "정답" 또는 "Answer"가 들어간 라인
+      const line = fullText.split(/\r?\n/).find(l => /정답|answer/i.test(l));
+      if (line) return line.replace(/.*?(정답|answer)\s*[:：]?\s*/i,'').trim();
+      // 3) fallback: 첫 줄
+      return fullText.split(/\r?\n/)[0].trim();
+    }
+
     function speakResult() {
-      const text = document.getElementById('out').textContent.trim();
-      if (!text) { $ocrStatus.textContent = '읽을 결과가 없습니다.'; return; }
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'ko-KR'; // 영어 발음으로 하고 싶으면 'en-US'
+      const full = document.getElementById('out').textContent.trim();
+      if (!full) { $ocrStatus.textContent = '읽을 결과가 없습니다.'; return; }
+      const key = extractAnswerOnly(full);
+      const u = new SpeechSynthesisUtterance(key || full);
+      // 한국어/영어 혼합 대비: 기본 ko-KR, 영어 위주면 en-US로 변경 가능
+      u.lang = 'ko-KR';
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
     }
@@ -184,12 +310,105 @@
     $camShot .addEventListener('click', captureAndOCR);
     $speak  .addEventListener('click', speakResult);
 
-    // 결과 박스에 텍스트가 들어오면 TTS 버튼 활성화
+    // 결과 생기면 TTS 버튼 활성화
     const outObserver = new MutationObserver(() => {
       const hasText = (document.getElementById('out').textContent || '').trim().length > 0;
       $speak.disabled = !hasText;
     });
     outObserver.observe(document.getElementById('out'), { childList: true, subtree: true, characterData: true });
+
+    // ===== 자동 모드(5초 안정 시 자동 캡처 → OCR → ask → 자동 TTS) =====
+    const $auto = document.getElementById('autoMode');
+    const $autoStatus = document.getElementById('autoStatus');
+
+    let autoLoopId = null;        
+    let lastImageData = null;     
+    let stableSince = 0;          
+    let cooldownUntil = 0;        
+    const DIFF_THRESHOLD = 0.06;  
+    const CHECK_INTERVAL = 600;   
+    const STABLE_MS = 5000;       
+    const COOLDOWN_MS = 10000;    
+
+    function frameDiffRatio() {
+      if (!$video.srcObject || !$video.videoWidth) return 1;
+      const w = 640;
+      const h = Math.round(w * ($video.videoHeight / $video.videoWidth));
+      // 임시 비교용 캔버스로 $canvas 재사용 (주의: OCR 전엔 다시 그리므로 OK)
+      const tmp = $canvas.getContext('2d');
+      $canvas.width = w; $canvas.height = h;
+      tmp.drawImage($video, 0, 0, w, h);
+      const cur = tmp.getImageData(0, 0, w, h).data;
+      let diff = 0, total = w * h;
+      if (!lastImageData) { lastImageData = cur; return 1; }
+      for (let i = 0; i < cur.length; i += 4) {
+        const dr = cur[i]   - lastImageData[i];
+        const dg = cur[i+1] - lastImageData[i+1];
+        const db = cur[i+2] - lastImageData[i+2];
+        const delta = Math.abs(dr) + Math.abs(dg) + Math.abs(db);
+        if (delta > 60) diff++;
+      }
+      lastImageData = cur;
+      return diff / total;
+    }
+
+    async function captureOCRAndAsk() {
+      await captureAndOCR();
+      const q = ($q.value || '').trim();
+      if (q.length > 0) {
+        await ask();
+        // 자동으로 정답을 곧바로 읽기
+        speakResult();
+      }
+    }
+
+    function startAuto() {
+      if (!$video.srcObject) { $ocrStatus.textContent = '먼저 카메라를 켜주세요.'; $auto.checked = false; return; }
+      stableSince = 0;
+      lastImageData = null;
+      $autoStatus.textContent = '자동 모드 ON';
+      autoLoopId = setInterval(async () => {
+        const now = Date.now();
+        if (now < cooldownUntil) {
+          $ocrStatus.textContent = `자동 대기 중… ${Math.ceil((cooldownUntil - now)/1000)}s`;
+          return;
+        }
+        const ratio = frameDiffRatio();
+        if (ratio < DIFF_THRESHOLD) {
+          if (!stableSince) stableSince = now;
+          const remain = Math.max(0, STABLE_MS - (now - stableSince));
+          $ocrStatus.textContent = `안정 감지 중… ${Math.ceil(remain/1000)}s`;
+          if (now - stableSince >= STABLE_MS) {
+            $ocrStatus.textContent = '자동 캡처 → OCR 실행!';
+            cooldownUntil = now + COOLDOWN_MS;
+            stableSince = 0;
+            try { await captureOCRAndAsk(); }
+            catch (e) { console.error(e); }
+          }
+        } else {
+          stableSince = 0;
+          $ocrStatus.textContent = '움직임 감지됨(대기)…';
+        }
+      }, CHECK_INTERVAL);
+    }
+
+    function stopAuto() {
+      if (autoLoopId) clearInterval(autoLoopId);
+      autoLoopId = null;
+      $autoStatus.textContent = '자동 모드 OFF';
+      $ocrStatus.textContent = '대기';
+    }
+
+    $auto.addEventListener('change', () => {
+      if ($auto.checked) startAuto(); else stopAuto();
+    });
+
+    // 카메라가 꺼지면 자동 모드도 종료
+    const _origStop = stopCamera;
+    stopCamera = function() {
+      stopAuto();
+      _origStop();
+    };
   </script>
 </body>
 </html>
