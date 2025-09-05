@@ -17,7 +17,7 @@
     #preview { max-width: 100%; border-radius: 8px; display: none; }
     #roiCanvas {
       position: absolute; inset: 0; display: none;
-      touch-action: none; /* 모바일 드래그 허용 */
+      touch-action: none;
     }
     .hint { font-size: 13px; color:#555; }
     .panel label { display:block; font-size:13px; margin-bottom:4px; }
@@ -54,36 +54,34 @@
       <span>자동 모드(안정 시 자동 풀이)</span>
     </label>
     <span id="autoStatus" class="muted"></span>
+    <span id="autoDebug" class="muted"></span> <!-- 디버그 숫자 표시 -->
   </div>
 
   <!-- 자동 모드 파라미터 조절 패널 -->
   <div id="autoPanel" class="row panel" style="gap:18px; align-items:flex-end">
     <div>
       <label>민감도(변화 허용 비율)
-        <input id="inpThreshold" type="range" min="0.03" max="0.30" step="0.01" value="0.15">
+        <input id="inpThreshold" type="range" min="0.03" max="0.30" step="0.01" value="0.18">
       </label>
-      <div class="muted">현재: <span id="lblThreshold">0.15</span></div>
+      <div class="muted">현재: <span id="lblThreshold">0.18</span></div>
     </div>
-
     <div>
       <label>체크 주기(ms)
         <input id="inpInterval" type="range" min="200" max="1500" step="50" value="800">
       </label>
       <div class="muted">현재: <span id="lblInterval">800</span> ms</div>
     </div>
-
     <div>
       <label>안정 시간(s)
-        <input id="inpStable" type="range" min="1" max="8" step="1" value="3">
+        <input id="inpStable" type="range" min="1" max="8" step="1" value="2">
       </label>
-      <div class="muted">현재: <span id="lblStable">3</span> s</div>
+      <div class="muted">현재: <span id="lblStable">2</span> s</div>
     </div>
-
     <div>
       <label>쿨다운(s)
-        <input id="inpCooldown" type="range" min="5" max="30" step="1" value="10">
+        <input id="inpCooldown" type="range" min="5" max="30" step="1" value="5">
       </label>
-      <div class="muted">현재: <span id="lblCooldown">10</span> s</div>
+      <div class="muted">현재: <span id="lblCooldown">5</span> s</div>
     </div>
   </div>
 
@@ -95,9 +93,7 @@
   </div>
   <canvas id="frame" style="display:none"></canvas>
 
-  <!-- Tesseract.js (OCR) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-
   <script>
     /* ===== 질문 전송 ===== */
     const $q = document.getElementById('q');
@@ -146,27 +142,21 @@
         $ocrStatus.textContent = '카메라 권한 요청 중...';
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
         $video.srcObject = stream; $video.style.display = 'block';
-        $roiCanvas.style.display = 'block'; resizeOverlay();
+        $roiCanvas.style.display = 'block';
         $camShot.disabled = false; $camStop.disabled = false;
         $ocrStatus.textContent = '카메라 ON';
+        if ($auto.checked) startAuto(); // 자동 모드 켜져 있으면 바로 시작
       } catch (e) { console.error(e); $ocrStatus.textContent = '카메라 접근 실패: ' + e.message; }
     }
     function stopCamera() {
       if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
       $video.srcObject = null; $video.style.display = 'none'; $roiCanvas.style.display = 'none';
       $camShot.disabled = true; $camStop.disabled = true; $ocrStatus.textContent = '카메라 OFF';
+      stopAuto();
     }
 
     // ROI 드래그
     let dragging = false, roi = null;
-    function resizeOverlay() {
-      const rect = $video.getBoundingClientRect();
-      $roiCanvas.width = rect.width; $roiCanvas.height = rect.height;
-      $roiCanvas.style.width = rect.width+'px'; $roiCanvas.style.height = rect.height+'px';
-      $roiCanvas.style.left = $video.offsetLeft+'px'; $roiCanvas.style.top = $video.offsetTop+'px';
-      drawROI();
-    }
-    window.addEventListener('resize', () => { if ($video.style.display !== 'none') resizeOverlay(); });
     function drawROI() {
       const ctx = $roiCanvas.getContext('2d'); ctx.clearRect(0,0,$roiCanvas.width,$roiCanvas.height);
       if (!roi) return;
@@ -194,11 +184,9 @@
     async function captureAndOCR() {
       if (!$video.srcObject) return;
       $ocrStatus.textContent = '캡처 중...';
-
       const vw=$video.videoWidth||1280, vh=$video.videoHeight||720;
       $canvas.width=vw; $canvas.height=vh; const ctx=$canvas.getContext('2d');
       ctx.drawImage($video,0,0,vw,vh);
-
       let sourceCanvas=$canvas;
       if (roi && roi.w>8 && roi.h>8) {
         const vis=$video.getBoundingClientRect();
@@ -208,20 +196,12 @@
         crop.getContext('2d').drawImage($canvas,sx,sy,sw,sh,0,0,sw,sh);
         sourceCanvas=crop;
       }
-
       $ocrStatus.textContent='OCR 인식 중...';
       try {
-        const { data } = await Tesseract.recognize(sourceCanvas, 'kor+eng', {
-          langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-          logger: m=>{
-            if (m.status==='recognizing text' && typeof m.progress==='number')
-              $ocrStatus.textContent=`OCR 진행률: ${Math.round(m.progress*100)}%`;
-            else if (m.status) $ocrStatus.textContent=m.status.replace(/_/g,' ');
-          }
-        });
+        const { data } = await Tesseract.recognize(sourceCanvas, 'kor+eng');
         const text=(data?.text||'').trim();
-        if (text){ document.getElementById('q').value=text; $ocrStatus.textContent='OCR 완료 ✅'; }
-        else { $ocrStatus.textContent='문자 인식 실패. 더 밝고 선명하게 다시 시도해주세요.'; }
+        if (text){ $q.value=text; $ocrStatus.textContent='OCR 완료 ✅'; }
+        else { $ocrStatus.textContent='문자 인식 실패'; }
       } catch(e){ console.error(e); $ocrStatus.textContent='OCR 오류: '+e.message; }
     }
 
@@ -243,21 +223,17 @@
     $camShot .addEventListener('click', captureAndOCR);
     $speak  .addEventListener('click', speakResult);
 
-    // 결과 생기면 TTS 버튼 활성화
     const outObserver=new MutationObserver(()=>{ $speak.disabled=!($out.textContent||'').trim().length; });
     outObserver.observe($out,{childList:true,subtree:true,characterData:true});
 
-    /* ===== 자동 모드 (안정 → 캡처→OCR→ask→자동 TTS) ===== */
+    /* ===== 자동 모드 ===== */
     const $auto = document.getElementById('autoMode');
     const $autoStatus = document.getElementById('autoStatus');
+    const $autoDebug = document.getElementById('autoDebug');
 
-    // 가변 파라미터(슬라이더로 변경)
-    let DIFF_THRESHOLD = 0.15;   // 변화 허용 비율
-    let CHECK_INTERVAL = 800;    // ms
-    let STABLE_MS      = 3000;   // ms
-    let COOLDOWN_MS    = 10000;  // ms
+    let DIFF_THRESHOLD = 0.18, CHECK_INTERVAL = 800, STABLE_MS = 2000, COOLDOWN_MS = 5000;
+    const diffCanvas=document.createElement('canvas'); const diffCtx=diffCanvas.getContext('2d');
 
-    // 슬라이더 DOM & 라벨
     const $inpThreshold=document.getElementById('inpThreshold');
     const $inpInterval =document.getElementById('inpInterval');
     const $inpStable   =document.getElementById('inpStable');
@@ -272,25 +248,23 @@
       CHECK_INTERVAL=parseInt($inpInterval.value,10);
       STABLE_MS     =parseInt($inpStable.value,10)*1000;
       COOLDOWN_MS   =parseInt($inpCooldown.value,10)*1000;
-
       $lblThreshold.textContent=DIFF_THRESHOLD.toFixed(2);
       $lblInterval.textContent =CHECK_INTERVAL;
       $lblStable.textContent   =(STABLE_MS/1000).toFixed(0);
       $lblCooldown.textContent =(COOLDOWN_MS/1000).toFixed(0);
-
-      if (autoLoopId){ stopAuto(); startAuto(); } // 실행 중이면 새 값 즉시 반영
+      if ($auto.checked) { stopAuto(); startAuto(); }
     }
     [$inpThreshold,$inpInterval,$inpStable,$inpCooldown].forEach(el=>el.addEventListener('input',applyPanelValues));
     applyPanelValues();
 
     let autoLoopId=null, lastImageData=null, stableSince=0, cooldownUntil=0;
-
     function frameDiffRatio(){
       if (!$video.srcObject || !$video.videoWidth) return 1;
-      const w=640, h=Math.round(w*($video.videoHeight/$video.videoWidth));
-      const tmp=$canvas.getContext('2d');
-      $canvas.width=w; $canvas.height=h; tmp.drawImage($video,0,0,w,h);
-      const cur=tmp.getImageData(0,0,w,h).data; let diff=0, total=w*h;
+      const w=480, h=Math.round(w*($video.videoHeight/$video.videoWidth));
+      diffCanvas.width=w; diffCanvas.height=h;
+      diffCtx.drawImage($video,0,0,w,h);
+      const cur=diffCtx.getImageData(0,0,w,h).data;
+      let diff=0, total=w*h;
       if (!lastImageData){ lastImageData=cur; return 1; }
       for(let i=0;i<cur.length;i+=4){
         const dr=cur[i]-lastImageData[i], dg=cur[i+1]-lastImageData[i+1], db=cur[i+2]-lastImageData[i+2];
@@ -298,38 +272,15 @@
       }
       lastImageData=cur; return diff/total;
     }
-
     async function captureOCRAndAsk(){
       await captureAndOCR();
       const q=($q.value||'').trim();
-      if (q.length>0){ await ask(); speakResult(); }  // 자동 TTS
+      if (q.length>0){ await ask(); speakResult(); }
     }
-
     function startAuto(){
-      if (!$video.srcObject){ $ocrStatus.textContent='먼저 카메라를 켜주세요.'; $auto.checked=false; return; }
       stableSince=0; lastImageData=null; $autoStatus.textContent='자동 모드 ON';
+      if (autoLoopId) clearInterval(autoLoopId);
       autoLoopId=setInterval(async ()=>{
-        const now=Date.now();
-        if (now<cooldownUntil){ $ocrStatus.textContent=`자동 대기 중… ${Math.ceil((cooldownUntil-now)/1000)}s`; return; }
-        const ratio=frameDiffRatio();
-        if (ratio<DIFF_THRESHOLD){
-          if (!stableSince) stableSince=now;
-          const remain=Math.max(0,STABLE_MS-(now-stableSince));
-          $ocrStatus.textContent=`안정 감지 중… ${Math.ceil(remain/1000)}s`;
-          if (now-stableSince>=STABLE_MS){
-            $ocrStatus.textContent='자동 캡처 → OCR 실행!'; cooldownUntil=now+COOLDOWN_MS; stableSince=0;
-            try{ await captureOCRAndAsk(); }catch(e){ console.error(e); }
-          }
-        }else{
-          stableSince=0; $ocrStatus.textContent='움직임 감지됨(대기)…';
-        }
-      }, CHECK_INTERVAL);
-    }
-    function stopAuto(){ if (autoLoopId) clearInterval(autoLoopId); autoLoopId=null; $autoStatus.textContent='자동 모드 OFF'; $ocrStatus.textContent='대기'; }
-    $auto.addEventListener('change', ()=>{ if($auto.checked) startAuto(); else stopAuto(); });
-
-    // 카메라가 꺼지면 자동 모드도 종료
-    const _origStop=stopCamera; stopCamera=function(){ stopAuto(); _origStop(); };
-  </script>
-</body>
-</html>
+        const now=Date.now(); const ratio=frameDiffRatio();
+        const remainSec = Math.max(0, STABLE_MS-(stableSince?(now-stableSince):0))/1000;
+        if ($
