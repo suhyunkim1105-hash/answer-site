@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Viewer (Laptop ← WebRTC)</title>
+  <style>
+    video { width: 100%; max-width: 960px; background:#000; border-radius:12px; }
+    body { font-family: system-ui, sans-serif; padding: 16px; }
+    .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.5rem 0; }
+    input,button { padding:.5rem .75rem; border-radius:10px; border:1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>🖥️ Viewer</h1>
+  <div class="row">
+    <input id="roomId" placeholder="Room ID(예: broadcaster와 동일)" />
+    <button id="join">Join</button>
+    <button id="leave" disabled>Leave</button>
+  </div>
+  <video id="remote" playsinline autoplay></video>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getDatabase, ref, onValue, set, remove } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+      authDomain: "answer-site-p2p.firebaseapp.com",
+      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "answer-site-p2p",
+      storageBucket: "answer-site-p2p.firebasestorage.app",
+      messagingSenderId: "364227113735",
+      appId: "1:364227113735:web:b18355cf0b16454663cba2",
+      measurementId: "G-C8MRHK5ZGS"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    const joinBtn = document.getElementById('join');
+    const leaveBtn= document.getElementById('leave');
+    const roomInp = document.getElementById('roomId');
+    const videoEl = document.getElementById('remote');
+
+    let pc, remoteStream, roomRef;
+
+    async function join() {
+      const id = roomInp.value.trim();
+      if (!id) return alert('Room ID를 입력하세요');
+      roomRef = ref(db, `webrtc/${id}`);
+
+      // broadcaster가 만든 offer 가져오기
+      const offerSnap = await new Promise(resolve => {
+        onValue(ref(db, `webrtc/${id}/offer`), s => resolve(s), { onlyOnce: true });
+      });
+      const offer = offerSnap.val();
+      if (!offer) return alert('방송이 아직 시작되지 않았습니다. Broadcaster에서 Start 후 다시 시도하세요.');
+
+      pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] });
+      remoteStream = new MediaStream();
+      videoEl.srcObject = remoteStream;
+
+      pc.ontrack = (e) => e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
+      pc.onicecandidate = (e) => { if (e.candidate) set(ref(db, `webrtc/${id}/answerCandidates`), e.candidate.toJSON()); };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await set(ref(db, `webrtc/${id}/answer`), answer);
+
+      // broadcaster의 ICE 후보 수신
+      onValue(ref(db, `webrtc/${id}/offerCandidates`), (snap)=>{
+        const c = snap.val();
+        if (c) pc.addIceCandidate(new RTCIceCandidate(c));
+      });
+
+      joinBtn.disabled = true; leaveBtn.disabled = false; roomInp.disabled = true;
+      window.onbeforeunload = cleanup;
+    }
+
+    async function leave() { await cleanup(); }
+
+    async function cleanup() {
+      try { await remove(ref(db, `webrtc/${roomInp.value}/answer`)); } catch {}
+      try { pc?.close(); } catch {}
+      joinBtn.disabled = false; leaveBtn.disabled = true; roomInp.disabled = false;
+    }
+
+    joinBtn.onclick = join;
+    leaveBtn.onclick = leave;
+  </script>
+</body>
+</html>
