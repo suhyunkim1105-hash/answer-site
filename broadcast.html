@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Broadcast (Phone → WebRTC)</title>
+  <style>
+    video { width: 100%; max-width: 720px; background:#000; border-radius:12px; }
+    body { font-family: system-ui, sans-serif; padding: 16px; }
+    .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.5rem 0; }
+    input,button { padding:.5rem .75rem; border-radius:10px; border:1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>📡 Phone Broadcaster</h1>
+  <div class="row">
+    <input id="roomId" placeholder="Room ID(예: 6자리)" />
+    <button id="start">Start Broadcast</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+  <video id="preview" playsinline autoplay muted></video>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+      authDomain: "answer-site-p2p.firebaseapp.com",
+      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "answer-site-p2p",
+      storageBucket: "answer-site-p2p.firebasestorage.app",
+      messagingSenderId: "364227113735",
+      appId: "1:364227113735:web:b18355cf0b16454663cba2",
+      measurementId: "G-C8MRHK5ZGS"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    const startBtn = document.getElementById('start');
+    const stopBtn  = document.getElementById('stop');
+    const roomInp  = document.getElementById('roomId');
+    const videoEl  = document.getElementById('preview');
+
+    let pc, localStream, roomRef;
+
+    async function start() {
+      const id = roomInp.value.trim();
+      if (!id) return alert('Room ID를 입력하세요');
+      roomRef = ref(db, `webrtc/${id}`);
+
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width:{ideal:1920}, height:{ideal:1080} },
+        audio: false
+      });
+      videoEl.srcObject = localStream;
+
+      pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] });
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) set(ref(db, `webrtc/${id}/offerCandidates`), e.candidate.toJSON());
+      };
+
+      // 시청자(answer) 수신
+      onValue(ref(db, `webrtc/${id}/answer`), async (snap) => {
+        const v = snap.val();
+        if (!v) return;
+        await pc.setRemoteDescription(new RTCSessionDescription(v));
+      });
+      // 시청자 ICE 후보 수신
+      onValue(ref(db, `webrtc/${id}/answerCandidates`), (snap)=>{
+        const c = snap.val();
+        if (c) pc.addIceCandidate(new RTCIceCandidate(c));
+      });
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+      await pc.setLocalDescription(offer);
+      await set(ref(db, `webrtc/${id}/offer`), offer);
+
+      startBtn.disabled = true; stopBtn.disabled = false; roomInp.disabled = true;
+      window.onbeforeunload = cleanup;
+    }
+
+    async function stop() { await cleanup(); }
+
+    async function cleanup() {
+      try { if (roomRef) await remove(roomRef); } catch {}
+      try { pc?.close(); } catch {}
+      try { localStream?.getTracks().forEach(t=>t.stop()); } catch {}
+      startBtn.disabled = false; stopBtn.disabled = true; roomInp.disabled = false;
+    }
+
+    startBtn.onclick = start;
+    stopBtn.onclick  = stop;
+  </script>
+</body>
+</html>
