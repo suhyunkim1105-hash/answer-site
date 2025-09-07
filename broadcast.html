@@ -5,10 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Broadcast (Phone → WebRTC)</title>
   <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; }
+    h1 { display:flex; align-items:center; gap:.5rem; }
     video { width: 100%; max-width: 720px; background:#000; border-radius:12px; }
-    body { font-family: system-ui, sans-serif; padding: 16px; }
-    .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.5rem 0; }
+    .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.75rem 0; }
     input,button { padding:.5rem .75rem; border-radius:10px; border:1px solid #ddd; }
+    button:disabled { opacity:.5; }
   </style>
 </head>
 <body>
@@ -24,6 +27,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
     import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
+    // ▶ 여기는 네 firebaseConfig 그대로
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -50,26 +54,37 @@
       if (!id) return alert('Room ID를 입력하세요');
       roomRef = ref(db, `webrtc/${id}`);
 
+      // 휴대폰 후면 카메라(1080p 권장)
       localStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width:{ideal:1920}, height:{ideal:1080} },
         audio: false
       });
       videoEl.srcObject = localStream;
 
-      pc = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] });
+      // ▶ STUN + 공개 TURN(시연용)
+      pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: ['stun:stun.l.google.com:19302'] },
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ]
+      });
+
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
       pc.onicecandidate = (e) => {
         if (e.candidate) set(ref(db, `webrtc/${id}/offerCandidates`), e.candidate.toJSON());
       };
 
-      // 시청자(answer) 수신
+      // 뷰어에서 보내오는 answer/ice 수신
       onValue(ref(db, `webrtc/${id}/answer`), async (snap) => {
         const v = snap.val();
         if (!v) return;
         await pc.setRemoteDescription(new RTCSessionDescription(v));
       });
-      // 시청자 ICE 후보 수신
       onValue(ref(db, `webrtc/${id}/answerCandidates`), (snap)=>{
         const c = snap.val();
         if (c) pc.addIceCandidate(new RTCIceCandidate(c));
@@ -92,7 +107,7 @@
       startBtn.disabled = false; stopBtn.disabled = true; roomInp.disabled = false;
     }
 
-    startBtn.onclick = start;
+    startBtn.onclick = start; 
     stopBtn.onclick  = stop;
   </script>
 </body>
