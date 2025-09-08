@@ -12,6 +12,7 @@
     .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.75rem 0; }
     input,button { padding:.5rem .75rem; border-radius:10px; border:1px solid #ddd; }
     button:disabled { opacity:.5; }
+    .muted { color:#888; font-size:.9rem; }
   </style>
 </head>
 <body>
@@ -21,14 +22,17 @@
     <button id="join">Join</button>
     <button id="leave" disabled>Leave</button>
   </div>
-  <!-- ▶ iOS 자동재생 위해 muted 필수 -->
+  <div class="muted" id="status">idle</div>
+  <!-- 자동재생 위해 muted 필수 -->
   <video id="remote" playsinline autoplay muted></video>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import { getDatabase, ref, onValue, set, remove } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+    import {
+      getDatabase, ref, set, remove,
+      onValue, onChildAdded, push
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-    // ▶ 네 firebaseConfig 그대로
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -46,10 +50,11 @@
     const leaveBtn= document.getElementById('leave');
     const roomInp = document.getElementById('roomId');
     const videoEl = document.getElementById('remote');
+    const statusEl= document.getElementById('status');
 
-    // ▶ iOS/모바일 자동재생 보장
-    videoEl.muted = true;
-    videoEl.playsInline = true;
+    function log(s){ statusEl.textContent = s; console.log('[VIEW]', s); }
+
+    videoEl.muted = true; videoEl.playsInline = true;
 
     let pc, remoteStream, roomRef;
 
@@ -58,9 +63,8 @@
       if (!id) return alert('Room ID를 입력하세요');
       roomRef = ref(db, `webrtc/${id}`);
 
-      // Broadcaster가 먼저 Start해야 offer가 존재
       const offerSnap = await new Promise(resolve => {
-        onValue(ref(db, `webrtc/${id}/offer`), s => resolve(s), { onlyOnce: true });
+        onValue(ref(db, `webrtc/${id}/offer`), s => resolve(s), { onlyOnce:true });
       });
       const offer = offerSnap.val();
       if (!offer) return alert('방송이 아직 시작되지 않았습니다. Broadcaster에서 Start 후 다시 시도하세요.');
@@ -68,36 +72,36 @@
       pc = new RTCPeerConnection({
         iceServers: [
           { urls: ['stun:stun.l.google.com:19302'] },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
         ]
       });
+      pc.onconnectionstatechange = () => log(`pc: ${pc.connectionState}`);
+      pc.oniceconnectionstatechange = () => log(`ice: ${pc.iceConnectionState}`);
 
       remoteStream = new MediaStream();
       videoEl.srcObject = remoteStream;
 
       pc.ontrack = (e) => {
         e.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
-        // ▶ 트랙 붙으면 재생 시도(모바일 정책 대응)
-        videoEl.play().catch(()=>{ /* 사용자 제스처 후 자동 재시도될 수 있음 */ });
+        videoEl.play().catch(()=>{});
+        log('track added');
       };
 
+      // 내 ICE 후보를 누적 저장
       pc.onicecandidate = (e) => {
-        if (e.candidate) set(ref(db, `webrtc/${id}/answerCandidates`), e.candidate.toJSON());
+        if (e.candidate) push(ref(db, `webrtc/${id}/answerCandidates`), e.candidate.toJSON());
       };
 
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       await set(ref(db, `webrtc/${id}/answer`), answer);
+      log('answer published');
 
-      // Broadcaster ICE 후보 수신
-      onValue(ref(db, `webrtc/${id}/offerCandidates`), (snap)=>{
+      // broadcaster ICE 후보들 계속 추가
+      onChildAdded(ref(db, `webrtc/${id}/offerCandidates`), (snap)=>{
         const c = snap.val();
-        if (c) pc.addIceCandidate(new RTCIceCandidate(c));
+        if (c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
       });
 
       joinBtn.disabled = true; leaveBtn.disabled = false; roomInp.disabled = true;
@@ -110,6 +114,7 @@
       try { await remove(ref(db, `webrtc/${roomInp.value}/answer`)); } catch {}
       try { pc?.close(); } catch {}
       joinBtn.disabled = false; leaveBtn.disabled = true; roomInp.disabled = false;
+      log('left');
     }
 
     joinBtn.onclick = join;
