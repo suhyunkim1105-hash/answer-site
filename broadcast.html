@@ -12,6 +12,7 @@
     .row { display:flex; gap:.5rem; flex-wrap:wrap; margin:.75rem 0; }
     input,button { padding:.5rem .75rem; border-radius:10px; border:1px solid #ddd; }
     button:disabled { opacity:.5; }
+    .muted { color:#888; font-size:.9rem; }
   </style>
 </head>
 <body>
@@ -21,13 +22,16 @@
     <button id="start">Start Broadcast</button>
     <button id="stop" disabled>Stop</button>
   </div>
+  <div class="muted" id="status">idle</div>
   <video id="preview" playsinline autoplay muted></video>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+    import {
+      getDatabase, ref, set, remove,
+      push, onChildAdded, onValue
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-    // ▶ 여기는 네 firebaseConfig 그대로
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -46,53 +50,59 @@
     const stopBtn  = document.getElementById('stop');
     const roomInp  = document.getElementById('roomId');
     const videoEl  = document.getElementById('preview');
+    const statusEl = document.getElementById('status');
 
     let pc, localStream, roomRef;
+
+    function log(s){ statusEl.textContent = s; console.log('[BROADCAST]', s); }
 
     async function start() {
       const id = roomInp.value.trim();
       if (!id) return alert('Room ID를 입력하세요');
       roomRef = ref(db, `webrtc/${id}`);
+      log('starting...');
 
-      // 휴대폰 후면 카메라(1080p 권장)
       localStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width:{ideal:1920}, height:{ideal:1080} },
         audio: false
       });
       videoEl.srcObject = localStream;
 
-      // ▶ STUN + 공개 TURN(시연용)
       pc = new RTCPeerConnection({
         iceServers: [
           { urls: ['stun:stun.l.google.com:19302'] },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
+          { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
         ]
       });
+      pc.onconnectionstatechange = () => log(`pc: ${pc.connectionState}`);
+      pc.oniceconnectionstatechange = () => log(`ice: ${pc.iceConnectionState}`);
 
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
+      // 여러 ICE 후보를 누적 저장
       pc.onicecandidate = (e) => {
-        if (e.candidate) set(ref(db, `webrtc/${id}/offerCandidates`), e.candidate.toJSON());
+        if (e.candidate) push(ref(db, `webrtc/${id}/offerCandidates`), e.candidate.toJSON());
       };
 
-      // 뷰어에서 보내오는 answer/ice 수신
+      // 뷰어에서 오는 answer
       onValue(ref(db, `webrtc/${id}/answer`), async (snap) => {
         const v = snap.val();
-        if (!v) return;
-        await pc.setRemoteDescription(new RTCSessionDescription(v));
-      });
-      onValue(ref(db, `webrtc/${id}/answerCandidates`), (snap)=>{
-        const c = snap.val();
-        if (c) pc.addIceCandidate(new RTCIceCandidate(c));
+        if (v && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(v));
+          log('remote answer set');
+        }
       });
 
-      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+      // 뷰어 ICE 후보들
+      onChildAdded(ref(db, `webrtc/${id}/answerCandidates`), (snap)=>{
+        const c = snap.val();
+        if (c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+      });
+
+      const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await set(ref(db, `webrtc/${id}/offer`), offer);
+      log('offer published');
 
       startBtn.disabled = true; stopBtn.disabled = false; roomInp.disabled = true;
       window.onbeforeunload = cleanup;
@@ -105,9 +115,10 @@
       try { pc?.close(); } catch {}
       try { localStream?.getTracks().forEach(t=>t.stop()); } catch {}
       startBtn.disabled = false; stopBtn.disabled = true; roomInp.disabled = false;
+      log('stopped');
     }
 
-    startBtn.onclick = start; 
+    startBtn.onclick = start;
     stopBtn.onclick  = stop;
   </script>
 </body>
