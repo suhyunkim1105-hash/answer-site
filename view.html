@@ -2,83 +2,127 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <title>📡 Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Viewer (debug minimal)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, sans-serif; padding:16px; max-width:960px; margin:0 auto; }
+    h1 { margin:0 0 10px; font-size:22px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    input,button{ padding:10px 12px; border-radius:10px; border:1px solid #ccc; }
+    button{ cursor:pointer; }
+    video{ width:100%; max-height:60vh; background:#000; border-radius:12px; margin-top:10px; }
+    .muted{ color:#777; font-size:13px; margin-top:6px; }
+    .ok{ color:#0a7d2a; } .err{ color:#b00020; }
+    pre{ white-space:pre-wrap; background:#f5f6f7; padding:10px; border-radius:10px; font-size:12px; }
+  </style>
 </head>
 <body>
-  <h1>📡 Viewer</h1>
-  <input id="room" placeholder="Room ID (예: 1)" />
-  <button id="join">Join</button>
-  <button id="leave">Leave</button>
-  <div id="status">idle</div>
-  <video id="video" autoplay playsinline style="width:600px; background:black"></video>
+  <h1>📡 Viewer (debug minimal)</h1>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getDatabase, ref, set, get, remove, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  <div class="row">
+    <input id="room" placeholder="Room ID (예: 1)" />
+    <button id="join">Join</button>
+    <button id="leave" disabled>Leave</button>
+  </div>
+  <div id="status" class="muted">idle</div>
+  <video id="video" autoplay playsinline></video>
+  <pre id="logbox" class="muted"></pre>
 
-const firebaseConfig = {
-  apiKey: "AIzaSyA...너 키...",
-  authDomain: "answer-site-p2p.firebaseapp.com",
-  databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "answer-site-p2p",
-  storageBucket: "answer-site-p2p.appspot.com",
-  messagingSenderId: "465268650182",
-  appId: "1:465268650182:web:xxxx"
-};
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+  <!-- Firebase (v10.12.5) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getDatabase, ref, get, set, remove, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-const roomInp = document.getElementById("room");
-const joinBtn = document.getElementById("join");
-const leaveBtn = document.getElementById("leave");
-const video = document.getElementById("video");
-const statusEl = document.getElementById("status");
+    // ★ 네 프로젝트 설정 (broadcast.html과 동일해야 함)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+      authDomain: "answer-site-p2p.firebaseapp.com",
+      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "answer-site-p2p",
+      storageBucket: "answer-site-p2p.firebasestorage.app",
+      messagingSenderId: "364227113735",
+      appId: "1:364227113735:web:b18355cf0b16454663cba2",
+      measurementId: "G-C8MRHK5ZGS"
+    };
 
-let pc;
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
 
-function log(m){ console.log(m); statusEl.textContent = m; }
+    const roomInp = document.getElementById('room');
+    const joinBtn = document.getElementById('join');
+    const leaveBtn= document.getElementById('leave');
+    const videoEl = document.getElementById('video');
+    const statusEl= document.getElementById('status');
+    const logbox  = document.getElementById('logbox');
 
-async function join(){
-  const id = roomInp.value.trim();
-  if(!id){ return; }
+    let pc, roomId;
 
-  pc = new RTCPeerConnection();
-  pc.ontrack = e => { video.srcObject = e.streams[0]; };
+    function log(t){ console.log('[VIEW]', t); statusEl.textContent=t; logbox.textContent += String(t)+'\n'; }
 
-  const offerRef = ref(db, `webrtc/${id}/offer`);
-  const snap = await get(offerRef);
-  if(!snap.exists()){ log("no offer"); return; }
+    async function join(){
+      try{
+        roomId = roomInp.value.trim();
+        if(!roomId){ alert('Room ID'); return; }
 
-  const offer = snap.val();
-  await pc.setRemoteDescription(offer);
+        // RTCPeerConnection (STUN/TURN 포함)
+        pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: ['stun:stun.l.google.com:19302'] },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+          ]
+        });
 
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  await set(ref(db, `webrtc/${id}/answer`), answer);
-  log("answer published");
+        pc.ontrack = (e)=>{ videoEl.srcObject = e.streams[0]; };
+        pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
+        pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
 
-  onChildAdded(ref(db, `webrtc/${id}/offerCandidates`), snap=>{
-    const c = snap.val();
-    if(c) pc.addIceCandidate(new RTCIceCandidate(c));
-  });
+        // 1) broadcaster의 offer 가져오기
+        const offerSnap = await get(ref(db, `webrtc/${roomId}/offer`));
+        if(!offerSnap.exists()){ log('no offer yet'); return; }
+        const offer = offerSnap.val();
 
-  pc.onicecandidate = e=>{
-    if(e.candidate){
-      set(ref(db, `webrtc/${id}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        // 2) 우리의 answer 생성 + 게시
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await set(ref(db, `webrtc/${roomId}/answer`), answer);
+        log('answer published');
+
+        // 3) broadcaster가 올린 offerCandidates를 계속 추가
+        onChildAdded(ref(db, `webrtc/${roomId}/offerCandidates`), (snap)=>{
+          const c = snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+        });
+
+        // 4) 우리쪽 ICE candidate도 DB에 게시
+        pc.onicecandidate = (e)=>{
+          if(e.candidate){
+            set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
+          }
+        };
+
+        joinBtn.disabled = true; leaveBtn.disabled = false; roomInp.disabled = true;
+        window.onbeforeunload = leave;
+      }catch(err){
+        console.error(err); log('error: '+(err.message||err));
+        alert('Join 실패: '+(err.message||err));
+      }
     }
-  };
-}
 
-async function leave(){
-  try { await remove(ref(db, `webrtc/${roomInp.value}/answer`)); } catch(e){}
-  try { pc.close(); } catch(e){}
-  log("left");
-}
+    async function leave(){
+      try{
+        await remove(ref(db, `webrtc/${roomId}/answer`));
+        await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
+      }catch{}
+      try{ if(pc) pc.close(); }catch{}
+      joinBtn.disabled=false; leaveBtn.disabled=true; roomInp.disabled=false;
+      log('left');
+    }
 
-joinBtn.onclick = join;
-leaveBtn.onclick = leave;
-</script>
+    joinBtn.onclick = join;
+    leaveBtn.onclick = leave;
+  </script>
 </body>
 </html>
-
 
