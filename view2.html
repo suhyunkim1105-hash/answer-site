@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Viewer Minimal</title>
+  <title>Viewer Minimal (final)</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:16px; max-width:900px; margin:0 auto; }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    input,button{ padding:10px 12px; border-radius:10px; border:1px solid #ccc; }
-    button{ cursor:pointer; }
-    video{ width:100%; max-height:60vh; background:#000; border-radius:12px; margin-top:10px; }
-    #status{ margin-top:6px; color:#666; font-size:13px; white-space:pre-wrap }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;margin:0 auto;padding:16px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    input,button{padding:10px 12px;border-radius:10px;border:1px solid #ccc}
+    button{cursor:pointer}
+    video{width:100%;max-height:60vh;background:#000;border-radius:12px;margin-top:10px}
+    #status{margin-top:6px;color:#666;font-size:13px;white-space:pre-wrap}
   </style>
 </head>
 <body>
@@ -25,9 +25,8 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import { getDatabase, ref, get, set, remove, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+    import { getDatabase, ref, get, set, remove, onChildAdded, push } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-    // SAME CONFIG AS broadcast.html
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -50,50 +49,54 @@
 
     let pc, roomId;
 
-    function log(t){ console.log('[VIEW]', t); statusEl.textContent += (statusEl.textContent ? '\n' : '') + t; }
+    const iceServers = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:80?transport=tcp',  username:'openrelayproject', credential:'openrelayproject' },
+    ];
+
+    function log(t){ console.log('[VIEW]', t); statusEl.textContent += (statusEl.textContent?'\n':'')+t; }
 
     async function join(){
       try{
         roomId = roomInp.value.trim();
         if(!roomId){ alert('Enter Room ID'); return; }
 
-        pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: ['stun:stun.l.google.com:19302'] },
-            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
-          ]
-        });
-
-        pc.ontrack = (e)=>{ videoEl.srcObject = e.streams[0]; };
+        pc = new RTCPeerConnection({ iceServers });
+        pc.ontrack = e=>{ videoEl.srcObject = e.streams[0]; };
         pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
-        pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
+        pc.oniceconnectionstatechange= ()=> log('ice: '+pc.iceConnectionState);
 
+        // 1) broadcaster의 offer 가져오기
         const offerSnap = await get(ref(db, `webrtc/${roomId}/offer`));
         if(!offerSnap.exists()){ log('no offer yet'); return; }
         const offer = offerSnap.val();
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
+        // 2) answer 생성 + 게시
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await set(ref(db, `webrtc/${roomId}/answer`), answer);
         log('answer published');
 
-        onChildAdded(ref(db, `webrtc/${roomId}/offerCandidates`), (snap)=>{
-          const c = snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+        // 3) broadcaster가 올린 offerCandidates 계속 추가
+        onChildAdded(ref(db, `webrtc/${roomId}/offerCandidates`), snap=>{
+          const c = snap.val();
+          if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
         });
 
+        // 4) 우리쪽 ICE 후보를 answerCandidates에 push (★중요)
         pc.onicecandidate = (e)=>{
           if(e.candidate){
-            set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
+            push(ref(db, `webrtc/${roomId}/answerCandidates`), e.candidate.toJSON());
           }
         };
 
-        joinBtn.disabled = true; leaveBtn.disabled = false; roomInp.disabled = true;
+        joinBtn.disabled=true; leaveBtn.disabled=false; roomInp.disabled=true;
         window.onbeforeunload = leave;
       }catch(err){
         console.error(err);
-        statusEl.textContent = 'error: ' + (err.message || err);
-        alert('Join failed: ' + (err.message || err));
+        alert('Join failed: '+(err.message||err));
       }
     }
 
@@ -102,9 +105,9 @@
         await remove(ref(db, `webrtc/${roomId}/answer`));
         await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
       }catch{}
-      try{ if(pc) pc.close(); }catch{}
+      try{ pc?.close(); }catch{}
       joinBtn.disabled=false; leaveBtn.disabled=true; roomInp.disabled=false;
-      statusEl.textContent = 'left';
+      statusEl.textContent='left';
     }
 
     joinBtn.onclick = join;
