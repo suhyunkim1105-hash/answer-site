@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Broadcast (Phone → WebRTC)</title>
+  <title>Broadcast (Phone ??WebRTC)</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; }
@@ -16,9 +16,9 @@
   </style>
 </head>
 <body>
-  <h1>📡 Phone Broadcaster</h1>
+  <h1>?뱻 Phone Broadcaster</h1>
   <div class="row">
-    <input id="roomId" placeholder="Room ID(예: 6자리)" />
+    <input id="roomId" placeholder="Room ID(?? 6?먮━)" />
     <button id="start">Start Broadcast</button>
     <button id="stop" disabled>Stop</button>
   </div>
@@ -58,7 +58,7 @@
 
     async function start() {
       const id = roomInp.value.trim();
-      if (!id) return alert('Room ID를 입력하세요');
+      if (!id) return alert('Room ID瑜??낅젰?섏꽭??);
       roomRef = ref(db, `webrtc/${id}`);
       log('starting...');
 
@@ -79,12 +79,12 @@
 
       localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
 
-      // 여러 ICE 후보를 누적 저장
+      // ?щ윭 ICE ?꾨낫瑜??꾩쟻 ???
       pc.onicecandidate = (e) => {
         if (e.candidate) push(ref(db, `webrtc/${id}/offerCandidates`), e.candidate.toJSON());
       };
 
-      // 뷰어에서 오는 answer
+      // 酉곗뼱?먯꽌 ?ㅻ뒗 answer
       onValue(ref(db, `webrtc/${id}/answer`), async (snap) => {
         const v = snap.val();
         if (v && !pc.currentRemoteDescription) {
@@ -93,7 +93,7 @@
         }
       });
 
-      // 뷰어 ICE 후보들
+      // 酉곗뼱 ICE ?꾨낫??
       onChildAdded(ref(db, `webrtc/${id}/answerCandidates`), (snap)=>{
         const c = snap.val();
         if (c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
@@ -123,3 +123,4 @@
   </script>
 </body>
 </html>
+
