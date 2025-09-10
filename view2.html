@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Viewer Minimal</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:16px; max-width:900px; margin:0 auto; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    input,button{ padding:10px 12px; border-radius:10px; border:1px solid #ccc; }
+    button{ cursor:pointer; }
+    video{ width:100%; max-height:60vh; background:#000; border-radius:12px; margin-top:10px; }
+    #status{ margin-top:6px; color:#666; font-size:13px; white-space:pre-wrap }
+  </style>
+</head>
+<body>
+  <h1>Viewer Minimal</h1>
+  <div class="row">
+    <input id="room" placeholder="Room ID (e.g. 1)" />
+    <button id="join">Join</button>
+    <button id="leave" disabled>Leave</button>
+  </div>
+  <div id="status">idle</div>
+  <video id="video" autoplay playsinline></video>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getDatabase, ref, get, set, remove, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+
+    // SAME CONFIG AS broadcast.html
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+      authDomain: "answer-site-p2p.firebaseapp.com",
+      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "answer-site-p2p",
+      storageBucket: "answer-site-p2p.firebasestorage.app",
+      messagingSenderId: "364227113735",
+      appId: "1:364227113735:web:b18355cf0b16454663cba2",
+      measurementId: "G-C8MRHK5ZGS"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    const roomInp = document.getElementById('room');
+    const joinBtn = document.getElementById('join');
+    const leaveBtn= document.getElementById('leave');
+    const videoEl = document.getElementById('video');
+    const statusEl= document.getElementById('status');
+
+    let pc, roomId;
+
+    function log(t){ console.log('[VIEW]', t); statusEl.textContent += (statusEl.textContent ? '\n' : '') + t; }
+
+    async function join(){
+      try{
+        roomId = roomInp.value.trim();
+        if(!roomId){ alert('Enter Room ID'); return; }
+
+        pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: ['stun:stun.l.google.com:19302'] },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+          ]
+        });
+
+        pc.ontrack = (e)=>{ videoEl.srcObject = e.streams[0]; };
+        pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
+        pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
+
+        const offerSnap = await get(ref(db, `webrtc/${roomId}/offer`));
+        if(!offerSnap.exists()){ log('no offer yet'); return; }
+        const offer = offerSnap.val();
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await set(ref(db, `webrtc/${roomId}/answer`), answer);
+        log('answer published');
+
+        onChildAdded(ref(db, `webrtc/${roomId}/offerCandidates`), (snap)=>{
+          const c = snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+        });
+
+        pc.onicecandidate = (e)=>{
+          if(e.candidate){
+            set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
+          }
+        };
+
+        joinBtn.disabled = true; leaveBtn.disabled = false; roomInp.disabled = true;
+        window.onbeforeunload = leave;
+      }catch(err){
+        console.error(err);
+        statusEl.textContent = 'error: ' + (err.message || err);
+        alert('Join failed: ' + (err.message || err));
+      }
+    }
+
+    async function leave(){
+      try{
+        await remove(ref(db, `webrtc/${roomId}/answer`));
+        await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
+      }catch{}
+      try{ if(pc) pc.close(); }catch{}
+      joinBtn.disabled=false; leaveBtn.disabled=true; roomInp.disabled=false;
+      statusEl.textContent = 'left';
+    }
+
+    joinBtn.onclick = join;
+    leaveBtn.onclick = leave;
+  </script>
+</body>
+</html>
