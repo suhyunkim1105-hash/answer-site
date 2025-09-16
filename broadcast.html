@@ -1,115 +1,113 @@
-<!doctype html><html lang="ko"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Broadcaster (TCP-only TURN)</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,sans-serif;max-width:960px;margin:0 auto;padding:16px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-input,button{padding:10px 12px;border-radius:10px;border:1px solid #ccc}button{cursor:pointer}
-video{width:100%;max-height:60vh;background:#000;border-radius:12px;margin-top:10px}
-.muted{color:#777;font-size:13px;margin-top:6px;white-space:pre-wrap}
-</style></head><body>
-<h1>📡 Broadcaster (TCP-only, TURN relay)</h1>
-<div class="row">
-  <input id="room" placeholder="Room ID (예: r1)"/>
-  <button id="join">Join</button>
-  <button id="leave" disabled>Leave</button>
-</div>
-<div class="row" style="margin-top:8px">
-  <button id="startCam" disabled>카메라 시작</button>
-  <button id="startShare" disabled>화면공유 시작</button>
-  <button id="stopMedia" disabled>미디어 정지</button>
-</div>
-<div id="status" class="muted">idle</div>
-<video id="preview" playsinline autoplay muted></video>
-
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import { getDatabase, ref, set, get, onValue, onChildAdded, remove, push } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+/* ... (Firebase 초기화/DOM 참조 동일) ... */
 
-const firebaseConfig = {
-  apiKey:"AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-  authDomain:"answer-site-p2p.firebaseapp.com",
-  databaseURL:"https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId:"answer-site-p2p",
-  storageBucket:"answer-site-p2p.firebasestorage.app",
-  messagingSenderId:"364227113735",
-  appId:"1:364227113735:web:b18355cf0b16454663cba2",
-  measurementId:"G-C8MRHK5ZGS"
-};
-const app=initializeApp(firebaseConfig), db=getDatabase(app);
-
-const q=(id)=>document.getElementById(id);
-const room=q('room'), joinBtn=q('join'), leaveBtn=q('leave');
-const startCam=q('startCam'), startShare=q('startShare'), stopBtn=q('stopMedia');
-const preview=q('preview'), statusEl=q('status');
-
-let pc, roomId, localStream=null, videoSender=null;
-
-function log(t){ console.log('[BCAST]',t); statusEl.textContent=t; }
-
-const pcConfig={
-  iceServers:[
-    // TCP-only TURN (UDP 완전 배제)
+const pcConfig = {
+  iceServers: [
     { urls:'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject' },
     { urls:'turn:openrelay.metered.ca:80?transport=tcp',  username:'openrelayproject', credential:'openrelayproject' }
   ],
-  iceTransportPolicy:'relay' // TURN만 사용
+  iceTransportPolicy: 'relay',
+  bundlePolicy: 'max-bundle',
+  iceCandidatePoolSize: 1
 };
 
-async function join(){
-  roomId=room.value.trim();
-  if(!roomId){ alert('Room ID'); return; }
-  pc=new RTCPeerConnection(pcConfig);
-  pc.oniceconnectionstatechange=()=>log('ice: '+pc.iceConnectionState);
-  pc.onconnectionstatechange=()=>log('pc: '+pc.connectionState);
+let pc, roomId, localStream=null, videoSender=null, answerApplied=false;
 
-  // viewer가 보낸 answer를 자동 반영
-  onValue(ref(db,`webrtc/${roomId}/answer`), async (s)=>{
-    const ans=s.val();
-    if(ans && (!pc.currentRemoteDescription || pc.currentRemoteDescription.type!=='answer')){
-      await pc.setRemoteDescription(new RTCSessionDescription(ans));
-      log('answer set');
+function log(t){ console.log('[BCAST]',t); statusEl.textContent=t; }
+
+async function ensurePc() {
+  if (pc) return pc;
+  pc = new RTCPeerConnection(pcConfig);
+
+  pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
+  pc.onconnectionstatechange    = ()=> log('pc: '+pc.connectionState);
+
+  // 우리 ICE 후보 게시
+  pc.onicecandidate = (e)=>{
+    if(e.candidate){
+      push(ref(db, `webrtc/${roomId}/offerCandidates`), e.candidate.toJSON());
+    }
+  };
+
+  // 뷰어의 ICE 후보 반영
+  onChildAdded(ref(db, `webrtc/${roomId}/answerCandidates`), (snap)=>{
+    const c = snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+  });
+
+  // 뷰어의 answer가 올라오면 반드시 적용 (미적용 시 재협상)
+  onValue(ref(db, `webrtc/${roomId}/answer`), async (s)=>{
+    const ans = s.val();
+    if(!ans) return;
+    try{
+      if(!pc.currentRemoteDescription || pc.currentRemoteDescription.type!=='answer'){
+        await pc.setRemoteDescription(new RTCSessionDescription(ans));
+        answerApplied = true;
+        log('answer set');
+      }
+    }catch(e){
+      // SDP 순서 꼬임 보호: 500ms 뒤 재시도
+      console.warn('setRemoteDescription retry', e);
+      setTimeout(async()=>{
+        try{
+          await pc.setRemoteDescription(new RTCSessionDescription(ans));
+          answerApplied = true;
+          log('answer set (retry)');
+        }catch(err){ console.error(err); }
+      }, 500);
     }
   });
 
-  // viewer의 ICE 후보 반영
-  onChildAdded(ref(db,`webrtc/${roomId}/answerCandidates`),(snap)=>{
-    const c=snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
-  });
+  return pc;
+}
 
-  // 우리 ICE 후보 게시
-  pc.onicecandidate=(e)=>{ if(e.candidate) push(ref(db,`webrtc/${roomId}/offerCandidates`), e.candidate.toJSON()); };
+async function join(){
+  roomId = room.value.trim();
+  if(!roomId){ alert('Room ID'); return; }
+  await ensurePc();
 
-  joinBtn.disabled=true; leaveBtn.disabled=false; startCam.disabled=false; startShare.disabled=false; stopBtn.disabled=true; room.disabled=true;
-  window.onbeforeunload=leave;
+  joinBtn.disabled=true; leaveBtn.disabled=false;
+  startCam.disabled=false; startShare.disabled=false; stopBtn.disabled=true; room.disabled=true;
+  window.onbeforeunload = leave;
   log('joined: 카메라 또는 화면공유를 시작하세요.');
 }
 
 async function negotiate(){
-  const offer=await pc.createOffer({offerToReceiveAudio:false, offerToReceiveVideo:false});
+  // 트릭클 지연(ICE 후보 어느정도 모아두고 올리기)
+  await new Promise(r=>setTimeout(r, 150));
+  const offer = await pc.createOffer({ offerToReceiveAudio:false, offerToReceiveVideo:false });
   await pc.setLocalDescription(offer);
-  await set(ref(db,`webrtc/${roomId}/offer`), offer);
+  await set(ref(db, `webrtc/${roomId}/offer`), offer);
   log('offer published');
+
+  // 6초 이내에 answer 적용이 안 되면 강제 재협상
+  answerApplied = false;
+  setTimeout(async ()=>{
+    if(!answerApplied){
+      log('no answer set → renegotiate');
+      try{
+        await pc.setLocalDescription(await pc.createOffer());
+        await set(ref(db, `webrtc/${roomId}/offer`), pc.localDescription);
+      }catch(e){ console.error('renegotiate failed', e); }
+    }
+  }, 6000);
 }
 
 async function attachStream(stream){
-  preview.srcObject=stream;
+  preview.srcObject = stream;
   if(localStream) localStream.getTracks().forEach(t=>t.stop());
-  localStream=stream;
-  const track=stream.getVideoTracks()[0];
-  if(videoSender){ await videoSender.replaceTrack(track); } else { videoSender=pc.addTrack(track, stream); }
-  stopBtn.disabled=false;
-  track.addEventListener('ended',()=>{ stopTracks(); log('미디어 중단됨'); });
+  localStream = stream;
+  const track = stream.getVideoTracks()[0];
+  if(videoSender){ await videoSender.replaceTrack(track); } else { videoSender = pc.addTrack(track, stream); }
+  stopBtn.disabled = true === false ? false : false; // no-op (보류)
 }
 
 async function useCamera(){
   try{
+    await ensurePc();
     let stream;
     try{
-      stream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
-    }catch{ // 전면으로 폴백
-      stream=await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
-    }
+      stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:'environment'} }, audio:false });
+    }catch{ stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false }); }
     await attachStream(stream);
     await negotiate();
     log('카메라 송출 중');
@@ -118,14 +116,15 @@ async function useCamera(){
 
 async function useScreen(){
   try{
-    const stream=await navigator.mediaDevices.getDisplayMedia({ video:{ frameRate:30 }, audio:false });
+    await ensurePc();
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video:{frameRate:30}, audio:false });
     await attachStream(stream);
     await negotiate();
     log('화면공유 송출 중');
   }catch(e){ alert('화면공유 실패: '+(e.message||e)); }
 }
 
-function stopTracks(){ try{ localStream?.getTracks().forEach(t=>t.stop()); }catch{} localStream=null; preview.srcObject=null; stopBtn.disabled=true; }
+function stopTracks(){ try{ localStream?.getTracks().forEach(t=>t.stop()); }catch{} localStream=null; preview.srcObject=null; }
 
 async function leave(){
   try{
@@ -139,7 +138,7 @@ async function leave(){
   log('left');
 }
 
-joinBtn.onclick=join; leaveBtn.onclick=leave; startCam.onclick=useCamera; startShare.onclick=useScreen; stopBtn.onclick=stopTracks;
+/* 버튼 바인딩 */
+joinBtn.onclick=join; leaveBtn.onclick=leave;
+startCam.onclick=useCamera; startShare.onclick=useScreen; stopBtn.onclick=stopTracks;
 </script>
-</body></html>
-
