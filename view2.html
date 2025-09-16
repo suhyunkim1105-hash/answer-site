@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Viewer (relay-only)</title>
+  <title>Viewer (TURN relay-only, robust)</title>
   <style>
     :root { color-scheme: light dark; }
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,sans-serif;max-width:960px;margin:0 auto;padding:16px}
@@ -12,15 +12,15 @@
     button{cursor:pointer}
     video{width:100%;max-height:70vh;background:#000;border-radius:12px;margin-top:10px}
     .muted{color:#777;font-size:13px;margin-top:6px;white-space:pre-wrap}
-    pre{white-space:pre-wrap;background:#f5f6f7;padding:10px;border-radius:10px;font-size:12px}
+    pre{white-space:pre-wrap;background:#f5f6f7;padding:10px;border-radius:10px;font-size:12px;max-height:220px;overflow:auto}
     .ok{color:#0a7d2a}.err{color:#b00020}
   </style>
 </head>
 <body>
-  <h1>🎥 Viewer (TURN relay-only)</h1>
+  <h1>🎥 Viewer (TURN relay-only, robust)</h1>
 
   <div class="row">
-    <input id="room" placeholder="Room ID (예: 1)" />
+    <input id="room" placeholder="Room ID (예: r1234)" />
     <button id="join">Join</button>
     <button id="leave" disabled>Leave</button>
   </div>
@@ -31,11 +31,9 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import {
-      getDatabase, ref, get, set, remove, onChildAdded
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+    import { getDatabase, ref, get, set, remove, onChildAdded, onValue, off } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-    // ★ 너의 Firebase 프로젝트 (broadcaster와 동일)
+    // ★ 네 Firebase 프로젝트 (broadcast.html과 동일)
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -57,7 +55,8 @@
     const statusEl= document.getElementById('status');
     const logbox  = document.getElementById('logbox');
 
-    let pc, roomId;
+    let pc, roomId, offerRef, offerCandRef, answerCandRef;
+    let wired = false, connectedOnce = false;
 
     function log(t){
       console.log('[VIEW]', t);
@@ -76,11 +75,46 @@
             'turn:openrelay.metered.ca:443?transport=tcp',
             'turn:openrelay.metered.ca:80?transport=tcp'
           ],
-          username: 'openrelayproject', credential: 'openrelayproject'
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
         }
       ],
       iceTransportPolicy: 'relay' // ★ TURN만 사용
     };
+
+    async function handleOffer(offer){
+      if(!offer || wired) return;
+      wired = true;
+      log('offer seen → setRemoteDescription');
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+      // 우리의 answer 생성 + 게시
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await set(ref(db, `webrtc/${roomId}/answer`), answer);
+      log('answer published');
+
+      // broadcaster가 올린 offerCandidates 계속 추가
+      onChildAdded(offerCandRef, (snap)=>{
+        const c = snap.val();
+        if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+      });
+
+      // 우리쪽 ICE 후보도 answerCandidates에 push
+      pc.onicecandidate = (e)=>{
+        if(e.candidate){
+          set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
+        }
+      };
+
+      // 연결이 더디면 8초 후 ICE 재시도
+      setTimeout(()=>{
+        if(!connectedOnce && pc?.iceConnectionState !== 'connected'){
+          log('ice: restartIce()');
+          try{ pc.restartIce(); }catch{}
+        }
+      }, 8000);
+    }
 
     async function join(){
       try{
@@ -88,34 +122,34 @@
         if(!roomId){ alert('Room ID를 입력하세요'); return; }
 
         pc = new RTCPeerConnection(pcConfig);
+        // 원격 영상 수신을 보장하기 위해 recvonly 트랜시버 선등록
+        try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
         pc.ontrack = (e)=>{ videoEl.srcObject = e.streams[0]; };
-        pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
-        pc.onconnectionstatechange    = ()=> log('pc: '+pc.connectionState);
-
-        // 1) broadcaster의 offer 가져오기
-        const offerSnap = await get(ref(db, `webrtc/${roomId}/offer`));
-        if(!offerSnap.exists()){ log('no offer yet (broadcaster 먼저 Join/시작)'); return; }
-        const offer = offerSnap.val();
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-
-        // 2) 우리의 answer 생성 + 게시
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await set(ref(db, `webrtc/${roomId}/answer`), answer);
-        log('answer published');
-
-        // 3) broadcaster가 올린 offerCandidates 계속 추가
-        onChildAdded(ref(db, `webrtc/${roomId}/offerCandidates`), (snap)=>{
-          const c = snap.val();
-          if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
-        });
-
-        // 4) 우리쪽 ICE 후보도 answerCandidates에 push
-        pc.onicecandidate = (e)=>{
-          if(e.candidate){
-            set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
-          }
+        pc.oniceconnectionstatechange = ()=>{
+          log('ice: '+pc.iceConnectionState);
+          if(pc.iceConnectionState === 'connected'){ connectedOnce = true; }
         };
+        pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
+
+        // DB 레퍼런스 준비
+        offerRef     = ref(db, `webrtc/${roomId}/offer`);
+        offerCandRef = ref(db, `webrtc/${roomId}/offerCandidates`);
+        answerCandRef= ref(db, `webrtc/${roomId}/answerCandidates`);
+
+        // 1) 이미 올라온 오퍼가 있으면 즉시 처리
+        const snap = await get(offerRef);
+        if(snap.exists()){
+          await handleOffer(snap.val());
+        } else {
+          log('waiting offer...');
+        }
+
+        // 2) 이후 올라오는 오퍼도 감지해서 자동 처리
+        onValue(offerRef, (s)=>{
+          if(s.exists()){
+            handleOffer(s.val());
+          }
+        });
 
         joinBtn.disabled=true; leaveBtn.disabled=false; roomInp.disabled=true;
         window.onbeforeunload = leave;
@@ -127,11 +161,15 @@
 
     async function leave(){
       try{
+        off(offerRef);
+      }catch{}
+      try{
         await remove(ref(db, `webrtc/${roomId}/answer`));
         await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
       }catch{}
       try{ pc?.close(); }catch{}
       joinBtn.disabled=false; leaveBtn.disabled=true; roomInp.disabled=false;
+      wired=false; connectedOnce=false;
       log('left');
     }
 
@@ -140,8 +178,8 @@
   </script>
 
   <div class="muted" style="margin-top:10px">
-    ℹ️ 먼저 Broadcaster가 <b>Join → (카메라 시작 또는 화면공유 시작)</b>을 해야 이 화면에서 연결됩니다.
-    상태가 <b>pc: connected / ice: connected</b>로 바뀌면 성공입니다.
+    ℹ️ 먼저 Broadcaster가 <b>Join → (카메라 시작 또는 화면공유 시작)</b>을 해야 이 화면에서 자동 연결됩니다.
+    정상 로그 흐름: <b>offer seen → answer published → ice: checking → pc/ice: connected</b>.
   </div>
 </body>
 </html>
