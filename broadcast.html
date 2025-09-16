@@ -1,32 +1,45 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Phone Broadcaster (final)</title>
+  <title>Broadcaster (camera/screen, TURN relay-only)</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;margin:0 auto;padding:16px}
+    :root { color-scheme: light dark; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,sans-serif;max-width:960px;margin:0 auto;padding:16px}
     .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     input,button{padding:10px 12px;border-radius:10px;border:1px solid #ccc}
     button{cursor:pointer}
     video{width:100%;max-height:60vh;background:#000;border-radius:12px;margin-top:10px}
-    #status{margin-top:6px;color:#666;font-size:13px;white-space:pre-wrap}
+    .muted{color:#777;font-size:13px;margin-top:6px;white-space:pre-wrap}
+    .ok{color:#0a7d2a}.err{color:#b00020}
   </style>
 </head>
 <body>
-  <h1>📱 Phone Broadcaster</h1>
+  <h1>📡 Broadcaster (카메라/화면공유) — TURN 강제</h1>
+
   <div class="row">
-    <input id="room" placeholder="Room ID (e.g. 1)" />
-    <button id="start">Start Broadcast</button>
-    <button id="stop" disabled>Stop</button>
+    <input id="room" placeholder="Room ID (예: 1)" />
+    <button id="join">Join</button>
+    <button id="leave" disabled>Leave</button>
   </div>
-  <div id="status">idle</div>
-  <video id="video" autoplay playsinline muted></video>
+
+  <div class="row" style="margin-top:8px">
+    <button id="startCam" disabled>카메라 시작</button>
+    <button id="startShare" disabled>화면공유 시작 (erdsnt 앱 화면 포함)</button>
+    <button id="stopMedia" disabled>미디어 정지</button>
+  </div>
+
+  <div id="status" class="muted">idle</div>
+  <video id="preview" playsinline autoplay muted></video>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import { getDatabase, ref, set, get, remove, onChildAdded, onValue, push } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+    import {
+      getDatabase, ref, set, get, onValue, onChildAdded, remove, push
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
+    // ★ 너의 Firebase 프로젝트 (기존과 동일)
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -41,86 +54,173 @@
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
 
-    const roomInp = document.getElementById('room');
-    const startBtn= document.getElementById('start');
-    const stopBtn = document.getElementById('stop');
-    const videoEl = document.getElementById('video');
-    const statusEl= document.getElementById('status');
+    const roomInp   = document.getElementById('room');
+    const joinBtn   = document.getElementById('join');
+    const leaveBtn  = document.getElementById('leave');
+    const startCam  = document.getElementById('startCam');
+    const startShare= document.getElementById('startShare');
+    const stopMedia = document.getElementById('stopMedia');
+    const previewEl = document.getElementById('preview');
+    const statusEl  = document.getElementById('status');
 
-    let pc, roomId, localStream;
+    let pc, roomId, localStream=null, videoSender=null;
 
-    const iceServers = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:80?transport=tcp',  username:'openrelayproject', credential:'openrelayproject' },
-    ];
+    function log(t){ console.log('[BROADCAST]', t); statusEl.textContent = t; }
 
-    function log(t){ console.log('[BROADCAST]', t); statusEl.textContent += (statusEl.textContent?'\n':'')+t; }
+    const pcConfig = {
+      iceServers: [
+        { urls: ['stun:stun.l.google.com:19302'] },
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp',
+            'turn:openrelay.metered.ca:80?transport=tcp'
+          ],
+          username: 'openrelayproject', credential: 'openrelayproject'
+        }
+      ],
+      iceTransportPolicy: 'relay' // ★ TURN만 사용
+    };
 
-    async function start(){
+    async function join(){
       try{
-        statusEl.textContent='idle';
         roomId = roomInp.value.trim();
-        if(!roomId){ alert('Enter Room ID'); return; }
+        if(!roomId){ alert('Room ID를 입력하세요'); return; }
 
-        // get camera
-        localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
-        videoEl.srcObject = localStream;
-
-        pc = new RTCPeerConnection({ iceServers });
-        localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
-
-        pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
+        pc = new RTCPeerConnection(pcConfig);
         pc.oniceconnectionstatechange = ()=> log('ice: '+pc.iceConnectionState);
+        pc.onconnectionstatechange    = ()=> log('pc: '+pc.connectionState);
 
-        // upload our ICE (offerCandidates)
+        // 상대방(뷰어)의 answerCandidates 받아서 추가
+        onChildAdded(ref(db, `webrtc/${roomId}/answerCandidates`), (snap)=>{
+          const c = snap.val();
+          if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
+        });
+
+        // 우리 ICE 후보를 offerCandidates로 푸시
         pc.onicecandidate = (e)=>{
           if(e.candidate){
             push(ref(db, `webrtc/${roomId}/offerCandidates`), e.candidate.toJSON());
           }
         };
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await set(ref(db, `webrtc/${roomId}/offer`), offer);
-        log('offer published');
-
-        // add remote ICE from viewer (answerCandidates)
-        onChildAdded(ref(db, `webrtc/${roomId}/answerCandidates`), (snap)=>{
-          const c = snap.val();
-          if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
-        });
-
-        // apply viewer's answer
+        // 뷰어가 낸 answer가 올라오면 세팅
         onValue(ref(db, `webrtc/${roomId}/answer`), async (snap)=>{
-          const answer = snap.val();
-          if(answer && !pc.currentRemoteDescription){
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          const ans = snap.val();
+          if(ans && !pc.currentRemoteDescription){
+            await pc.setRemoteDescription(new RTCSessionDescription(ans));
             log('answer set');
           }
         });
 
-        startBtn.disabled=true; stopBtn.disabled=false; roomInp.disabled=true;
-        window.onbeforeunload = stop;
+        // UI 상태
+        joinBtn.disabled = true; leaveBtn.disabled = false;
+        startCam.disabled = false; startShare.disabled = false; stopMedia.disabled = true; roomInp.disabled = true;
+
+        window.onbeforeunload = leave;
+        log('joined (준비됨). 카메라 또는 화면공유를 시작하세요.');
       }catch(err){
         console.error(err);
-        alert('Start failed: '+(err.message||err));
+        alert('Join 실패: ' + (err.message||err));
       }
     }
 
-    async function stop(){
-      try{
-        await remove(ref(db, `webrtc/${roomId}`));
-      }catch{}
-      try{ if(pc) pc.close(); }catch{}
-      try{ localStream?.getTracks().forEach(t=>t.stop()); }catch{}
-      startBtn.disabled=false; stopBtn.disabled=true; roomInp.disabled=false;
-      statusEl.textContent='stopped';
+    async function negotiate(){
+      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+      await pc.setLocalDescription(offer);
+      await set(ref(db, `webrtc/${roomId}/offer`), offer);
+      log('offer published');
     }
 
-    startBtn.onclick = start;
-    stopBtn.onclick  = stop;
+    async function useCamera(){
+      try{
+        // 환경 카메라 우선
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        await attachStream(stream);
+        await negotiate();
+        log('카메라 송출 중');
+      }catch(err){
+        console.error(err);
+        alert('카메라 시작 실패: '+(err.message||err));
+      }
+    }
+
+    async function useScreen(){
+      try{
+        // 모바일/데스크톱 모두 동작. iOS는 시스템 방송 시작 UI가 나올 수 있음.
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+          audio: false
+        });
+        await attachStream(stream);
+        await negotiate();
+        log('화면공유 송출 중 (erdsnt 앱 화면 포함 가능)');
+      }catch(err){
+        console.error(err);
+        alert('화면공유 시작 실패: '+(err.message||err));
+      }
+    }
+
+    async function attachStream(stream){
+      // 미리보기
+      previewEl.srcObject = stream;
+      // 이전 트랙 정리
+      if(localStream){
+        localStream.getTracks().forEach(t=>t.stop());
+      }
+      localStream = stream;
+
+      // 기존 sender가 있으면 교체, 없으면 추가
+      const track = stream.getVideoTracks()[0];
+      if(videoSender){
+        await videoSender.replaceTrack(track);
+      }else{
+        videoSender = pc.addTrack(track, stream);
+      }
+      stopMedia.disabled = false;
+
+      // 화면공유 끝났을 때 이벤트(사용자가 중단 버튼 누르면)
+      stream.getVideoTracks()[0].addEventListener('ended', ()=>{
+        stopTracks();
+        log('미디어 중단됨');
+      });
+    }
+
+    function stopTracks(){
+      try{ localStream?.getTracks().forEach(t=>t.stop()); }catch{}
+      localStream = null;
+      previewEl.srcObject = null;
+      stopMedia.disabled = true;
+    }
+
+    async function leave(){
+      try{
+        stopTracks();
+        try{ pc?.close(); }catch{}
+        await remove(ref(db, `webrtc/${roomId}/offer`));
+        await remove(ref(db, `webrtc/${roomId}/offerCandidates`));
+        await remove(ref(db, `webrtc/${roomId}/answer`));
+        await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
+      }catch{}
+      joinBtn.disabled=false; leaveBtn.disabled=true; startCam.disabled=true; startShare.disabled=true; stopMedia.disabled=true; roomInp.disabled=false;
+      log('left');
+    }
+
+    joinBtn.onclick = join;
+    leaveBtn.onclick = leave;
+    startCam.onclick = useCamera;
+    startShare.onclick = useScreen;
+    stopMedia.onclick = stopTracks;
   </script>
+
+  <div class="muted" style="margin-top:10px">
+    ℹ️ 팁: erdsnt 앱을 켠 상태에서 <b>화면공유 시작</b>을 누르면, 앱 화면 그대로가 시청자에게 전송된다.
+    iOS는 ‘방송 시작’/‘화면 공유’ 시스템 팝업을 승인해야 한다.
+  </div>
 </body>
 </html>
 
