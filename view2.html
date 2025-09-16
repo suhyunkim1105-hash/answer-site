@@ -1,185 +1,133 @@
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Viewer (TURN relay-only, robust)</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,sans-serif;max-width:960px;margin:0 auto;padding:16px}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    input,button{padding:10px 12px;border-radius:10px;border:1px solid #ccc}
-    button{cursor:pointer}
-    video{width:100%;max-height:70vh;background:#000;border-radius:12px;margin-top:10px}
-    .muted{color:#777;font-size:13px;margin-top:6px;white-space:pre-wrap}
-    pre{white-space:pre-wrap;background:#f5f6f7;padding:10px;border-radius:10px;font-size:12px;max-height:220px;overflow:auto}
-    .ok{color:#0a7d2a}.err{color:#b00020}
-  </style>
-</head>
-<body>
-  <h1>🎥 Viewer (TURN relay-only, robust)</h1>
+<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Viewer (TCP-only TURN, robust)</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,sans-serif;max-width:960px;margin:0 auto;padding:16px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input,button{padding:10px 12px;border-radius:10px;border:1px solid #ccc}button{cursor:pointer}
+video{width:100%;max-height:70vh;background:#000;border-radius:12px;margin-top:10px}
+.muted{color:#777;font-size:13px;margin-top:6px;white-space:pre-wrap}
+pre{white-space:pre-wrap;background:#f5f6f7;padding:10px;border-radius:10px;font-size:12px;max-height:220px;overflow:auto}
+</style></head><body>
+<h1>🎥 Viewer (TCP-only TURN, robust)</h1>
+<div class="row">
+  <input id="room" placeholder="Room ID (예: r1)"/>
+  <button id="join">Join</button>
+  <button id="leave" disabled>Leave</button>
+</div>
+<div id="status" class="mUted">idle</div>
+<video id="video" autoplay playsinline muted></video>
+<pre id="log" class="mUted"></pre>
 
-  <div class="row">
-    <input id="room" placeholder="Room ID (예: r1234)" />
-    <button id="join">Join</button>
-    <button id="leave" disabled>Leave</button>
-  </div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getDatabase, ref, get, set, remove, onChildAdded, onValue, off } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
 
-  <div id="status" class="muted">idle</div>
-  <video id="video" autoplay playsinline></video>
-  <pre id="logbox" class="muted"></pre>
+const firebaseConfig = {
+  apiKey:"AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+  authDomain:"answer-site-p2p.firebaseapp.com",
+  databaseURL:"https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId:"answer-site-p2p",
+  storageBucket:"answer-site-p2p.firebasestorage.app",
+  messagingSenderId:"364227113735",
+  appId:"1:364227113735:web:b18355cf0b16454663cba2",
+  measurementId:"G-C8MRHK5ZGS"
+};
+const app=initializeApp(firebaseConfig), db=getDatabase(app);
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-    import { getDatabase, ref, get, set, remove, onChildAdded, onValue, off } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
+const q=(id)=>document.getElementById(id);
+const room=q('room'), joinBtn=q('join'), leaveBtn=q('leave');
+const video=q('video'), statusEl=q('status'), logEl=q('log');
 
-    // ★ 네 Firebase 프로젝트 (broadcast.html과 동일)
-    const firebaseConfig = {
-      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-      authDomain: "answer-site-p2p.firebaseapp.com",
-      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-      projectId: "answer-site-p2p",
-      storageBucket: "answer-site-p2p.firebasestorage.app",
-      messagingSenderId: "364227113735",
-      appId: "1:364227113735:web:b18355cf0b16454663cba2",
-      measurementId: "G-C8MRHK5ZGS"
-    };
+let pc, roomId, offerRef, offerCandRef; let wired=false, connectedOnce=false;
 
-    const app = initializeApp(firebaseConfig);
-    const db  = getDatabase(app);
+function log(t){ console.log('[VIEW]',t); statusEl.textContent=t; logEl.textContent+=String(t)+'\n'; logEl.scrollTop=1e9; }
 
-    const roomInp = document.getElementById('room');
-    const joinBtn = document.getElementById('join');
-    const leaveBtn= document.getElementById('leave');
-    const videoEl = document.getElementById('video');
-    const statusEl= document.getElementById('status');
-    const logbox  = document.getElementById('logbox');
+const pcConfig={
+  iceServers:[
+    // TCP-only TURN (UDP 완전 배제)
+    { urls:'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject' },
+    { urls:'turn:openrelay.metered.ca:80?transport=tcp',  username:'openrelayproject', credential:'openrelayproject' }
+  ],
+  iceTransportPolicy:'relay'
+};
 
-    let pc, roomId, offerRef, offerCandRef, answerCandRef;
-    let wired = false, connectedOnce = false;
+async function handleOffer(offer){
+  if(!offer || wired) return;
+  wired=true;
+  log('offer seen → setRemoteDescription');
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  // H.264 우선(호환성)
+  try{
+    const t=pc.getTransceivers().find(x=>x.receiver && x.receiver.track && x.receiver.track.kind==='video') || pc.getTransceivers()[0];
+    const caps=RTCRtpReceiver.getCapabilities('video');
+    const prefs=[...caps.codecs].sort((a,b)=> (a.mimeType==='video/H264'?-1:0) - (b.mimeType==='video/H264'?-1:0));
+    if(t?.setCodecPreferences) t.setCodecPreferences(prefs);
+  }catch{}
 
-    function log(t){
-      console.log('[VIEW]', t);
-      statusEl.textContent = t;
-      logbox.textContent += String(t)+'\n';
-      logbox.scrollTop = 1e9;
-    }
+  const answer=await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  await set(ref(db,`webrtc/${roomId}/answer`), answer);
+  log('answer published');
 
-    const pcConfig = {
-      iceServers: [
-        { urls: ['stun:stun.l.google.com:19302'] },
-        {
-          urls: [
-            'turn:openrelay.metered.ca:80',
-            'turn:openrelay.metered.ca:443',
-            'turn:openrelay.metered.ca:443?transport=tcp',
-            'turn:openrelay.metered.ca:80?transport=tcp'
-          ],
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ],
-      iceTransportPolicy: 'relay' // ★ TURN만 사용
-    };
+  onChildAdded(offerCandRef,(snap)=>{ const c=snap.val(); if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{}); });
 
-    async function handleOffer(offer){
-      if(!offer || wired) return;
-      wired = true;
-      log('offer seen → setRemoteDescription');
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  pc.onicecandidate=(e)=>{ if(e.candidate) set(ref(db,`webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON()); };
 
-      // 우리의 answer 생성 + 게시
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await set(ref(db, `webrtc/${roomId}/answer`), answer);
-      log('answer published');
+  setTimeout(()=>{ if(!connectedOnce && pc?.iceConnectionState!=='connected'){ log('ice: restartIce()'); try{ pc.restartIce(); }catch{} } }, 6000);
+}
 
-      // broadcaster가 올린 offerCandidates 계속 추가
-      onChildAdded(offerCandRef, (snap)=>{
-        const c = snap.val();
-        if(c) pc.addIceCandidate(new RTCIceCandidate(c)).catch(()=>{});
-      });
+async function join(){
+  try{
+    roomId=room.value.trim(); if(!roomId){ alert('Room ID'); return; }
 
-      // 우리쪽 ICE 후보도 answerCandidates에 push
-      pc.onicecandidate = (e)=>{
-        if(e.candidate){
-          set(ref(db, `webrtc/${roomId}/answerCandidates/${crypto.randomUUID()}`), e.candidate.toJSON());
-        }
-      };
+    pc=new RTCPeerConnection(pcConfig);
+    try{ pc.addTransceiver('video',{direction:'recvonly'}); }catch{}
+    video.muted=true; video.autoplay=true; video.playsInline=true;
 
-      // 연결이 더디면 8초 후 ICE 재시도
-      setTimeout(()=>{
-        if(!connectedOnce && pc?.iceConnectionState !== 'connected'){
-          log('ice: restartIce()');
-          try{ pc.restartIce(); }catch{}
-        }
-      }, 8000);
-    }
+    pc.ontrack=(e)=>{ video.srcObject=e.streams[0]; };
+    pc.oniceconnectionstatechange=()=>{ log('ice: '+pc.iceConnectionState); if(pc.iceConnectionState==='connected'){connectedOnce=true;} };
+    pc.onconnectionstatechange=()=>log('pc: '+pc.connectionState);
 
-    async function join(){
+    offerRef=ref(db,`webrtc/${roomId}/offer`);
+    offerCandRef=ref(db,`webrtc/${roomId}/offerCandidates`);
+
+    const snap=await get(offerRef);
+    if(snap.exists()){ await handleOffer(snap.val()); } else { log('waiting offer...'); }
+
+    onValue(offerRef,(s)=>{ if(s.exists()) handleOffer(s.val()); });
+
+    joinBtn.disabled=true; leaveBtn.disabled=false; room.disabled=true;
+    window.onbeforeunload=leave;
+
+    // 간단 통계(프레임/초)로 “영상 수신 중인지” 표시
+    setInterval(async()=>{
+      if(!pc) return;
       try{
-        roomId = roomInp.value.trim();
-        if(!roomId){ alert('Room ID를 입력하세요'); return; }
-
-        pc = new RTCPeerConnection(pcConfig);
-        // 원격 영상 수신을 보장하기 위해 recvonly 트랜시버 선등록
-        try { pc.addTransceiver('video', { direction: 'recvonly' }); } catch {}
-        pc.ontrack = (e)=>{ videoEl.srcObject = e.streams[0]; };
-        pc.oniceconnectionstatechange = ()=>{
-          log('ice: '+pc.iceConnectionState);
-          if(pc.iceConnectionState === 'connected'){ connectedOnce = true; }
-        };
-        pc.onconnectionstatechange = ()=> log('pc: '+pc.connectionState);
-
-        // DB 레퍼런스 준비
-        offerRef     = ref(db, `webrtc/${roomId}/offer`);
-        offerCandRef = ref(db, `webrtc/${roomId}/offerCandidates`);
-        answerCandRef= ref(db, `webrtc/${roomId}/answerCandidates`);
-
-        // 1) 이미 올라온 오퍼가 있으면 즉시 처리
-        const snap = await get(offerRef);
-        if(snap.exists()){
-          await handleOffer(snap.val());
-        } else {
-          log('waiting offer...');
-        }
-
-        // 2) 이후 올라오는 오퍼도 감지해서 자동 처리
-        onValue(offerRef, (s)=>{
-          if(s.exists()){
-            handleOffer(s.val());
+        const stats=await pc.getStats();
+        stats.forEach(r=>{
+          if(r.type==='inbound-rtp' && r.kind==='video'){
+            const fps=(r.framesPerSecond!=null)?r.framesPerSecond: (r.framesDecoded && r.timestamp? Math.round(r.framesDecoded) : null);
+            if(fps!=null) statusEl.textContent='receiving video… ~'+fps+'fps';
           }
         });
-
-        joinBtn.disabled=true; leaveBtn.disabled=false; roomInp.disabled=true;
-        window.onbeforeunload = leave;
-      }catch(err){
-        console.error(err); log('error: '+(err.message||err));
-        alert('Join 실패: '+(err.message||err));
-      }
-    }
-
-    async function leave(){
-      try{
-        off(offerRef);
       }catch{}
-      try{
-        await remove(ref(db, `webrtc/${roomId}/answer`));
-        await remove(ref(db, `webrtc/${roomId}/answerCandidates`));
-      }catch{}
-      try{ pc?.close(); }catch{}
-      joinBtn.disabled=false; leaveBtn.disabled=true; roomInp.disabled=false;
-      wired=false; connectedOnce=false;
-      log('left');
-    }
+    },1500);
+  }catch(e){ console.error(e); log('error: '+(e.message||e)); alert('Join 실패: '+(e.message||e)); }
+}
 
-    joinBtn.onclick = join;
-    leaveBtn.onclick = leave;
-  </script>
+async function leave(){
+  try{ off(offerRef); }catch{}
+  try{ await remove(ref(db,`webrtc/${roomId}/answer`)); await remove(ref(db,`webrtc/${roomId}/answerCandidates`)); }catch{}
+  try{ pc?.close(); }catch{}
+  joinBtn.disabled=false; leaveBtn.disabled=true; room.disabled=false; wired=false; connectedOnce=false; log('left');
+}
 
-  <div class="muted" style="margin-top:10px">
-    ℹ️ 먼저 Broadcaster가 <b>Join → (카메라 시작 또는 화면공유 시작)</b>을 해야 이 화면에서 자동 연결됩니다.
-    정상 로그 흐름: <b>offer seen → answer published → ice: checking → pc/ice: connected</b>.
-  </div>
-</body>
-</html>
+joinBtn.onclick=join; leaveBtn.onclick=leave;
+</script>
+
+<div class="muted" style="margin-top:10px">
+ℹ️ 절차: Broadcaster에서 <b>Join → (카메라 시작 또는 화면공유 시작)</b> 후, 이 페이지에서 Join.<br/>
+정상 로그: <b>offer seen → answer published → ice: checking → pc/ice: connected</b> (이후 위 상태줄에 <i>receiving video…</i>가 주기적으로 뜸)
+</div>
+</body></html>
