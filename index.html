@@ -3,180 +3,150 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>answer-site-p2p • OCR→solve→TTS 데모</title>
+  <title>문제 자동 풀이 - Netlify</title>
   <style>
-    :root { --bg:#0b0b10; --card:#141420; --muted:#8b8ba7; --fg:#e7e7ff; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Helvetica, Arial, Apple SD Gothic Neo, "Apple Color Emoji", "Segoe UI Emoji"; background:var(--bg); color:var(--fg); }
-    .wrap { max-width: 980px; margin: 24px auto; padding: 16px; }
-    .card { background: var(--card); border-radius: 18px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
-    h1 { font-size: 22px; margin: 0 0 6px; }
-    p.hint { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    video, canvas, img { width: 100%; border-radius: 14px; background:#000; }
-    textarea { width:100%; min-height: 110px; border-radius: 12px; border:1px solid #2a2a3f; background:#0e0e17; color:var(--fg); padding:12px; }
-    button { appearance:none; border:0; padding:12px 14px; border-radius: 12px; font-weight: 700; cursor: pointer; background:#3a3aff; color:white; }
-    button.secondary { background:#2a2a3f; color:#e6e6ff; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-    .small { font-size: 12px; color: var(--muted); }
-    .pill { display:inline-flex; align-items:center; gap:6px; background:#1a1a2a; border:1px solid #2a2a3f; color:#bdbdf2; padding:6px 10px; border-radius:999px; }
-    .status { min-height: 20px; }
-    .kbar { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:start; }
-    .out { background:#0e0e17; border:1px solid #2a2a3f; padding:12px; border-radius:12px; min-height:52px; font-size:14px; }
-    .muted { color:#b2b2d6; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; max-width: 900px; margin: 24px auto; padding: 0 12px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    video, canvas, img { width: 100%; max-width: 420px; background: #111; border-radius: 12px; }
+    button { padding: 10px 14px; border: 0; border-radius: 12px; cursor: pointer; font-weight: 600; }
+    .primary { background: #111; color: #fff; }
+    .ghost { background: #f2f2f2; }
+    .card { border: 1px solid #eaeaea; border-radius: 12px; padding: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+    .muted { color: #666; }
   </style>
-  <!-- Tesseract.js CDN (worker will fetch core from CDN). If blocked, replace with local copy. -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>OCR → solve → TTS</h1>
-      <p class="hint">카메라 영상을 캡처해 OCR로 텍스트를 추출하고, <span class="mono">solve</span> API에 전송해 받은 <b>정답만</b> 음성으로 읽어준다.</p>
+  <h1>카메라 인식 → 정답 자동 출력 (Netlify)</h1>
+  <p class="muted">iPhone은 가장 안정적으로 <b>파일 업로드 방식</b>(아래 카메라로 촬영 업로드)을 권장한다.</p>
 
-      <div class="grid">
-        <div>
-          <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-            <span class="pill">① 카메라</span>
-            <div class="row">
-              <button id="btnStartCam">카메라 시작</button>
-              <button id="btnSnap" class="secondary">프레임 캡처</button>
-            </div>
-          </div>
-          <video id="video" playsinline autoplay muted></video>
-          <canvas id="frame" style="display:none"></canvas>
-          <p class="small">※ 특정 앱(예: 전용 카메라 앱)의 스트림을 직접 받기 어렵다면, 화면공유(스크린 캡처)로도 대체 가능: <code>navigator.mediaDevices.getDisplayMedia()</code> 사용.</p>
-        </div>
-        <div>
-          <div class="row" style="justify-content:space-between; margin-bottom:8px;">
-            <span class="pill">② OCR 결과</span>
-            <button id="btnOcr">OCR 실행</button>
-          </div>
-          <textarea id="ocrText" placeholder="여기에 OCR 텍스트가 나타난다. 필요시 수정해서 보낼 수 있다."></textarea>
-          <div class="row" style="justify-content:space-between; margin-top:8px;">
-            <span class="pill">③ solve 호출</span>
-            <div class="row">
-              <input id="apiUrl" class="mono" style="width:360px; padding:10px; border-radius:10px; border:1px solid #2a2a3f; background:#0e0e17; color:#cfcfff;" value="https://solve-bcpgmrhjuq-uc.a.run.app" />
-              <button id="btnAsk">정답 요청</button>
-            </div>
-          </div>
-          <div id="answer" class="out" style="margin-top:8px;"></div>
-          <div class="row" style="margin-top:8px; justify-content:space-between;">
-            <span class="pill">④ 음성 출력 (TTS)</span>
-            <div class="row">
-              <button id="btnSpeak">답 말하기</button>
-              <button id="btnStopSpeak" class="secondary">정지</button>
-            </div>
-          </div>
-          <p class="small muted">Web Speech API(브라우저 TTS)를 사용. 모바일 브라우저는 사용자 제스처 이후에만 재생 허용될 수 있음.</p>
-        </div>
+  <section class="card">
+    <h2>1) 입력</h2>
+    <div class="row">
+      <div>
+        <label>iPhone 권장: 아래 버튼으로 촬영 업로드</label><br/>
+        <input id="file" type="file" accept="image/*" capture="environment" />
       </div>
-
-      <div class="card" style="margin-top:14px;">
-        <div class="kbar">
-          <div>
-            <div class="status" id="status"></div>
-            <p class="small">TIP: OCR 정확도 향상 — (1) 해상도 높이기, (2) 명암 대비/초점, (3) 프레임 중앙에 문제 텍스트만, (4) 잡음·왜곡 최소화.</p>
-          </div>
-          <button id="btnShareScreen" class="secondary">화면공유로 대체</button>
-          <button id="btnClear" class="secondary">초기화</button>
+      <div>
+        <video id="video" autoplay playsinline muted></video>
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap: wrap;">
+          <button class="primary" id="btnStartCam">카메라 시작(노트북/안드 권장)</button>
+          <button class="ghost" id="btnCapture">프레임 캡처</button>
         </div>
+        <canvas id="canvas" width="640" height="480" style="margin-top:8px;"></canvas>
       </div>
-
-      <p class="small">보안: 이 페이지는 <b>백엔드 비밀키를 사용하지 않는다.</b> solve API만 호출한다. solve 서버에서만 OpenRouter 키를 사용하도록 유지.</p>
     </div>
-  </div>
+    <button id="btnClear" class="ghost" style="margin-top:8px;">지우기</button>
+  </section>
 
-<script>
-const $ = (s)=>document.querySelector(s);
-const video = $('#video');
-const canvas = $('#frame');
-const ctx = canvas.getContext('2d');
-const statusEl = $('#status');
-const ocrText = $('#ocrText');
-const answerEl = $('#answer');
-const apiUrl = $('#apiUrl');
-let stream;
-let lastAnswer = '';
+  <section class="card">
+    <h2>2) OCR 결과</h2>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+      <label>언어: </label>
+      <select id="ocrLang">
+        <option value="eng" selected>영어 (eng)</option>
+        <option value="kor">한국어 (kor)</option>
+      </select>
+      <button id="btnOCR" class="primary">OCR 실행</button>
+    </div>
+    <pre id="ocrOut" class="mono" style="margin-top:8px; min-height:60px;"></pre>
+  </section>
 
-function setStatus(msg){ statusEl.textContent = msg; }
+  <section class="card">
+    <h2>3) 정답 요청</h2>
+    <p class="muted">Netlify Functions 기본 경로 <code>/.netlify/functions/solve</code></p>
+    <div style="display:flex; gap:8px; flex-wrap: wrap;">
+      <input id="serverUrl" style="flex:1; min-width:280px; padding:8px; border-radius:10px; border:1px solid #ddd;" value="/.netlify/functions/solve" />
+      <button id="btnSolve" class="primary">정답 요청</button>
+    </div>
+    <pre id="answerOut" class="mono" style="margin-top:8px; min-height:60px;"></pre>
+    <div style="margin-top:8px; display:flex; gap:8px;">
+      <button id="btnSpeak" class="ghost">정답 읽어주기</button>
+      <button id="btnStopSpeak" class="ghost">읽기 중지</button>
+    </div>
+  </section>
 
-async function startCamera(){
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio:false });
-    video.srcObject = stream;
-    setStatus('카메라 시작됨');
-  } catch(e){ setStatus('카메라 접근 실패: '+ e.message); }
-}
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const file = document.getElementById('file');
+    const ocrOut = document.getElementById('ocrOut');
 
-function snapFrame(){
-  if(!video.videoWidth){ setStatus('비디오 로딩 대기…'); return; }
-  const w = video.videoWidth; const h = video.videoHeight;
-  canvas.width = w; canvas.height = h;
-  ctx.drawImage(video, 0, 0, w, h);
-  setStatus('프레임 캡처 완료');
-}
+    document.getElementById('btnStartCam').onclick = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+        video.srcObject = stream;
+      } catch (e) { alert('카메라 권한/장치 에러: ' + e.message); }
+    };
 
-async function doOCR(){
-  try {
-    setStatus('OCR 실행 중…');
-    const img = canvas.toDataURL('image/png');
-    const result = await Tesseract.recognize(img, 'eng+kor', { logger: m => { /* console.log(m) */ } });
-    const text = (result.data && result.data.text) ? result.data.text.trim() : '';
-    ocrText.value = text;
-    setStatus('OCR 완료');
-  } catch(e){ setStatus('OCR 실패: '+ e.message); }
-}
+    document.getElementById('btnCapture').onclick = () => {
+      try {
+        const w = video.videoWidth || 640; const h = video.videoHeight || 480;
+        canvas.width = w; canvas.height = h;
+        ctx.drawImage(video, 0, 0, w, h);
+      } catch (e) { alert('캡처 실패: ' + e.message); }
+    };
 
-async function askSolve(){
-  const q = ocrText.value.trim();
-  if(!q){ setStatus('질문 텍스트가 비어 있음'); return; }
-  const url = apiUrl.value.trim();
-  if(!url){ setStatus('solve API URL이 비어 있음'); return; }
-  try {
-    setStatus('solve 호출 중…');
-    const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ question: q }) });
-    if(!res.ok){ throw new Error('HTTP '+res.status); }
-    const data = await res.json();
-    const ans = (data && (data.answer || data.result || data.output)) || JSON.stringify(data);
-    lastAnswer = String(ans).trim();
-    answerEl.textContent = lastAnswer;
-    setStatus('정답 수신');
-  } catch(e){ setStatus('solve 호출 실패: '+ e.message); }
-}
+    file.onchange = (ev) => {
+      const img = new Image();
+      const f = ev.target.files?.[0]; if (!f) return;
+      img.onload = () => { canvas.width = img.width; canvas.height = img.height; ctx.drawImage(img, 0, 0); };
+      img.src = URL.createObjectURL(f);
+    };
 
-function speak(){
-  const text = (answerEl.textContent || lastAnswer || '').trim();
-  if(!text){ setStatus('읽을 답이 없음'); return; }
-  const u = new SpeechSynthesisUtterance(text);
-  // 한국어/영어 섞일 수 있으므로 기본 보이스 사용
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(u);
-}
+    document.getElementById('btnClear').onclick = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ocrOut.textContent = '';
+      document.getElementById('answerOut').textContent = '';
+    };
 
-function stopSpeak(){ window.speechSynthesis.cancel(); }
+    document.getElementById('btnOCR').onclick = async () => {
+      const lang = document.getElementById('ocrLang').value;
+      const dataUrl = canvas.toDataURL('image/png');
+      if (!dataUrl) return alert('먼저 캡처하거나 이미지를 올린다.');
+      ocrOut.textContent = 'OCR 중...';
+      try {
+        const { createWorker } = Tesseract;
+        const worker = await createWorker(lang);
+        const res = await worker.recognize(dataUrl);
+        await worker.terminate();
+        const text = (res?.data?.text || '').trim();
+        ocrOut.textContent = text || '[인식된 텍스트 없음]';
+      } catch (e) {
+        ocrOut.textContent = 'OCR 오류: ' + e.message;
+      }
+    };
 
-async function shareScreen(){
-  try{
-    stream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
-    video.srcObject = stream;
-    setStatus('화면공유 시작됨 (앱 영상 창을 선택)');
-  }catch(e){ setStatus('화면공유 실패: '+ e.message); }
-}
+    document.getElementById('btnSolve').onclick = async () => {
+      const url = document.getElementById('serverUrl').value.trim();
+      const question = (ocrOut.textContent || '').trim();
+      if (!url) return alert('서버 URL을 입력한다.');
+      if (!question) return alert('OCR 텍스트가 비어 있다.');
+      const out = document.getElementById('answerOut');
+      out.textContent = '풀이 중...';
+      try {
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j?.error || r.statusText);
+        out.textContent = j.answer || JSON.stringify(j);
+      } catch (e) {
+        out.textContent = '요청 오류: ' + e.message;
+      }
+    };
 
-function clearAll(){
-  ocrText.value = ''; answerEl.textContent = ''; lastAnswer=''; setStatus('초기화 완료');
-}
-
-$('#btnStartCam').addEventListener('click', startCamera);
-$('#btnSnap').addEventListener('click', snapFrame);
-$('#btnOcr').addEventListener('click', doOCR);
-$('#btnAsk').addEventListener('click', askSolve);
-$('#btnSpeak').addEventListener('click', speak);
-$('#btnStopSpeak').addEventListener('click', stopSpeak);
-$('#btnShareScreen').addEventListener('click', shareScreen);
-$('#btnClear').addEventListener('click', clearAll);
-</script>
+    // Web Speech API
+    let utter;
+    document.getElementById('btnSpeak').onclick = () => {
+      const text = document.getElementById('answerOut').textContent.trim();
+      if (!text) return;
+      if (utter) window.speechSynthesis.cancel();
+      utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'ko-KR';
+      window.speechSynthesis.speak(utter);
+    };
+    document.getElementById('btnStopSpeak').onclick = () => window.speechSynthesis.cancel();
+  </script>
 </body>
 </html>
