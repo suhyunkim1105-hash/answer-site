@@ -1,74 +1,65 @@
-export default async (req, context) => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders() });
-
+// netlify/functions/solve.js
+export default async (req, res) => {
   try {
-    const body = await req.json();
-    const question = (body?.question || '').toString().slice(0, 12000);
-    if (!question) return json({ error: 'Missing question' }, 400);
+    const body = (await req.json?.()) || {};
+    const question = (body.question || "").toString();
+    if (!question) return res.status(400).json({ error: "Missing question" });
 
-    const apiKey = Deno?.env?.get('OPENROUTER_API_KEY') || process?.env?.OPENROUTER_API_KEY;
-    if (!apiKey) return json({ error: 'Missing OPENROUTER_API_KEY' }, 500);
-
-    const sys = `You are an answer-only solver for bilingual (Korean/English) exam questions.
+    const system = `
+You are a strict exam solver for English/Korean MCQ and blank/underline questions.
 Rules:
-- Return ONLY the final answer. No steps.
-- Multiple choice: return only the option label (e.g., A).
-- Numeric: only the number with essential unit.
-- If "지문/Passage" is provided, use it as context and answer only the "문항/Question".
-- If there are multiple questions, answer just the one shown.
-- If uncertain, choose the most likely single answer (be decisive).`;
+- If choices are present like "[CHOICES] 1) ... | 2) ... | 3) ... | 4) ... | 5) ...":
+  Return ONLY the single index: 1 or 2 or 3 or 4 or 5. No words, no punctuation, no explanation.
+- If the prompt mentions underline/blank ("underlined", "밑줄", "빈칸", "blank"):
+  Use the context to choose the best meaning/synonym or fit for the blank.
+  If [HINT] is present, consider it only as a hint.
+  Still return ONLY the index: 1~5.
+- If there are NO choices, return ONLY one short word/phrase (English or Korean).
+- Temperature low. Never output anything else.
+`;
 
-    const user = `Input may contain a passage and one question.
-If both exist, answer ONLY the question.
-
+    const user = `
+Question/OCR text:
+---
 ${question}
+---
 
-Return ONLY the final answer.`;
+Remember:
+- If choices exist: answer ONLY 1/2/3/4/5.
+- Otherwise: answer ONLY one short word/phrase.
+`;
 
-    const payload = {
-      model: 'openrouter/auto',
-      temperature: 0.0,
-      top_p: 1,
-      max_tokens: 64,
-      messages: [
-        { role: 'system', content: sys },
-        { role: 'user', content: user }
-      ]
-    };
-
-    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://beamish-alpaca-e3df59.netlify.app',
-        'X-Title': 'answer-site v3'
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user }
+        ],
+        temperature: 0.1,
+        max_tokens: 8
+      })
     });
 
+    const j = await r.json();
     if (!r.ok) {
-      const txt = await r.text();
-      return json({ error: 'OpenRouter error', status: r.status, details: txt }, 502);
+      const msg = j?.error?.message || j?.error || r.statusText;
+      return res.status(500).json({ error: msg });
     }
+    let answer = (j?.choices?.[0]?.message?.content || "").trim();
 
-    const data = await r.json();
-    const ans = data?.choices?.[0]?.message?.content?.trim() || '';
-    return json({ answer: sanitize(ans) });
+    // 혹시 "3) ..." 같이 오면 숫자만 뽑기
+    const m = answer.match(/\b([1-5])\b/);
+    if (m) answer = m[1];
 
-  } catch (err) {
-    return json({ error: err?.message || 'Server error' }, 500);
+    return res.status(200).json({ answer });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || String(e) });
   }
 };
 
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-  };
-}
-function json(obj, status=200){
-  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', ...corsHeaders() } });
-}
-function sanitize(s=''){ return s.replace(/\r|\n/g,' ').replace(/\s+/g,' ').trim(); }
