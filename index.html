@@ -1,59 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>자동 문제 풀이 – 복구 테스트</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;margin:20px}
+  .card{border:1px solid #eaeaea;border-radius:12px;padding:14px;margin:12px 0}
+  button{padding:10px 14px;border:0;border-radius:10px;font-weight:700;cursor:pointer;background:#111;color:#fff}
+  pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;border-radius:8px;padding:10px;min-height:80px}
+  video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
+</style>
+</head>
+<body>
+<h1>자동 문제 풀이 – 화면 복구 OK</h1>
+
+<div class="card">
+  <p>지금은 <b>화면이 보이는지</b> 확인하는 단계입니다. 아래 버튼이 보이면 UI는 정상입니다.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button id="btnCam">아이폰 카메라 허용</button>
+    <button id="btnScreen">화면 공유 시작(미러링 창 선택)</button>
+    <button id="btnCheck">상태 점검</button>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px">
+    <video id="v" autoplay playsinline muted></video>
+    <canvas id="c" width="640" height="480"></canvas>
+  </div>
+</div>
+
+<div class="card">
+  <h3>상태 / 에러 로그</h3>
+  <pre id="log"></pre>
+</div>
+
 <script>
-// ===== 강화된 정규화(보기 추출 보강) =====
-function normalizeOCR(raw) {
-  if (!raw) return "";
-  let t = raw;
+const log = document.getElementById('log');
+function logln(s){ log.textContent += (s + '\n'); }
 
-  // 흔한 잘못 인식들을 숫자 보기로 강제 매핑
-  // ①/⓵/❶/➀/➊ -> 1), ② -> 2) ...
-  t = t
-    .replace(/[①⓵❶➀➊]/g, " 1) ")
-    .replace(/[②⓶❷➁➋]/g, " 2) ")
-    .replace(/[③⓷❸➂➌]/g, " 3) ")
-    .replace(/[④⓸❹➃➍]/g, " 4) ")
-    .replace(/[⑤⓹❺➄➎]/g, " 5) ");
-
-  // "1. " 패턴도 보기로 치환
-  t = t
-    .replace(/\b1\.\s/g, " 1) ")
-    .replace(/\b2\.\s/g, " 2) ")
-    .replace(/\b3\.\s/g, " 3) ")
-    .replace(/\b4\.\s/g, " 4) ")
-    .replace(/\b5\.\s/g, " 5) ");
-
-  // 기괴한 패턴 보정: @D, ©, ® 같은 것들이 보기 구분자로 나타나는 경우
-  // 줄 시작의 특수문자+단어를 "N) 단어"로 유추
-  t = t.replace(/(?:^|\n)\s*[@©®∘○•◦]\s*([a-zA-Z가-힣][^\n]+)/g, (m, g1) => `\n ?) ${g1}`);
-
-  // 하이픈 줄바꿈, 중복 공백/줄바꿈 정리
-  t = t.replace(/-\n/g, "")
-       .replace(/\n{2,}/g, "\n")
-       .replace(/[ \t]+/g, " ")
-       .trim();
-
-  // 보기 라인 모으기
-  const choices = [];
-  // 1)~5) 뽑기
-  for (let k = 1; k <= 5; k++) {
-    const r = new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`);
-    const m = t.match(r);
-    if (m) choices.push(`${k}) ${m[1].trim()}`);
-  }
-  // 1)~5) 제대로 못 뽑았으면 후보 라인 추정(한 줄에 단어 하나/짧은 구)
-  if (choices.length < 2) {
-    const lines = t.split("\n").map(s => s.trim());
-    const cand = lines.filter(s => /^[a-zA-Z가-힣][a-zA-Z가-힣\- ]{0,20}$/.test(s)).slice(-5);
-    if (cand.length >= 2) {
-      // 뒤쪽 5개를 1)~N)로 라벨링
-      const lab = cand.slice(-5).map((v, i) => `${i + 1}) ${v}`);
-      choices.push(...lab);
-    }
-  }
-
-  if (choices.length >= 2) {
-    const body = t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g, "").trim();
-    t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`;
-  }
-  return t;
-}
+document.getElementById('btnCam').onclick = async ()=>{
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+    document.getElementById('v').srcObject = s;
+    logln('카메라 연결 OK');
+  }catch(e){ logln('카메라 오류: '+e.message); }
+};
+document.getElementById('btnScreen').onclick = async ()=>{
+  try{
+    const s = await navigator.mediaDevices.getDisplayMedia({video:{displaySurface:'window'},audio:false});
+    document.getElementById('v').srcObject = s;
+    logln('화면 공유 연결 OK (미러링 창 선택됨)');
+  }catch(e){ logln('화면 공유 오류/취소: '+e.message); }
+};
+document.getElementById('btnCheck').onclick = ()=>{
+  logln('페이지 로드 확인, JS 실행 정상');
+};
+logln('페이지 렌더 OK');
 </script>
+</body>
+</html>
