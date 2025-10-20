@@ -1,247 +1,59 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>자동 문제 풀이 (카메라/스냅샷/화면공유)</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
-  .card{border:1px solid #eaeaea;border-radius:12px;padding:12px;margin:10px 0}
-  button{padding:10px 14px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
-  .primary{background:#111;color:#fff}.ghost{background:#f2f2f2}
-  pre{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
-  label{user-select:none}
-  input[type="text"],input[type="number"]{border:1px solid #ddd;border-radius:10px;padding:8px}
-</style>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-</head>
-<body>
-<h1>카메라 → OCR → 풀이 → 음성 (완전 자동)</h1>
-
-<section class="card">
-  <h3>입력 소스</h3>
-  <div class="row">
-    <div>
-      <video id="video" autoplay playsinline muted></video>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <button id="btnCam" class="ghost">아이폰 카메라 사용</button>
-        <button id="btnScreen" class="ghost">화면 공유 시작(미러링 창 선택)</button>
-      </div>
-    </div>
-    <div>
-      <canvas id="canvas" width="640" height="480"></canvas>
-      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <input id="snapUrl" placeholder="(선택) 스냅샷 URL: http://.../snapshot.jpg" style="flex:1;min-width:260px">
-        <label>주기(초): <input id="pollSec" type="number" min="1" value="2" style="width:70px"></label>
-        <button id="btnUseSnap" class="ghost">스냅샷 사용</button>
-        <button id="btnUseCam" class="ghost">카메라/화면 사용</button>
-      </div>
-      <small>미러링 앱을 캡처하려면 “화면 공유 시작”을 누르고 해당 창을 선택하세요(CORS 문제 없음).</small>
-    </div>
-  </div>
-</section>
-
-<section class="card">
-  <h3>자동 모드</h3>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-    <label>언어:
-      <select id="ocrLang"><option value="eng" selected>영어</option><option value="kor">한국어</option></select>
-    </label>
-    <label><input id="autoSpeak" type="checkbox" checked> 정답 자동 음성</label>
-    <label><input id="skipBlur" type="checkbox" checked> 흐리면 건너뛰기</label>
-    <label>안정 프레임: <input id="stableNeed" type="number" value="2" min="1" style="width:60px"></label>
-    <button id="btnAutoStart" class="primary">자동 시작(1회 탭 필수)</button>
-    <button id="btnAutoStop" class="ghost">중지</button>
-  </div>
-</section>
-
-<section class="card">
-  <div class="row">
-    <div style="flex:1;min-width:280px">
-      <h3>최근 OCR</h3>
-      <pre id="ocrOut" style="min-height:110px"></pre>
-    </div>
-    <div style="flex:1;min-width:280px">
-      <h3>정답</h3>
-      <pre id="answerOut" style="min-height:110px"></pre>
-    </div>
-  </div>
-</section>
-
 <script>
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const ocrOut = document.getElementById('ocrOut');
-const ansOut = document.getElementById('answerOut');
+// ===== 강화된 정규화(보기 추출 보강) =====
+function normalizeOCR(raw) {
+  if (!raw) return "";
+  let t = raw;
 
-let mode = "cam";     // cam | screen | snap
-let snapUrl = "";     // snapshot url
-let pollMs = 2000;
+  // 흔한 잘못 인식들을 숫자 보기로 강제 매핑
+  // ①/⓵/❶/➀/➊ -> 1), ② -> 2) ...
+  t = t
+    .replace(/[①⓵❶➀➊]/g, " 1) ")
+    .replace(/[②⓶❷➁➋]/g, " 2) ")
+    .replace(/[③⓷❸➂➌]/g, " 3) ")
+    .replace(/[④⓸❹➃➍]/g, " 4) ")
+    .replace(/[⑤⓹❺➄➎]/g, " 5) ");
 
-document.getElementById('btnCam').onclick = async () => {
-  mode = "cam";
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
-    video.srcObject = s;
-  } catch(e){ alert("카메라 권한/장치 오류: "+e.message); }
-};
+  // "1. " 패턴도 보기로 치환
+  t = t
+    .replace(/\b1\.\s/g, " 1) ")
+    .replace(/\b2\.\s/g, " 2) ")
+    .replace(/\b3\.\s/g, " 3) ")
+    .replace(/\b4\.\s/g, " 4) ")
+    .replace(/\b5\.\s/g, " 5) ");
 
-document.getElementById('btnScreen').onclick = async () => {
-  // 화면(창) 공유: 미러링 앱 창 선택
-  try {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface:"window" }, audio:false });
-    mode = "screen";
-    video.srcObject = s;
-  } catch(e){ alert("화면 공유 취소/오류: "+e.message); }
-};
+  // 기괴한 패턴 보정: @D, ©, ® 같은 것들이 보기 구분자로 나타나는 경우
+  // 줄 시작의 특수문자+단어를 "N) 단어"로 유추
+  t = t.replace(/(?:^|\n)\s*[@©®∘○•◦]\s*([a-zA-Z가-힣][^\n]+)/g, (m, g1) => `\n ?) ${g1}`);
 
-document.getElementById('btnUseSnap').onclick = ()=>{
-  mode="snap";
-  snapUrl = document.getElementById('snapUrl').value.trim();
-  pollMs = Math.max(1000, Number(document.getElementById('pollSec').value||2)*1000);
-};
-document.getElementById('btnUseCam').onclick = ()=>{ mode = (video.srcObject? mode : "cam"); };
+  // 하이픈 줄바꿈, 중복 공백/줄바꿈 정리
+  t = t.replace(/-\n/g, "")
+       .replace(/\n{2,}/g, "\n")
+       .replace(/[ \t]+/g, " ")
+       .trim();
 
-// ----- 프레임 그리기 -----
-function drawFromVideo(){
-  const w=video.videoWidth||640, h=video.videoHeight||480;
-  canvas.width=w; canvas.height=h;
-  ctx.drawImage(video,0,0,w,h);
-}
-async function drawFromSnapshot(){
-  const r = await fetch(snapUrl,{cache:'no-store'});
-  if(!r.ok) throw new Error('Snapshot HTTP '+r.status);
-  const b = await r.blob();
-  const img = await createImageBitmap(b); // CORS 문제 있으면 여기서 실패
-  canvas.width=img.width; canvas.height=img.height;
-  ctx.drawImage(img,0,0);
-}
+  // 보기 라인 모으기
+  const choices = [];
+  // 1)~5) 뽑기
+  for (let k = 1; k <= 5; k++) {
+    const r = new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`);
+    const m = t.match(r);
+    if (m) choices.push(`${k}) ${m[1].trim()}`);
+  }
+  // 1)~5) 제대로 못 뽑았으면 후보 라인 추정(한 줄에 단어 하나/짧은 구)
+  if (choices.length < 2) {
+    const lines = t.split("\n").map(s => s.trim());
+    const cand = lines.filter(s => /^[a-zA-Z가-힣][a-zA-Z가-힣\- ]{0,20}$/.test(s)).slice(-5);
+    if (cand.length >= 2) {
+      // 뒤쪽 5개를 1)~N)로 라벨링
+      const lab = cand.slice(-5).map((v, i) => `${i + 1}) ${v}`);
+      choices.push(...lab);
+    }
+  }
 
-// ----- 품질/안정 판정 -----
-let lastGray=null;
-function toGray(){
-  const id=ctx.getImageData(0,0,canvas.width,canvas.height);
-  const d=id.data;
-  for(let i=0;i<d.length;i+=4){ const y=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; d[i]=d[i+1]=d[i+2]=y; }
-  ctx.putImageData(id,0,0); return id;
-}
-function enhance(id){
-  const d=id.data; for(let i=0;i<d.length;i+=4){ let y=d[i]*1.2+10; y=Math.max(0,Math.min(255,y)); d[i]=d[i+1]=d[i+2]=y; }
-  ctx.putImageData(id,0,0);
-}
-function isSharp(th=80){
-  const w=canvas.width,h=canvas.height,id=ctx.getImageData(0,0,w,h),d=id.data;
-  const k=[-1,-1,-1,-1,8,-1,-1,-1,-1]; let sum=0,sum2=0,n=0;
-  for(let y=1;y<h-1;y++){ for(let x=1;x<w-1;x++){ const i=(y*w+x)*4;
-    let s=0;
-    s+=k[0]*d[i-4-w*4]; s+=k[1]*d[i-w*4]; s+=k[2]*d[i+4-w*4];
-    s+=k[3]*d[i-4];     s+=k[4]*d[i];     s+=k[5]*d[i+4];
-    s+=k[6]*d[i-4+w*4]; s+=k[7]*d[i+w*4]; s+=k[8]*d[i+4+w*4];
-    sum+=s; sum2+=s*s; n++;
-  }}
-  const mean=sum/n, varc=(sum2/n-mean*mean);
-  return varc>th;
-}
-function motionAvg(gray){
-  if(!lastGray){ lastGray=gray; return 9999; }
-  const a=gray.data,b=lastGray.data; let acc=0,c=0;
-  for(let i=0;i<a.length;i+=4){ acc+=Math.abs(a[i]-b[i]); c++; }
-  lastGray=gray; return acc/c;
-}
-
-// ----- 텍스트 정규화/힌트 -----
-function normalizeOCR(raw){
-  if(!raw) return "";
-  let t = raw
-    .replace(/[①➀❶⓵]/g," 1) ").replace(/[②➁❷⓶]/g," 2) ")
-    .replace(/[③➂❸⓷]/g," 3) ").replace(/[④➃❹⓸]/g," 4) ")
-    .replace(/[⑤➄❺⓹]/g," 5) ")
-    .replace(/\b1\.\s/g," 1) ").replace(/\b2\.\s/g," 2) ").replace(/\b3\.\s/g," 3) ").replace(/\b4\.\s/g," 4) ").replace(/\b5\.\s/g," 5) ")
-    .replace(/-\n/g,"").replace(/\n{2,}/g,"\n").replace(/[ \t]+/g," ").trim();
-  const choices=[];
-  for(let k=1;k<=5;k++){ const m=t.match(new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`)); if(m) choices.push(`${k}) ${m[1].trim()}`); }
-  if(choices.length>=2){ const body=t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g,"").trim(); t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`; }
+  if (choices.length >= 2) {
+    const body = t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g, "").trim();
+    t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`;
+  }
   return t;
 }
-function buildUnderlineHint(text){
-  const has=/underlin|밑줄|빈칸|blank/gi.test(text);
-  if(!has) return "";
-  const blanks=text.match(/_{2,}|<u>.*?<\/u>|\(\s*\)|\[\s*\]/gi);
-  if(blanks&&blanks.length) return "Underlined/blank token is near the blank region.";
-  const words=text.toLowerCase().replace(/[^a-z가-힣\s]/g," ").split(/\s+/).filter(w=>w.length>=4);
-  const freq={}; for(const w of words) freq[w]=(freq[w]||0)+1;
-  const top=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,3).map(v=>v[0]).join(", ");
-  return top?`Candidates near underline: ${top}`:"";
-}
-function sig(t){ t=(t||"").toLowerCase().replace(/\s+/g," ").trim(); return t.slice(0,120)+"::"+t.length; }
-
-// ----- OCR / SOLVE / TTS -----
-let lastSig="", stableCount=0;
-async function ocrNow(lang){
-  const { createWorker } = Tesseract;
-  const w = await createWorker(lang);
-  const r = await w.recognize(canvas.toDataURL('image/png'));
-  await w.terminate();
-  return (r?.data?.text||"").trim();
-}
-async function solveNow(text){
-  const r = await fetch("/.netlify/functions/solve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:text})});
-  const j = await r.json(); if(!r.ok) throw new Error(j?.error||r.statusText);
-  return (j.answer||"").trim();
-}
-function speak(t){ try{ const u=new SpeechSynthesisUtterance(t); u.lang='ko-KR'; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);}catch{} }
-
-// ----- 루프 -----
-let loop=null;
-async function tick(){
-  try{
-    if(mode==="snap"){ await drawFromSnapshot(); }
-    else { if(!video.srcObject) return; drawFromVideo(); }
-
-    const g = toGray(); enhance(g);
-
-    const sharpOK = document.getElementById('skipBlur').checked ? isSharp(80) : true;
-    const diff = motionAvg(g);
-    const need = Math.max(1, Number(document.getElementById('stableNeed').value||2));
-    if (sharpOK && diff<2.0) stableCount++; else { stableCount=0; return; }
-    if (stableCount<need) return;
-
-    const lang=document.getElementById('ocrLang').value;
-    ocrOut.textContent="OCR...";
-    let text = await ocrNow(lang);
-    text = normalizeOCR(text);
-    const hint = buildUnderlineHint(text);
-    if(hint) text += `\n\n[HINT] ${hint}`;
-    ocrOut.textContent = text || "[인식 실패]";
-
-    const s = sig(text); if(!text || s===lastSig) return; lastSig=s;
-
-    ansOut.textContent="풀이...";
-    const ans = await solveNow(text);
-    ansOut.textContent=ans;
-    if(document.getElementById('autoSpeak').checked && ans) speak(ans);
-
-    stableCount=0;
-  }catch(e){
-    ocrOut.textContent="오류: "+e.message;
-  }
-}
-
-document.getElementById('btnAutoStart').onclick = async ()=>{
-  if((mode==="cam"||mode==="screen") && !video.srcObject){
-    try{ const s = mode==="cam"
-      ? await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false})
-      : await navigator.mediaDevices.getDisplayMedia({video:{displaySurface:"window"},audio:false});
-      video.srcObject=s;
-    }catch(e){ alert("권한 오류: "+e.message); return; }
-  }
-  if(loop) clearInterval(loop);
-  loop = setInterval(tick, (mode==="snap")?pollMs:1000);
-};
-document.getElementById('btnAutoStop').onclick = ()=>{ if(loop) clearInterval(loop); loop=null; window.speechSynthesis.cancel(); };
 </script>
-</body>
-</html>
