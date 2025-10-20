@@ -1,79 +1,74 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>자동 문제 풀이 (완전 자동)</title>
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
-    .card{border:1px solid #eaeaea;border-radius:12px;padding:12px;margin:10px 0}
-    button{padding:10px 14px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
-    .primary{background:#111;color:#fff}
-    .ghost{background:#f2f2f2}
-    pre{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
-    label{user-select:none}
-    input[type="text"],input[type="number"]{border:1px solid #ddd;border-radius:10px;padding:8px}
-  </style>
-  <!-- Tesseract.js -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>자동 문제 풀이 (카메라/스냅샷/화면공유)</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
+  .card{border:1px solid #eaeaea;border-radius:12px;padding:12px;margin:10px 0}
+  button{padding:10px 14px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
+  .primary{background:#111;color:#fff}.ghost{background:#f2f2f2}
+  pre{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+  label{user-select:none}
+  input[type="text"],input[type="number"]{border:1px solid #ddd;border-radius:10px;padding:8px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
-  <h1>카메라 → OCR → 풀이 → 음성 (완전 자동)</h1>
+<h1>카메라 → OCR → 풀이 → 음성 (완전 자동)</h1>
 
-  <section class="card">
-    <h3>입력 장치</h3>
-    <div class="row">
-      <div>
-        <video id="video" autoplay playsinline muted></video>
-        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-          <button id="btnStartCam" class="primary">아이폰 카메라 허용</button>
-        </div>
-      </div>
-      <div>
-        <canvas id="canvas" width="640" height="480"></canvas>
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-          <input id="snapUrl" placeholder="(선택) 스냅샷 URL: http://.../snapshot.jpg" style="flex:1;min-width:260px">
-          <label>주기(초): <input id="pollSec" type="number" min="1" value="2" style="width:70px"></label>
-          <button id="btnUseSnap" class="ghost">스냅샷 사용</button>
-          <button id="btnUseCam" class="ghost">카메라 사용</button>
-        </div>
+<section class="card">
+  <h3>입력 소스</h3>
+  <div class="row">
+    <div>
+      <video id="video" autoplay playsinline muted></video>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnCam" class="ghost">아이폰 카메라 사용</button>
+        <button id="btnScreen" class="ghost">화면 공유 시작(미러링 창 선택)</button>
       </div>
     </div>
-    <small>스냅샷 URL을 쓰면 외부 전용 카메라(또는 노트북 브리지)에서 프레임을 가져옵니다.</small>
-  </section>
-
-  <section class="card">
-    <h3>자동 모드</h3>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <label>언어: 
-        <select id="ocrLang">
-          <option value="eng" selected>영어</option>
-          <option value="kor">한국어</option>
-        </select>
-      </label>
-      <label><input id="autoSpeak" type="checkbox" checked> 정답 자동 음성</label>
-      <label><input id="skipBlur" type="checkbox" checked> 흐리면 건너뛰기</label>
-      <label>안정 프레임: <input id="stableNeed" type="number" value="2" min="1" style="width:60px"></label>
-      <button id="btnAutoStart" class="primary">자동 시작(1회 탭 필수)</button>
-      <button id="btnAutoStop" class="ghost">중지</button>
-    </div>
-    <small>브라우저 정책상 음성/TTS를 위해 최소 1회 버튼 탭이 필요합니다. 그 다음은 전부 자동.</small>
-  </section>
-
-  <section class="card">
-    <div class="row">
-      <div style="flex:1;min-width:280px">
-        <h3>최근 OCR</h3>
-        <pre id="ocrOut" style="min-height:110px"></pre>
+    <div>
+      <canvas id="canvas" width="640" height="480"></canvas>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input id="snapUrl" placeholder="(선택) 스냅샷 URL: http://.../snapshot.jpg" style="flex:1;min-width:260px">
+        <label>주기(초): <input id="pollSec" type="number" min="1" value="2" style="width:70px"></label>
+        <button id="btnUseSnap" class="ghost">스냅샷 사용</button>
+        <button id="btnUseCam" class="ghost">카메라/화면 사용</button>
       </div>
-      <div style="flex:1;min-width:280px">
-        <h3>정답</h3>
-        <pre id="answerOut" style="min-height:110px"></pre>
-      </div>
+      <small>미러링 앱을 캡처하려면 “화면 공유 시작”을 누르고 해당 창을 선택하세요(CORS 문제 없음).</small>
     </div>
-  </section>
+  </div>
+</section>
+
+<section class="card">
+  <h3>자동 모드</h3>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <label>언어:
+      <select id="ocrLang"><option value="eng" selected>영어</option><option value="kor">한국어</option></select>
+    </label>
+    <label><input id="autoSpeak" type="checkbox" checked> 정답 자동 음성</label>
+    <label><input id="skipBlur" type="checkbox" checked> 흐리면 건너뛰기</label>
+    <label>안정 프레임: <input id="stableNeed" type="number" value="2" min="1" style="width:60px"></label>
+    <button id="btnAutoStart" class="primary">자동 시작(1회 탭 필수)</button>
+    <button id="btnAutoStop" class="ghost">중지</button>
+  </div>
+</section>
+
+<section class="card">
+  <div class="row">
+    <div style="flex:1;min-width:280px">
+      <h3>최근 OCR</h3>
+      <pre id="ocrOut" style="min-height:110px"></pre>
+    </div>
+    <div style="flex:1;min-width:280px">
+      <h3>정답</h3>
+      <pre id="answerOut" style="min-height:110px"></pre>
+    </div>
+  </div>
+</section>
 
 <script>
 const video = document.getElementById('video');
@@ -82,21 +77,37 @@ const ctx = canvas.getContext('2d');
 const ocrOut = document.getElementById('ocrOut');
 const ansOut = document.getElementById('answerOut');
 
-let useSnapshot = false;
-let snapUrl = "";
+let mode = "cam";     // cam | screen | snap
+let snapUrl = "";     // snapshot url
 let pollMs = 2000;
 
-document.getElementById('btnStartCam').onclick = async () => {
-  try{
+document.getElementById('btnCam').onclick = async () => {
+  mode = "cam";
+  try {
     const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
     video.srcObject = s;
-  }catch(e){ alert('카메라 권한/장치 오류: '+e.message); }
+  } catch(e){ alert("카메라 권한/장치 오류: "+e.message); }
 };
-document.getElementById('btnUseSnap').onclick = ()=>{ useSnapshot=true; snapUrl=document.getElementById('snapUrl').value.trim(); pollMs=Math.max(1000, Number(document.getElementById('pollSec').value||2)*1000); };
-document.getElementById('btnUseCam').onclick = ()=>{ useSnapshot=false; };
 
+document.getElementById('btnScreen').onclick = async () => {
+  // 화면(창) 공유: 미러링 앱 창 선택
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface:"window" }, audio:false });
+    mode = "screen";
+    video.srcObject = s;
+  } catch(e){ alert("화면 공유 취소/오류: "+e.message); }
+};
+
+document.getElementById('btnUseSnap').onclick = ()=>{
+  mode="snap";
+  snapUrl = document.getElementById('snapUrl').value.trim();
+  pollMs = Math.max(1000, Number(document.getElementById('pollSec').value||2)*1000);
+};
+document.getElementById('btnUseCam').onclick = ()=>{ mode = (video.srcObject? mode : "cam"); };
+
+// ----- 프레임 그리기 -----
 function drawFromVideo(){
-  const w = video.videoWidth || 640, h = video.videoHeight || 480;
+  const w=video.videoWidth||640, h=video.videoHeight||480;
   canvas.width=w; canvas.height=h;
   ctx.drawImage(video,0,0,w,h);
 }
@@ -104,178 +115,133 @@ async function drawFromSnapshot(){
   const r = await fetch(snapUrl,{cache:'no-store'});
   if(!r.ok) throw new Error('Snapshot HTTP '+r.status);
   const b = await r.blob();
-  const img = await createImageBitmap(b);
+  const img = await createImageBitmap(b); // CORS 문제 있으면 여기서 실패
   canvas.width=img.width; canvas.height=img.height;
   ctx.drawImage(img,0,0);
 }
 
-// --------- 품질/안정 판정 ----------
-let lastFrameGray = null;
+// ----- 품질/안정 판정 -----
+let lastGray=null;
 function toGray(){
-  const id = ctx.getImageData(0,0,canvas.width,canvas.height);
-  const d = id.data;
-  for(let i=0;i<d.length;i+=4){
-    const y = 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-    d[i]=d[i+1]=d[i+2]=y;
-  }
-  ctx.putImageData(id,0,0);
-  return id;
-}
-function enhanceContrast(id){
+  const id=ctx.getImageData(0,0,canvas.width,canvas.height);
   const d=id.data;
-  for(let i=0;i<d.length;i+=4){
-    let y=d[i]*1.2+10; y=Math.max(0,Math.min(255,y));
-    d[i]=d[i+1]=d[i+2]=y;
-  }
+  for(let i=0;i<d.length;i+=4){ const y=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; d[i]=d[i+1]=d[i+2]=y; }
+  ctx.putImageData(id,0,0); return id;
+}
+function enhance(id){
+  const d=id.data; for(let i=0;i<d.length;i+=4){ let y=d[i]*1.2+10; y=Math.max(0,Math.min(255,y)); d[i]=d[i+1]=d[i+2]=y; }
   ctx.putImageData(id,0,0);
 }
-// 선명도: 라플라시안 분산
 function isSharp(th=80){
-  const w=canvas.width,h=canvas.height, id=ctx.getImageData(0,0,w,h), d=id.data;
-  const k=[-1,-1,-1,-1,8,-1,-1,-1,-1]; let sum=0, sum2=0, n=0;
-  for(let y=1;y<h-1;y++){
-    for(let x=1;x<w-1;x++){
-      const i=(y*w+x)*4;
-      let s=0;
-      s+=k[0]*d[i-4-w*4]; s+=k[1]*d[i-w*4]; s+=k[2]*d[i+4-w*4];
-      s+=k[3]*d[i-4];     s+=k[4]*d[i];     s+=k[5]*d[i+4];
-      s+=k[6]*d[i-4+w*4]; s+=k[7]*d[i+w*4]; s+=k[8]*d[i+4+w*4];
-      sum+=s; sum2+=s*s; n++;
-    }
-  }
-  const mean=sum/n, variance=(sum2/n - mean*mean);
-  return variance>th;
+  const w=canvas.width,h=canvas.height,id=ctx.getImageData(0,0,w,h),d=id.data;
+  const k=[-1,-1,-1,-1,8,-1,-1,-1,-1]; let sum=0,sum2=0,n=0;
+  for(let y=1;y<h-1;y++){ for(let x=1;x<w-1;x++){ const i=(y*w+x)*4;
+    let s=0;
+    s+=k[0]*d[i-4-w*4]; s+=k[1]*d[i-w*4]; s+=k[2]*d[i+4-w*4];
+    s+=k[3]*d[i-4];     s+=k[4]*d[i];     s+=k[5]*d[i+4];
+    s+=k[6]*d[i-4+w*4]; s+=k[7]*d[i+w*4]; s+=k[8]*d[i+4+w*4];
+    sum+=s; sum2+=s*s; n++;
+  }}
+  const mean=sum/n, varc=(sum2/n-mean*mean);
+  return varc>th;
 }
-// 모션: 연속 프레임 차이 평균
-function frameDiffAvg(grayId){
-  if(!lastFrameGray){ lastFrameGray = grayId; return 9999; } // 첫 프레임은 크게
-  const a=grayId.data, b=lastFrameGray.data; let acc=0, c=0;
+function motionAvg(gray){
+  if(!lastGray){ lastGray=gray; return 9999; }
+  const a=gray.data,b=lastGray.data; let acc=0,c=0;
   for(let i=0;i<a.length;i+=4){ acc+=Math.abs(a[i]-b[i]); c++; }
-  lastFrameGray = grayId;
-  return acc/c;
+  lastGray=gray; return acc/c;
 }
 
-// --------- 텍스트 정규화 / 밑줄 힌트 ----------
+// ----- 텍스트 정규화/힌트 -----
 function normalizeOCR(raw){
   if(!raw) return "";
   let t = raw
     .replace(/[①➀❶⓵]/g," 1) ").replace(/[②➁❷⓶]/g," 2) ")
     .replace(/[③➂❸⓷]/g," 3) ").replace(/[④➃❹⓸]/g," 4) ")
     .replace(/[⑤➄❺⓹]/g," 5) ")
-    .replace(/\b1\.\s/g," 1) ").replace(/\b2\.\s/g," 2) ")
-    .replace(/\b3\.\s/g," 3) ").replace(/\b4\.\s/g," 4) ").replace(/\b5\.\s/g," 5) ")
+    .replace(/\b1\.\s/g," 1) ").replace(/\b2\.\s/g," 2) ").replace(/\b3\.\s/g," 3) ").replace(/\b4\.\s/g," 4) ").replace(/\b5\.\s/g," 5) ")
     .replace(/-\n/g,"").replace(/\n{2,}/g,"\n").replace(/[ \t]+/g," ").trim();
-
   const choices=[];
-  for(let k=1;k<=5;k++){
-    const m = t.match(new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`));
-    if(m) choices.push(`${k}) ${m[1].trim()}`);
-  }
-  if(choices.length>=2){
-    const body = t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g,"").trim();
-    t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`;
-  }
+  for(let k=1;k<=5;k++){ const m=t.match(new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`)); if(m) choices.push(`${k}) ${m[1].trim()}`); }
+  if(choices.length>=2){ const body=t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g,"").trim(); t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`; }
   return t;
 }
 function buildUnderlineHint(text){
-  const hasUnderline = /underlin|밑줄|빈칸|blank/gi.test(text);
-  if(!hasUnderline) return "";
-  const blanks = text.match(/_{2,}|<u>.*?<\/u>|\(\s*\)|\[\s*\]/gi);
-  if(blanks && blanks.length) return "Underlined/blank token is near the blank region.";
-  const words = text.toLowerCase().replace(/[^a-z가-힣\s]/g," ").split(/\s+/).filter(w=>w.length>=4);
+  const has=/underlin|밑줄|빈칸|blank/gi.test(text);
+  if(!has) return "";
+  const blanks=text.match(/_{2,}|<u>.*?<\/u>|\(\s*\)|\[\s*\]/gi);
+  if(blanks&&blanks.length) return "Underlined/blank token is near the blank region.";
+  const words=text.toLowerCase().replace(/[^a-z가-힣\s]/g," ").split(/\s+/).filter(w=>w.length>=4);
   const freq={}; for(const w of words) freq[w]=(freq[w]||0)+1;
-  const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,3).map(v=>v[0]).join(", ");
+  const top=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,3).map(v=>v[0]).join(", ");
   return top?`Candidates near underline: ${top}`:"";
 }
-
-// --------- OCR / Solve / TTS ----------
 function sig(t){ t=(t||"").toLowerCase().replace(/\s+/g," ").trim(); return t.slice(0,120)+"::"+t.length; }
-let lastSig=""; let stableCount=0;
+
+// ----- OCR / SOLVE / TTS -----
+let lastSig="", stableCount=0;
 async function ocrNow(lang){
   const { createWorker } = Tesseract;
-  const worker = await createWorker(lang);
-  const res = await worker.recognize(canvas.toDataURL('image/png'));
-  await worker.terminate();
-  return (res?.data?.text||"").trim();
+  const w = await createWorker(lang);
+  const r = await w.recognize(canvas.toDataURL('image/png'));
+  await w.terminate();
+  return (r?.data?.text||"").trim();
 }
 async function solveNow(text){
-  const url = "/.netlify/functions/solve";
-  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ question:text })});
+  const r = await fetch("/.netlify/functions/solve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:text})});
   const j = await r.json(); if(!r.ok) throw new Error(j?.error||r.statusText);
   return (j.answer||"").trim();
 }
-function speak(text){
-  try{ const u=new SpeechSynthesisUtterance(text); u.lang='ko-KR'; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);}catch{}
-}
+function speak(t){ try{ const u=new SpeechSynthesisUtterance(t); u.lang='ko-KR'; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);}catch{} }
 
-// --------- 자동 루프 ----------
-let loopTimer=null;
+// ----- 루프 -----
+let loop=null;
 async function tick(){
   try{
-    if(useSnapshot){
-      await drawFromSnapshot();
-    }else{
-      if(!video.srcObject) return; // 카메라 권한 필요
-      drawFromVideo();
-    }
+    if(mode==="snap"){ await drawFromSnapshot(); }
+    else { if(!video.srcObject) return; drawFromVideo(); }
 
-    // 전처리
-    const grayId = toGray();
-    enhanceContrast(grayId);
+    const g = toGray(); enhance(g);
 
-    // 안정/선명 판정
-    const diff = frameDiffAvg(grayId);                 // 작을수록 안정
-    const sharpOk = document.getElementById('skipBlur').checked ? isSharp(80) : true;
-    const needStable = Math.max(1, Number(document.getElementById('stableNeed').value||2));
-    if (sharpOk && diff < 2.0) { // 모션이 충분히 작음
-      stableCount++;
-    } else {
-      stableCount=0; // 흔들리면 다시 카운트
-      return;
-    }
-    if (stableCount < needStable) return;
+    const sharpOK = document.getElementById('skipBlur').checked ? isSharp(80) : true;
+    const diff = motionAvg(g);
+    const need = Math.max(1, Number(document.getElementById('stableNeed').value||2));
+    if (sharpOK && diff<2.0) stableCount++; else { stableCount=0; return; }
+    if (stableCount<need) return;
 
-    // OCR → 정리
-    const lang = document.getElementById('ocrLang').value;
-    ocrOut.textContent = 'OCR...';
+    const lang=document.getElementById('ocrLang').value;
+    ocrOut.textContent="OCR...";
     let text = await ocrNow(lang);
     text = normalizeOCR(text);
     const hint = buildUnderlineHint(text);
     if(hint) text += `\n\n[HINT] ${hint}`;
-    ocrOut.textContent = text || '[인식 실패]';
+    ocrOut.textContent = text || "[인식 실패]";
 
-    // 동일문장 재요청 방지
-    const s = sig(text);
-    if(!text || s===lastSig) return;
-    lastSig = s;
+    const s = sig(text); if(!text || s===lastSig) return; lastSig=s;
 
-    // 풀이 → 출력 → 음성
-    ansOut.textContent = '풀이...';
+    ansOut.textContent="풀이...";
     const ans = await solveNow(text);
-    ansOut.textContent = ans;
+    ansOut.textContent=ans;
     if(document.getElementById('autoSpeak').checked && ans) speak(ans);
 
-    // 처리 후 다시 안정 판정부터
-    stableCount = 0;
-
+    stableCount=0;
   }catch(e){
-    ocrOut.textContent = '오류: '+e.message;
+    ocrOut.textContent="오류: "+e.message;
   }
 }
 
 document.getElementById('btnAutoStart').onclick = async ()=>{
-  // 음성 권한용 1회 탭
-  if(!useSnapshot && !video.srcObject){
-    try{
-      const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+  if((mode==="cam"||mode==="screen") && !video.srcObject){
+    try{ const s = mode==="cam"
+      ? await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false})
+      : await navigator.mediaDevices.getDisplayMedia({video:{displaySurface:"window"},audio:false});
       video.srcObject=s;
-    }catch(e){ alert('카메라 권한 오류: '+e.message); return; }
+    }catch(e){ alert("권한 오류: "+e.message); return; }
   }
-  if(loopTimer) clearInterval(loopTimer);
-  const ms = useSnapshot ? pollMs : 1000; // 스냅샷은 지정 주기, 카메라는 1초
-  loopTimer = setInterval(tick, ms);
+  if(loop) clearInterval(loop);
+  loop = setInterval(tick, (mode==="snap")?pollMs:1000);
 };
-document.getElementById('btnAutoStop').onclick = ()=>{ if(loopTimer) clearInterval(loopTimer); loopTimer=null; window.speechSynthesis.cancel(); };
+document.getElementById('btnAutoStop').onclick = ()=>{ if(loop) clearInterval(loop); loop=null; window.speechSynthesis.cancel(); };
 </script>
 </body>
 </html>
