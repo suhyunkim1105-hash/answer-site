@@ -3,411 +3,279 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>answer-site v3 — Screen OCR → Solver → TTS</title>
+  <title>자동 문제 풀이 (완전 자동)</title>
   <style>
-    :root { --bg:#0b0f17; --card:#111827; --ink:#e5e7eb; --muted:#94a3b8; --accent:#22d3ee; }
-    *{box-sizing:border-box}
-    body{margin:0;font-family:system-ui,Segoe UI,Apple SD Gothic Neo,sans-serif;background:var(--bg);color:var(--ink)}
-    header{padding:16px 20px;border-bottom:1px solid #1f2937;display:flex;gap:12px;align-items:center}
-    h1{margin:0;font-size:18px;font-weight:700}
-    main{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;padding:16px}
-    section{background:var(--card);border:1px solid #1f2937;border-radius:16px;padding:14px}
-    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-    button,select,input,textarea{
-      background:#0f172a;border:1px solid #374151;color:var(--ink);
-      border-radius:12px;padding:10px 12px;font-size:14px
-    }
-    button.accent{border-color:#164e63;background:#042f2e}
-    button:disabled{opacity:.5}
-    video,canvas{width:100%;max-height:48vh;background:#000;border-radius:12px}
-    textarea{width:100%;min-height:120px;resize:vertical}
-    .pill{font-size:12px;color:var(--muted)}
-    label{font-size:12px;color:var(--muted)}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px}
-    summary{cursor:pointer}
-    .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#0f172a;border:1px solid #334155;font-size:12px;color:#cbd5e1}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;max-width:980px;margin:20px auto;padding:0 12px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
+    .card{border:1px solid #eaeaea;border-radius:12px;padding:12px;margin:10px 0}
+    button{padding:10px 14px;border:0;border-radius:12px;font-weight:700;cursor:pointer}
+    .primary{background:#111;color:#fff}
+    .ghost{background:#f2f2f2}
+    pre{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+    label{user-select:none}
+    input[type="text"],input[type="number"]{border:1px solid #ddd;border-radius:10px;padding:8px}
   </style>
-</head>
-<body>
-  <header>
-    <h1>answer-site v3</h1>
-    <span class="pill">캡처 → OCR(한·영) → 문항 분리 → 지문 결합 → 풀이 → “정답만” 음성</span>
-  </header>
-
-  <main>
-    <section id="cap">
-      <div class="row" style="justify-content:space-between">
-        <div class="row">
-          <button id="btnStart" class="accent">① 화면 선택·캡처 시작</button>
-          <button id="btnStop">중지</button>
-          <label><input type="checkbox" id="autoOCR" checked> 자동 OCR (2초)</label>
-          <label><input type="checkbox" id="autoSolve" checked> 자동 풀이 & 음성</label>
-        </div>
-        <div class="row">
-          <span id="passageBadge" class="badge">지문버퍼: OFF (0 lines)</span>
-          <label><input type="checkbox" id="mute"> 음소거</label>
-          <button id="btnTest">🔊 이어피스 테스트</button>
-        </div>
-      </div>
-
-      <p class="pill">전용 카메라 “앱 창(또는 전체화면)”을 선택해 그 화면의 텍스트만 인식합니다.</p>
-
-      <video id="vid" autoplay playsinline muted></video>
-      <canvas id="cvs" hidden></canvas>
-
-      <!-- 전처리·분리 컨트롤 -->
-      <div class="row" style="margin:8px 0 0">
-        <label>선명도 임계값
-          <input id="sharp" type="range" min="20" max="300" value="120" step="5" style="width:180px">
-        </label>
-        <label><input id="bilingual" type="checkbox" checked> 한영 동시 OCR(eng+kor)</label>
-        <label><input id="preproc" type="checkbox" checked> 고대비 전처리</label>
-        <label>이진화 임계값
-          <input id="thresh" type="range" min="100" max="220" value="180" step="5" style="width:160px">
-        </label>
-      </div>
-
-      <div class="grid" style="margin-top:8px">
-        <div>
-          <h3 style="margin:10px 0 6px">최근 OCR 결과</h3>
-          <textarea id="ocrOut" class="mono" placeholder="인식된 원문 텍스트"></textarea>
-          <div class="row">
-            <button id="btnOnce">지금 OCR 1회</button>
-            <button id="btnClear">지움</button>
-          </div>
-        </div>
-        <div>
-          <h3 style="margin:10px 0 6px">정답</h3>
-          <textarea id="ansOut" class="mono" placeholder="정답만 표시·음성 출력"></textarea>
-          <div class="row">
-            <button id="btnSolve">문제 풀기</button>
-            <button id="btnSpeak">정답 다시 읽기</button>
-          </div>
-          <div class="row" style="margin-top:8px">
-            <label>감지된 문항
-              <select id="qList" style="min-width:260px"></select>
-            </label>
-            <button id="btnSolveSelected">선택 문항 풀기</button>
-          </div>
-        </div>
-      </div>
-
-      <details style="margin-top:10px">
-        <summary>로그</summary>
-        <pre id="log" class="mono"></pre>
-      </details>
-    </section>
-
-    <section>
-      <h3 style="margin-top:0">세팅 요약</h3>
-      <ol>
-        <li>전용 카메라 앱에서 시험지를 크게·선명하게 표시(줌/초점 고정, 밝기/대비↑).</li>
-        <li>이 페이지에서 <b>① 화면 선택·캡처 시작</b> → 해당 앱 창 선택.</li>
-        <li>자동 OCR/풀이가 켜져 있으면 2초마다 인식→문항 분리→지문 결합→정답 음성.</li>
-        <li>이어피스를 기기 오디오에 연결 후 <b>🔊 이어피스 테스트</b>로 볼륨 확인.</li>
-      </ol>
-      <p class="pill">※ 지문이 앞/뒷장으로 나뉘어도 지문버퍼에 누적 후 문항과 자동 결합함.</p>
-    </section>
-  </main>
-
   <!-- Tesseract.js -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const log = (m) => { const el=$('log'); el.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; el.scrollTop = el.scrollHeight; };
+</head>
+<body>
+  <h1>카메라 → OCR → 풀이 → 음성 (완전 자동)</h1>
 
-    // ======= 전역 상태 =======
-    let stream = null, ocrTimer = null;
-    let lastHash = null, lastAnswer = null;
+  <section class="card">
+    <h3>입력 장치</h3>
+    <div class="row">
+      <div>
+        <video id="video" autoplay playsinline muted></video>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button id="btnStartCam" class="primary">아이폰 카메라 허용</button>
+        </div>
+      </div>
+      <div>
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <input id="snapUrl" placeholder="(선택) 스냅샷 URL: http://.../snapshot.jpg" style="flex:1;min-width:260px">
+          <label>주기(초): <input id="pollSec" type="number" min="1" value="2" style="width:70px"></label>
+          <button id="btnUseSnap" class="ghost">스냅샷 사용</button>
+          <button id="btnUseCam" class="ghost">카메라 사용</button>
+        </div>
+      </div>
+    </div>
+    <small>스냅샷 URL을 쓰면 외부 전용 카메라(또는 노트북 브리지)에서 프레임을 가져옵니다.</small>
+  </section>
 
-    // 지문 버퍼(멀티 프레임 누적: 앞/뒷장에 걸친 긴 지문)
-    let passage = { active:false, lines:[], lastSeenTs:0 };
+  <section class="card">
+    <h3>자동 모드</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <label>언어: 
+        <select id="ocrLang">
+          <option value="eng" selected>영어</option>
+          <option value="kor">한국어</option>
+        </select>
+      </label>
+      <label><input id="autoSpeak" type="checkbox" checked> 정답 자동 음성</label>
+      <label><input id="skipBlur" type="checkbox" checked> 흐리면 건너뛰기</label>
+      <label>안정 프레임: <input id="stableNeed" type="number" value="2" min="1" style="width:60px"></label>
+      <button id="btnAutoStart" class="primary">자동 시작(1회 탭 필수)</button>
+      <button id="btnAutoStop" class="ghost">중지</button>
+    </div>
+    <small>브라우저 정책상 음성/TTS를 위해 최소 1회 버튼 탭이 필요합니다. 그 다음은 전부 자동.</small>
+  </section>
 
-    // 문항 세트(연속 번호 2~3개 이상) 감지
-    let qSet = { active:false, start:null, end:null, items:[] };
+  <section class="card">
+    <div class="row">
+      <div style="flex:1;min-width:280px">
+        <h3>최근 OCR</h3>
+        <pre id="ocrOut" style="min-height:110px"></pre>
+      </div>
+      <div style="flex:1;min-width:280px">
+        <h3>정답</h3>
+        <pre id="answerOut" style="min-height:110px"></pre>
+      </div>
+    </div>
+  </section>
 
-    // 자동 풀이 큐
-    const solveQueue = [];
-    let solving = false;
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const ocrOut = document.getElementById('ocrOut');
+const ansOut = document.getElementById('answerOut');
 
-    // ======= 캡처 제어 =======
-    async function startCapture(){
-      try{
-        stream = await navigator.mediaDevices.getDisplayMedia({ video:{ frameRate:15 }, audio:false });
-        $('vid').srcObject = stream;
-        if($('autoOCR').checked) startAutoOCR();
-        log('화면 캡처 시작');
-      }catch(e){ log('캡처 거부/오류: '+e.message); }
+let useSnapshot = false;
+let snapUrl = "";
+let pollMs = 2000;
+
+document.getElementById('btnStartCam').onclick = async () => {
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+    video.srcObject = s;
+  }catch(e){ alert('카메라 권한/장치 오류: '+e.message); }
+};
+document.getElementById('btnUseSnap').onclick = ()=>{ useSnapshot=true; snapUrl=document.getElementById('snapUrl').value.trim(); pollMs=Math.max(1000, Number(document.getElementById('pollSec').value||2)*1000); };
+document.getElementById('btnUseCam').onclick = ()=>{ useSnapshot=false; };
+
+function drawFromVideo(){
+  const w = video.videoWidth || 640, h = video.videoHeight || 480;
+  canvas.width=w; canvas.height=h;
+  ctx.drawImage(video,0,0,w,h);
+}
+async function drawFromSnapshot(){
+  const r = await fetch(snapUrl,{cache:'no-store'});
+  if(!r.ok) throw new Error('Snapshot HTTP '+r.status);
+  const b = await r.blob();
+  const img = await createImageBitmap(b);
+  canvas.width=img.width; canvas.height=img.height;
+  ctx.drawImage(img,0,0);
+}
+
+// --------- 품질/안정 판정 ----------
+let lastFrameGray = null;
+function toGray(){
+  const id = ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d = id.data;
+  for(let i=0;i<d.length;i+=4){
+    const y = 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    d[i]=d[i+1]=d[i+2]=y;
+  }
+  ctx.putImageData(id,0,0);
+  return id;
+}
+function enhanceContrast(id){
+  const d=id.data;
+  for(let i=0;i<d.length;i+=4){
+    let y=d[i]*1.2+10; y=Math.max(0,Math.min(255,y));
+    d[i]=d[i+1]=d[i+2]=y;
+  }
+  ctx.putImageData(id,0,0);
+}
+// 선명도: 라플라시안 분산
+function isSharp(th=80){
+  const w=canvas.width,h=canvas.height, id=ctx.getImageData(0,0,w,h), d=id.data;
+  const k=[-1,-1,-1,-1,8,-1,-1,-1,-1]; let sum=0, sum2=0, n=0;
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      const i=(y*w+x)*4;
+      let s=0;
+      s+=k[0]*d[i-4-w*4]; s+=k[1]*d[i-w*4]; s+=k[2]*d[i+4-w*4];
+      s+=k[3]*d[i-4];     s+=k[4]*d[i];     s+=k[5]*d[i+4];
+      s+=k[6]*d[i-4+w*4]; s+=k[7]*d[i+w*4]; s+=k[8]*d[i+4+w*4];
+      sum+=s; sum2+=s*s; n++;
     }
-    function stopCapture(){
-      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
-      stopAutoOCR(); $('vid').srcObject = null; log('캡처 중지');
-    }
-    function startAutoOCR(){ if(ocrTimer) return; ocrTimer = setInterval(runOCR, 2000); log('자동 OCR 시작(2초)'); }
-    function stopAutoOCR(){ if(ocrTimer){ clearInterval(ocrTimer); ocrTimer=null; log('자동 OCR 중지'); } }
+  }
+  const mean=sum/n, variance=(sum2/n - mean*mean);
+  return variance>th;
+}
+// 모션: 연속 프레임 차이 평균
+function frameDiffAvg(grayId){
+  if(!lastFrameGray){ lastFrameGray = grayId; return 9999; } // 첫 프레임은 크게
+  const a=grayId.data, b=lastFrameGray.data; let acc=0, c=0;
+  for(let i=0;i<a.length;i+=4){ acc+=Math.abs(a[i]-b[i]); c++; }
+  lastFrameGray = grayId;
+  return acc/c;
+}
 
-    // ======= OCR 파이프라인 =======
-    async function runOCR(){
-      if(!stream) return;
-      const vid = $('vid'); const cvs = $('cvs');
-      const vw = vid.videoWidth, vh = vid.videoHeight; if(!vw||!vh) return;
+// --------- 텍스트 정규화 / 밑줄 힌트 ----------
+function normalizeOCR(raw){
+  if(!raw) return "";
+  let t = raw
+    .replace(/[①➀❶⓵]/g," 1) ").replace(/[②➁❷⓶]/g," 2) ")
+    .replace(/[③➂❸⓷]/g," 3) ").replace(/[④➃❹⓸]/g," 4) ")
+    .replace(/[⑤➄❺⓹]/g," 5) ")
+    .replace(/\b1\.\s/g," 1) ").replace(/\b2\.\s/g," 2) ")
+    .replace(/\b3\.\s/g," 3) ").replace(/\b4\.\s/g," 4) ").replace(/\b5\.\s/g," 5) ")
+    .replace(/-\n/g,"").replace(/\n{2,}/g,"\n").replace(/[ \t]+/g," ").trim();
 
-      const scale = 0.9;
-      cvs.width = Math.floor(vw*scale); cvs.height = Math.floor(vh*scale);
-      const ctx = cvs.getContext('2d');
-      ctx.drawImage(vid, 0, 0, cvs.width, cvs.height);
+  const choices=[];
+  for(let k=1;k<=5;k++){
+    const m = t.match(new RegExp(`(?:^|\\n)\\s*${k}\\)\\s*([^\\n]+)`));
+    if(m) choices.push(`${k}) ${m[1].trim()}`);
+  }
+  if(choices.length>=2){
+    const body = t.replace(/\n?\s*[1-5]\)\s*[^\n]+/g,"").trim();
+    t = `${body}\n\n[CHOICES] ${choices.join(" | ")}`;
+  }
+  return t;
+}
+function buildUnderlineHint(text){
+  const hasUnderline = /underlin|밑줄|빈칸|blank/gi.test(text);
+  if(!hasUnderline) return "";
+  const blanks = text.match(/_{2,}|<u>.*?<\/u>|\(\s*\)|\[\s*\]/gi);
+  if(blanks && blanks.length) return "Underlined/blank token is near the blank region.";
+  const words = text.toLowerCase().replace(/[^a-z가-힣\s]/g," ").split(/\s+/).filter(w=>w.length>=4);
+  const freq={}; for(const w of words) freq[w]=(freq[w]||0)+1;
+  const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,3).map(v=>v[0]).join(", ");
+  return top?`Candidates near underline: ${top}`:"";
+}
 
-      // 전처리(선택): 고대비 + 이진화
-      if ($('preproc').checked){
-        const img = ctx.getImageData(0,0,cvs.width,cvs.height);
-        const d = img.data; const T = parseInt($('thresh').value||'180',10);
-        for(let i=0;i<d.length;i+=4){
-          let g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-          g = Math.pow(g/255, 0.8)*255; // 약한 감마
-          const b = g > T ? 255 : 0;
-          d[i]=d[i+1]=d[i+2]=b; d[i+3]=255;
-        }
-        ctx.putImageData(img,0,0);
-      }
+// --------- OCR / Solve / TTS ----------
+function sig(t){ t=(t||"").toLowerCase().replace(/\s+/g," ").trim(); return t.slice(0,120)+"::"+t.length; }
+let lastSig=""; let stableCount=0;
+async function ocrNow(lang){
+  const { createWorker } = Tesseract;
+  const worker = await createWorker(lang);
+  const res = await worker.recognize(canvas.toDataURL('image/png'));
+  await worker.terminate();
+  return (res?.data?.text||"").trim();
+}
+async function solveNow(text){
+  const url = "/.netlify/functions/solve";
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ question:text })});
+  const j = await r.json(); if(!r.ok) throw new Error(j?.error||r.statusText);
+  return (j.answer||"").trim();
+}
+function speak(text){
+  try{ const u=new SpeechSynthesisUtterance(text); u.lang='ko-KR'; window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);}catch{}
+}
 
-      // 선명도(라플라시안 분산) → 흐리면 스킵
-      const sharpness = varianceOfLaplacian(cvs);
-      const threshold = parseInt($('sharp').value || '120', 10);
-      if (sharpness < threshold){ log(`흐림 감지(${sharpness.toFixed(0)}) → OCR 스킵`); return; }
-
-      const blob = await new Promise(res=>cvs.toBlob(res,'image/png',0.9));
-      try{
-        const lang = $('bilingual').checked ? 'eng+kor' : 'eng';
-        const { data:{ text } } = await Tesseract.recognize(blob, lang, {
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-×÷=().,%:;<>[]{}\\/'
-        });
-        const cleaned = cleanupText(text);
-        if(!cleaned) return;
-
-        // 지문 후보 흡수 & 만료 관리
-        if(looksLikePassageStart(cleaned)) absorbPassage(cleaned);
-        gcPassage(); updatePassageBadge();
-
-        // 문항 블록 파싱 + 세트 감지
-        const blocks = parseQuestions(cleaned);
-        detectQuestionSet(blocks);
-        updateQuestionList(blocks);
-
-        // 동일 텍스트 해시 → 중복 스킵
-        const h = djb2(cleaned);
-        if (h === lastHash){ log('동일 프레임 텍스트 → 풀이 스킵'); return; }
-        lastHash = h;
-
-        $('ocrOut').value = cleaned;
-        log('OCR OK ('+ cleaned.slice(0,80).replace(/\n/g,' ') + '...)');
-
-        // 자동 풀이: 문항 단위로 큐잉(세트면 각 문항)
-        if($('autoSolve').checked){
-          if(blocks.length){
-            for(const b of blocks){ queueSolveTask(b.text); }
-          }
-        }
-      }catch(e){ log('OCR 오류: '+e.message); }
-    }
-
-    // ======= 텍스트 전처리/유틸 =======
-    function cleanupText(t){
-      return t.replace(/[\u200B-\u200D\uFEFF]/g,'')   // zero-width
-              .replace(/\r/g,'')
-              .replace(/\n{3,}/g,'\n\n')
-              .replace(/[ \t]{2,}/g,' ')
-              .trim();
-    }
-    function djb2(str){ let h=5381; for(let i=0;i<str.length;i++){ h=((h<<5)+h) ^ str.charCodeAt(i); } return h>>>0; }
-    function varianceOfLaplacian(cvs){
-      const ctx = cvs.getContext('2d');
-      const {width:w,height:h} = cvs;
-      const { data } = ctx.getImageData(0,0,w,h);
-      const gray = new Float32Array(w*h);
-      for(let i=0,j=0;i<data.length;i+=4,j++){
-        gray[j] = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
-      }
-      const k = [-1,-1,-1,-1,8,-1,-1,-1,-1];
-      let sum=0, sumSq=0, count=0;
-      for(let y=1;y<h-1;y++){
-        for(let x=1;x<w-1;x++){
-          const idx=y*w+x;
-          const v = k[0]*gray[idx-w-1] + k[1]*gray[idx-w] + k[2]*gray[idx-w+1]
-                  + k[3]*gray[idx-1]   + k[4]*gray[idx]   + k[5]*gray[idx+1]
-                  + k[6]*gray[idx+w-1] + k[7]*gray[idx+w] + k[8]*gray[idx+w+1];
-          sum += v; sumSq += v*v; count++;
-        }
-      }
-      const mean = sum / Math.max(1,count);
-      const varc = (sumSq/Math.max(1,count)) - mean*mean;
-      return Math.max(0,varc);
-    }
-
-    // ======= 지문 누적(멀티 프레임) =======
-    function looksLikePassageStart(t){
-      // '지문/윗글/다음 글' 또는 번호없는 큰 단락
-      return /지문|윗글|다음 글|다음의 글|위의 글/i.test(t) || (t.length>200 && !QPAT.test((t.split('\n')[0]||'')));
-    }
-    function splitLines(t){ return t.split(/\n+/).map(s=>s.trim()).filter(Boolean); }
-    function absorbPassage(text){
-      const lines = splitLines(text);
-      for(const ln of lines){
-        if(QPAT.test(ln)) continue;            // 문항 줄 제외
-        if(ln.length<2) continue;
-        // 간단 스티칭(문장 말미와 다음 문장 머리 유사)
-        if(passage.lines.length){
-          const last = passage.lines[passage.lines.length-1];
-          if(/[가-힣A-Za-z0-9,)]$/.test(last) && /^[a-z가-힣(]/i.test(ln)){
-            if(similar(last.slice(-25), ln.slice(0,25))>0.85){
-              passage.lines[passage.lines.length-1] = last + ' ' + ln;
-              continue;
-            }
-          }
-        }
-        passage.lines.push(ln);
-      }
-      passage.active = true;
-      passage.lastSeenTs = Date.now();
-    }
-    function similar(a,b){
-      const s = new Set(a.split('')); let hit=0;
-      for(const ch of b.split('')) if(s.has(ch)) hit++;
-      return hit/Math.max(1,Math.min(a.length,b.length));
-    }
-    function gcPassage(){
-      if(passage.active && Date.now()-passage.lastSeenTs>30000){
-        passage = { active:false, lines:[], lastSeenTs:0 };
-      }
-    }
-    function updatePassageBadge(){
-      const el = $('passageBadge');
-      el.textContent = `지문버퍼: ${passage.active?'ON':'OFF'} (${passage.lines.length} lines)`;
-    }
-
-    // ======= 문항 파싱 & 세트 =======
-    // 번호 패턴: 1. / (1) / ① / (가) / A. / I. / (IV) ...
-    const QPAT = /^(?:\(?\d{1,3}\)?\.|\(?\d{1,3}\)?|[①-⑳]|[A-H]\.\s|[IVX]+\.\s|\([가-하IVX]+\))\s*/;
-
-    function parseQuestions(text){
-      const lines = splitLines(text);
-      const blocks = [];
-      let cur=null, num=null;
-      for(const ln of lines){
-        if(QPAT.test(ln)){
-          if(cur) blocks.push({ num, text: cur.join('\n') });
-          const m = ln.match(QPAT);
-          num = (m? m[0].replace(/[^0-9A-Za-z가-힣①-⑳IVX]/g,'').slice(0,8):'');
-          cur = [ ln.replace(QPAT,'').trim() ];
-        }else{
-          if(!cur){ cur=[ln]; num=''; } else cur.push(ln);
-        }
-      }
-      if(cur) blocks.push({ num, text: cur.join('\n') });
-      return blocks;
-    }
-    function detectQuestionSet(blocks){
-      const nums = blocks.map(b=>parseInt((b.num||'').replace(/[^0-9]/g,''),10)).filter(n=>!isNaN(n));
-      if(nums.length>=2){
-        nums.sort((a,b)=>a-b);
-        let run=1, best=[nums[0],nums[0]];
-        for(let i=1;i<nums.length;i++){
-          if(nums[i]===nums[i-1]+1){ run++; best[1]=nums[i]; }
-          else { if(run>=2) break; run=1; best=[nums[i],nums[i]]; }
-        }
-        if(run>=2){ qSet = { active:true, start:best[0], end:best[1], items:[] }; return; }
-      }
-      qSet = { active:false, start:null, end:null, items:[] };
+// --------- 자동 루프 ----------
+let loopTimer=null;
+async function tick(){
+  try{
+    if(useSnapshot){
+      await drawFromSnapshot();
+    }else{
+      if(!video.srcObject) return; // 카메라 권한 필요
+      drawFromVideo();
     }
 
-    // ======= UI: 문항 목록 =======
-    function updateQuestionList(blocks){
-      const sel = $('qList');
-      sel.innerHTML = '';
-      if(!blocks.length){
-        const o=document.createElement('option'); o.text='(문항 미감지)';
-        sel.appendChild(o); return;
-      }
-      blocks.forEach((b,i)=>{
-        const o=document.createElement('option');
-        const prev = (b.text||'').slice(0,28).replace(/\s+/g,' ');
-        o.value = i; o.text = `${b.num||i+1}. ${prev}`;
-        sel.appendChild(o);
-      });
-    }
-    function getSelectedQuestionText(){
-      const sel = $('qList');
-      const idx = sel.selectedIndex;
-      if(idx<0) return '';
-      const options = Array.from(sel.options);
-      if(!options.length) return '';
-      // 현재 표시된 OCR 텍스트에서 다시 파싱해 안전 획득
-      const blocks = parseQuestions($('ocrOut').value||'');
-      return blocks[idx]?.text || '';
-    }
+    // 전처리
+    const grayId = toGray();
+    enhanceContrast(grayId);
 
-    // ======= 풀이 큐 & 호출 =======
-    function queueSolveTask(qText){
-      let prompt = qText;
-      const refPassage = passage.lines.join('\n');
-      if( (/윗글|지문|앞의 글|위의 글|다음 글/.test(qText) || qSet.active) && refPassage ){
-        prompt = `지문:\n${refPassage}\n\n문항:\n${qText}`;
-      }
-      solveQueue.push(prompt);
+    // 안정/선명 판정
+    const diff = frameDiffAvg(grayId);                 // 작을수록 안정
+    const sharpOk = document.getElementById('skipBlur').checked ? isSharp(80) : true;
+    const needStable = Math.max(1, Number(document.getElementById('stableNeed').value||2));
+    if (sharpOk && diff < 2.0) { // 모션이 충분히 작음
+      stableCount++;
+    } else {
+      stableCount=0; // 흔들리면 다시 카운트
+      return;
     }
+    if (stableCount < needStable) return;
 
-    async function pumpSolveQueue(){
-      if(solving || !solveQueue.length) return;
-      solving = true;
-      const q = solveQueue.shift();
-      try{
-        const resp = await fetch('/.netlify/functions/solve', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ question: q })
-        });
-        if(!resp.ok) throw new Error('HTTP '+resp.status);
-        const data = await resp.json();
-        const ans = (data.answer||'').trim();
-        if(ans){
-          if(ans !== lastAnswer){
-            $('ansOut').value = ans; log('정답: '+ans); speak(ans); lastAnswer = ans;
-          } else {
-            log('같은 정답 → 재생 생략');
-          }
-        } else { log('정답 없음/빈 응답'); }
-      }catch(e){ log('풀이 실패: '+e.message); }
-      finally { solving=false; if(solveQueue.length) setTimeout(pumpSolveQueue, 150); }
-    }
-    setInterval(pumpSolveQueue, 400);
+    // OCR → 정리
+    const lang = document.getElementById('ocrLang').value;
+    ocrOut.textContent = 'OCR...';
+    let text = await ocrNow(lang);
+    text = normalizeOCR(text);
+    const hint = buildUnderlineHint(text);
+    if(hint) text += `\n\n[HINT] ${hint}`;
+    ocrOut.textContent = text || '[인식 실패]';
 
-    // ======= 수동/버튼 =======
-    async function solveNow(){
-      // 우선순위: 선택 문항 → 첫 문항 → 전체 텍스트
-      const sel = getSelectedQuestionText();
-      let coreQ = sel || (parseQuestions($('ocrOut').value||'')[0]?.text || $('ocrOut').value || '');
-      if(!coreQ.trim()) return;
-      queueSolveTask(coreQ);
-    }
+    // 동일문장 재요청 방지
+    const s = sig(text);
+    if(!text || s===lastSig) return;
+    lastSig = s;
 
-    function speak(text){
-      if($('mute').checked) return;
-      try{
-        const u = new SpeechSynthesisUtterance(text);
-        const hasKorean = /[\u3131-\uD79D]/.test(text);
-        u.lang = hasKorean ? 'ko-KR' : 'en-US';
-        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
-        speechSynthesis.cancel(); speechSynthesis.speak(u);
-      }catch(e){ log('TTS 오류: '+e.message); }
-    }
+    // 풀이 → 출력 → 음성
+    ansOut.textContent = '풀이...';
+    const ans = await solveNow(text);
+    ansOut.textContent = ans;
+    if(document.getElementById('autoSpeak').checked && ans) speak(ans);
 
-    // ======= 이벤트 바인딩 =======
-    $('btnStart').onclick = startCapture;
-    $('btnStop').onclick  = stopCapture;
-    $('btnOnce').onclick  = runOCR;
-    $('btnSolve').onclick = solveNow;
-    $('btnClear').onclick = ()=>{ $('ocrOut').value=''; $('ansOut').value=''; lastAnswer=null; };
-    $('btnSpeak').onclick = ()=>{ const t=$('ansOut').value.trim(); if(t) speak(t); };
-    $('btnTest').onclick  = ()=> speak('테스트, 들리면 고개를 끄덕이세요');
-  </script>
+    // 처리 후 다시 안정 판정부터
+    stableCount = 0;
+
+  }catch(e){
+    ocrOut.textContent = '오류: '+e.message;
+  }
+}
+
+document.getElementById('btnAutoStart').onclick = async ()=>{
+  // 음성 권한용 1회 탭
+  if(!useSnapshot && !video.srcObject){
+    try{
+      const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+      video.srcObject=s;
+    }catch(e){ alert('카메라 권한 오류: '+e.message); return; }
+  }
+  if(loopTimer) clearInterval(loopTimer);
+  const ms = useSnapshot ? pollMs : 1000; // 스냅샷은 지정 주기, 카메라는 1초
+  loopTimer = setInterval(tick, ms);
+};
+document.getElementById('btnAutoStop').onclick = ()=>{ if(loopTimer) clearInterval(loopTimer); loopTimer=null; window.speechSynthesis.cancel(); };
+</script>
 </body>
 </html>
