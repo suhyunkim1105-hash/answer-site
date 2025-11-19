@@ -1,60 +1,276 @@
 <!doctype html>
 <html lang="ko">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>자동 문제 풀이 – 복구 테스트</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;margin:20px}
-  .card{border:1px solid #eaeaea;border-radius:12px;padding:14px;margin:12px 0}
-  button{padding:10px 14px;border:0;border-radius:10px;font-weight:700;cursor:pointer;background:#111;color:#fff}
-  pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;border-radius:8px;padding:10px;min-height:80px}
-  video,canvas{width:100%;max-width:460px;background:#111;border-radius:12px}
-</style>
+  <meta charset="utf-8" />
+  <title>카메라 영어 문제 자동 풀이</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #f9fafb;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .app {
+      width: 100%;
+      max-width: 520px;
+      padding: 20px 18px 24px;
+      border-radius: 18px;
+      background: radial-gradient(circle at top, #111827, #020617);
+      box-shadow: 0 18px 50px rgba(0,0,0,0.8);
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
+    .sub {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-bottom: 12px;
+    }
+    .video-wrap {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid #374151;
+      background: #020617;
+      aspect-ratio: 3/4;
+      margin-bottom: 10px;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #020617;
+    }
+    .overlay-guide {
+      position: absolute;
+      inset: 12%;
+      border: 2px dashed rgba(249,250,251,0.4);
+      border-radius: 12px;
+      pointer-events: none;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    button {
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 999px;
+      padding: 8px 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    #startCamBtn {
+      background: #111827;
+      color: #e5e7eb;
+      border: 1px solid #4b5563;
+      flex: 0 0 auto;
+    }
+    #shotBtn {
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #f9fafb;
+      box-shadow: 0 10px 25px rgba(37,99,235,0.5);
+      flex: 1 1 auto;
+      justify-content: center;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+      box-shadow: none;
+    }
+    .badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+      color: #9ca3af;
+      margin-left: auto;
+    }
+    #status {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 8px;
+      min-height: 14px;
+    }
+    .panel {
+      font-size: 12px;
+      border-radius: 12px;
+      border: 1px solid #374151;
+      background: rgba(15,23,42,0.9);
+      padding: 8px 10px;
+      margin-top: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .panel-label {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 2px;
+    }
+    .answer {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e5ff7a;
+    }
+    .ocr-text {
+      font-size: 12px;
+      color: #e5e7eb;
+      max-height: 120px;
+      overflow: auto;
+    }
+    .thumb {
+      margin-top: 6px;
+      text-align: right;
+    }
+    .thumb img {
+      max-width: 120px;
+      border-radius: 10px;
+      border: 1px solid #4b5563;
+    }
+  </style>
 </head>
 <body>
-<h1>자동 문제 풀이 – 화면 복구 OK</h1>
+  <main class="app">
+    <h1>카메라 영어 문제 자동 풀이</h1>
+    <div class="sub">카메라로 영어 문제를 찍으면, 텍스트를 인식해서 <b>정답 한 줄</b>만 반환한다.</div>
 
-<div class="card">
-  <p>지금은 <b>화면이 보이는지</b> 확인하는 단계입니다. 아래 버튼이 보이면 UI는 정상입니다.</p>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
-    <button id="btnCam">아이폰 카메라 허용</button>
-    <button id="btnScreen">화면 공유 시작(미러링 창 선택)</button>
-    <button id="btnCheck">상태 점검</button>
-  </div>
-  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px">
-    <video id="v" autoplay playsinline muted></video>
-    <canvas id="c" width="640" height="480"></canvas>
-  </div>
-</div>
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="overlay-guide"></div>
+    </div>
 
-<div class="card">
-  <h3>상태 / 에러 로그</h3>
-  <pre id="log"></pre>
-</div>
+    <div class="controls">
+      <button id="startCamBtn">카메라 켜기</button>
+      <button id="shotBtn" disabled>문제 촬영하기</button>
+      <span class="badge">camera · alpha</span>
+    </div>
 
-<script>
-const log = document.getElementById('log');
-function logln(s){ log.textContent += (s + '\n'); }
+    <div id="status">카메라를 켜주세요.</div>
 
-document.getElementById('btnCam').onclick = async ()=>{
-  try{
-    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
-    document.getElementById('v').srcObject = s;
-    logln('카메라 연결 OK');
-  }catch(e){ logln('카메라 오류: '+e.message); }
-};
-document.getElementById('btnScreen').onclick = async ()=>{
-  try{
-    const s = await navigator.mediaDevices.getDisplayMedia({video:{displaySurface:'window'},audio:false});
-    document.getElementById('v').srcObject = s;
-    logln('화면 공유 연결 OK (미러링 창 선택됨)');
-  }catch(e){ logln('화면 공유 오류/취소: '+e.message); }
-};
-document.getElementById('btnCheck').onclick = ()=>{
-  logln('페이지 로드 확인, JS 실행 정상');
-};
-logln('페이지 렌더 OK');
-</script>
+    <div class="panel" id="ocrPanel">
+      <div class="panel-label">① 인식된 문제 텍스트</div>
+      <div class="ocr-text" id="ocrText">(아직 인식된 텍스트가 없습니다)</div>
+      <div class="thumb" id="thumbWrap"></div>
+    </div>
+
+    <div class="panel" id="answerPanel">
+      <div class="panel-label">② AI 정답</div>
+      <div class="answer" id="answer">(아직 정답이 없습니다)</div>
+    </div>
+
+    <canvas id="captureCanvas" style="display:none;"></canvas>
+
+    <!-- Tesseract.js (브라우저 OCR 라이브러리) -->
+    <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <script>
+      const video = document.getElementById("video");
+      const startCamBtn = document.getElementById("startCamBtn");
+      const shotBtn = document.getElementById("shotBtn");
+      const statusEl = document.getElementById("status");
+      const ocrTextEl = document.getElementById("ocrText");
+      const answerEl = document.getElementById("answer");
+      const canvas = document.getElementById("captureCanvas");
+      const thumbWrap = document.getElementById("thumbWrap");
+
+      let stream = null;
+      let isProcessing = false;
+
+      async function startCamera() {
+        try {
+          statusEl.textContent = "카메라 권한 요청 중...";
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" }
+          });
+          video.srcObject = stream;
+          statusEl.textContent = "문제가 프레임 안에 오도록 맞추고, '문제 촬영하기'를 눌러주세요.";
+          shotBtn.disabled = false;
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "카메라를 사용할 수 없습니다. 브라우저 권한/HTTPS를 확인하세요.";
+        }
+      }
+
+      async function captureAndSolve() {
+        if (!video.videoWidth || !video.videoHeight) {
+          statusEl.textContent = "카메라가 아직 준비되지 않았습니다. 1~2초 뒤에 다시 시도하세요.";
+          return;
+        }
+        if (isProcessing) return;
+        isProcessing = true;
+        shotBtn.disabled = true;
+
+        try {
+          // 1) 현재 프레임 캡처
+          const w = video.videoWidth;
+          const h = video.videoHeight;
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(video, 0, 0, w, h);
+
+          // 썸네일 표시
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+          thumbWrap.innerHTML = '<img src="' + dataUrl + '" alt="captured">';
+
+          // 2) Tesseract로 영어 텍스트 OCR
+          statusEl.textContent = "영어 문제 인식 중 (OCR)...";
+          const { data: { text } } = await Tesseract.recognize(
+            canvas,
+            "eng",
+            { logger: m => console.log(m) }
+          );
+
+          const cleaned = (text || "").trim();
+          if (!cleaned) {
+            statusEl.textContent = "문자 인식을 하지 못했습니다. 문제를 더 가깝게 찍고 다시 시도하세요.";
+            ocrTextEl.textContent = "(인식 실패)";
+            return;
+          }
+
+          ocrTextEl.textContent = cleaned;
+          statusEl.textContent = "AI가 문제를 풀이 중...";
+
+          // 3) Netlify Function에 전송 → 정답 한 줄 받아오기
+          const res = await fetch("/.netlify/functions/solve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question: cleaned })
+          });
+
+          if (!res.ok) {
+            const txt = await res.text();
+            throw new Error("서버 오류: " + txt);
+          }
+
+          const data = await res.json();
+          answerEl.textContent = data.answer || "(응답이 없습니다)";
+          statusEl.textContent = "완료";
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "에러 발생";
+          answerEl.textContent = "에러: " + (err?.message || err);
+        } finally {
+          isProcessing = false;
+          shotBtn.disabled = false;
+        }
+      }
+
+      startCamBtn.addEventListener("click", startCamera);
+      shotBtn.addEventListener("click", captureAndSolve);
+    </script>
 </body>
 </html>
