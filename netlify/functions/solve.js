@@ -1,88 +1,155 @@
 // netlify/functions/solve.js
 
-exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+exports.handler = async function (event, context) {
+  // Preflight
+  if (event.httpMethod === 'OPTIONS') {
     return {
-      statusCode: 405,
-      body: 'Method Not Allowed',
+      statusCode: 200,
+      headers: corsHeaders,
+      body: '',
     };
   }
 
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Only POST allowed' }),
+    };
+  }
+
+  if (!OPENROUTER_API_KEY) {
+    return {
+      statusCode: 500,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Missing OPENROUTER_API_KEY' }),
+    };
+  }
+
+  let body;
   try {
-    const body = JSON.parse(event.body || '{}');
-    const question = (body.question || '').trim();
+    body = JSON.parse(event.body || '{}');
+  } catch (e) {
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Invalid JSON body' }),
+    };
+  }
 
-    if (!question) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: 'question is required' }),
-      };
-    }
+  const section = body.section || 'generic';
+  const qType   = body.qType || 'generic';
+  const passage = body.passage || null;
+  const question = body.question || body.prompt || '';
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      // 환경변수 안 들어가 있으면 무조건 여기서 막힘
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'Missing OPENROUTER_API_KEY' }),
-      };
-    }
+  if (!question || typeof question !== 'string') {
+    return {
+      statusCode: 400,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'question text is required' }),
+    };
+  }
 
-    const prompt = `
-You are solving an English multiple-choice exam question.
-
-The text includes a question and 5 answer options labeled 1, 2, 3, 4, 5.
-
-Rules:
-- Carefully read the question and all 5 options.
-- Decide which single option (1-5) is the best answer.
-- Output ONLY the number of the correct option: 1, 2, 3, 4, or 5.
-- Do NOT output any words, punctuation, or explanations. Just one digit.
-
-Here is the exam text (question + options):
-${question}
+  // --- 프롬프트 구성 ---
+  const systemPrompt = `
+You are an assistant used for research on English exam questions (similar to TOEFL).
+Your job is to solve multiple-choice questions with options 1–5.
+You MUST return ONLY a single digit from 1 to 5 as the final answer, with no explanation.
+If you are unsure, choose the most reasonable option, but still output only one digit (1~5).
 `.trim();
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  let userPrompt;
+
+  if (section === 'reading' && passage) {
+    userPrompt = `
+[Task]
+You are solving a READING comprehension multiple-choice question.
+
+[Question Type]
+${qType}
+
+[Passage]
+${passage}
+
+[Question and Options]
+${question}
+
+[Answer Format]
+Return ONLY the number (1, 2, 3, 4, or 5) of the correct option.
+Do NOT include any words or punctuation. Just a single digit.
+`.trim();
+  } else {
+    // fallback / generic 용
+    userPrompt = `
+[Task]
+You are solving a multiple-choice question with options 1–5.
+
+[Question and Options]
+${question}
+
+[Answer Format]
+Return ONLY the number (1, 2, 3, 4, or 5) of the correct option.
+Do NOT include any words or punctuation. Just a single digit.
+`.trim();
+  }
+
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model: 'openai/gpt-4o-mini',
         messages: [
-          {
-            role: 'system',
-            content: 'You answer ONLY with a single digit 1-5 (the correct option). No explanation. No extra characters.',
-          },
-          { role: 'user', content: prompt },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
         ],
-        max_tokens: 5,
         temperature: 0,
+        max_tokens: 8,
       }),
     });
 
-    const data = await response.json();
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error('OpenRouter error:', resp.status, text);
+      return {
+        statusCode: 502,
+        headers: corsHeaders,
+        body: JSON.stringify({
+          error: 'OpenRouter API error',
+          status: resp.status,
+        }),
+      };
+    }
 
-    const raw = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
-      ? data.choices[0].message.content
-      : ''
-    ).trim();
+    const data = await resp.json();
+    const raw = (data.choices?.[0]?.message?.content || '').trim();
 
-    // 응답에서 1~5 숫자 하나만 뽑기
+    // 첫 번째 1~5 숫자만 뽑기
     const match = raw.match(/[1-5]/);
-    const finalAnswer = match ? match[0] : raw || '';
+    const answer = match ? match[0] : raw; // 혹시 못 뽑으면 raw 그대로 반환
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ answer: finalAnswer }),
+      headers: corsHeaders,
+      body: JSON.stringify({ answer }),
     };
   } catch (err) {
-    console.error(err);
+    console.error('solve.js error', err);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'Server error', detail: err.message }),
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Internal error', detail: String(err) }),
     };
   }
 };
