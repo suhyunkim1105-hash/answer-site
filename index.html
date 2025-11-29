@@ -2,36 +2,35 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 + OCR + 풀이 (안정화)</title>
+  <title>카메라 테스트 전용</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      padding: 16px;
-      margin: 0;
       background: #111;
       color: #eee;
+      margin: 0;
+      padding: 16px;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-    p { font-size: 0.9rem; color: #bbb; }
-    .section { margin-top: 16px; }
-    video, img {
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 0.85rem;
+      color: #ccc;
+      white-space: pre-line;
+    }
+    video {
       width: 100%;
       max-width: 480px;
       background: #000;
       border-radius: 10px;
-      display: block;
-    }
-    .buttons {
-      margin-top: 8px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
+      margin-top: 12px;
     }
     button {
-      flex: 1;
-      min-width: 120px;
+      margin-top: 12px;
       padding: 10px 16px;
       font-size: 15px;
       border-radius: 999px;
@@ -39,288 +38,67 @@
       background: #2a2a2a;
       color: #fff;
     }
-    button:active { opacity: 0.8; }
-    #status { margin-top: 6px; font-size: 0.8rem; color: #aaa; }
-    .zoom-wrapper { margin-top: 8px; }
-    .zoom-wrapper label {
-      font-size: 0.85rem;
-      color: #ccc;
-      display: block;
-      margin-bottom: 4px;
-    }
-    input[type="range"] { width: 100%; }
-    textarea {
-      width: 100%;
-      max-width: 480px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
-      color: #eee;
-      padding: 8px;
-      font-size: 0.9rem;
-    }
-    #answerArea {
-      font-size: 2rem;
-      font-weight: bold;
-      margin-top: 8px;
+    button:active {
+      opacity: 0.8;
     }
   </style>
 </head>
 <body>
-  <h1>카메라 + OCR + 자동 풀이 (안정화)</h1>
-  <p>문제+보기(1~5)를 화면에 맞추고 <b>캡처 + OCR + 풀이</b>를 누르면 AI가 1~5 중 정답 번호를 알려준다.</p>
+  <h1>📷 카메라 동작 테스트</h1>
+  <p>이 페이지는 카메라가 되는지 확인만 하는 용도다. 안 되면 권한/브라우저 문제.</p>
 
-  <!-- 카메라 영역 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">카메라 화면</h2>
-    <video id="camera" autoplay playsinline muted></video>
-
-    <div class="buttons">
-      <button id="startBtn">카메라 켜기</button>
-      <button id="captureOcrSolveBtn">캡처 + OCR + 풀이(1~5)</button>
-      <button id="captureOcrBtn">캡처 + OCR만</button>
-    </div>
-
-    <!-- 줌 -->
-    <div class="zoom-wrapper" id="zoomWrapper" style="display:none;">
-      <label for="zoomRange">
-        줌(배율) 조절: <span id="zoomValue"></span>
-      </label>
-      <input type="range" id="zoomRange" />
-    </div>
-
-    <div id="status"></div>
-  </div>
-
-  <!-- 캡처 이미지 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">캡처된 이미지</h2>
-    <img id="capturedImage" alt="캡처된 화면" />
-  </div>
-
-  <!-- 텍스트 / AI 호출 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">인식된 텍스트 (필요하면 수정 후 풀이)</h2>
-    <textarea id="questionText" rows="8"
-      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다. 필요하면 여기서 보기/번호 정리 후 풀이 버튼을 눌러도 됨."></textarea>
-    <div class="buttons" style="margin-top:8px;">
-      <button id="solveBtn">이 텍스트로만 풀이(1~5)</button>
-    </div>
-  </div>
-
-  <!-- 정답 표시 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">AI 정답 (1~5 번호)</h2>
-    <div id="answerArea">아직 정답 없음</div>
-  </div>
-
-  <!-- 캔버스 (숨김) -->
-  <canvas id="canvas" style="display:none;"></canvas>
-
-  <!-- Tesseract.js -->
-  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+  <button id="startBtn">카메라 켜기</button>
+  <div id="status">대기 중...</div>
+  <video id="video" autoplay playsinline muted></video>
 
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      const video = document.getElementById('camera');
-      const startBtn = document.getElementById('startBtn');
-      const captureOcrBtn = document.getElementById('captureOcrBtn');
-      const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
-      const solveBtn = document.getElementById('solveBtn');
-      const canvas = document.getElementById('canvas');
-      const capturedImage = document.getElementById('capturedImage');
-      const statusEl = document.getElementById('status');
-      const zoomWrapper = document.getElementById('zoomWrapper');
-      const zoomRange = document.getElementById('zoomRange');
-      const zoomValue = document.getElementById('zoomValue');
-      const questionTextEl = document.getElementById('questionText');
-      const answerArea = document.getElementById('answerArea');
+    const startBtn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('status');
+    const video = document.getElementById('video');
 
-      // 필수 요소 없으면 바로 알려주기
-      if (!video || !startBtn || !canvas || !capturedImage || !statusEl ||
-          !questionTextEl || !answerArea) {
-        alert('필수 DOM 요소를 찾지 못했습니다. index.html 복붙이 제대로 되었는지 확인하세요.');
-        return;
-      }
+    let stream = null;
 
-      let stream = null;
-      let videoTrack = null;
-      let zoomCap = null;
+    async function startCamera() {
+      statusEl.textContent = '버튼 눌림 → 카메라 요청 중...';
 
-      // 1) 카메라 켜기
-      async function startCamera() {
-        statusEl.textContent = 'startCamera 호출됨';
-        try {
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            statusEl.textContent = '이 브라우저에서는 카메라 API를 지원하지 않습니다.';
-            return;
-          }
-          if (stream) {
-            statusEl.textContent = '이미 카메라가 켜져 있습니다.';
-            return;
-          }
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: 'environment' },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-            audio: false,
-          });
-          video.srcObject = stream;
-
-          video.addEventListener('loadedmetadata', () => {
-            statusEl.textContent = '카메라 연결 성공: ' +
-              video.videoWidth + 'x' + video.videoHeight;
-          }, { once: true });
-
-          // 줌 지원 여부 체크
-          videoTrack = stream.getVideoTracks()[0];
-          if (videoTrack && videoTrack.getCapabilities) {
-            const capabilities = videoTrack.getCapabilities();
-            if (capabilities.zoom) {
-              zoomCap = capabilities.zoom;
-              const settings = videoTrack.getSettings();
-              zoomRange.min = zoomCap.min;
-              zoomRange.max = zoomCap.max;
-              zoomRange.step = zoomCap.step || 0.1;
-              zoomRange.value = settings.zoom || zoomCap.min;
-              zoomValue.textContent = parseFloat(zoomRange.value).toFixed(2) + 'x';
-              zoomWrapper.style.display = 'block';
-              statusEl.textContent += ' / 줌 지원됨';
-            } else {
-              zoomWrapper.style.display = 'none';
-              statusEl.textContent += ' / 이 기기에서는 줌 미지원';
-            }
-          }
-        } catch (e) {
-          console.error(e);
-          statusEl.textContent = '카메라 오류: ' + e.message;
-          alert('카메라 오류: ' + e.message + '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.');
-        }
-      }
-
-      // 2) 줌 변경
-      async function onZoomChange(e) {
-        if (!videoTrack || !zoomCap) return;
-        const value = parseFloat(e.target.value);
-        zoomValue.textContent = value.toFixed(2) + 'x';
-        try {
-          await videoTrack.applyConstraints({ advanced: [{ zoom: value }] });
-        } catch (e2) {
-          console.error('줌 적용 오류:', e2);
-          statusEl.textContent = '줌 적용 중 오류: ' + e2.message;
-        }
-      }
-
-      // 공통: 캡처
-      function captureToCanvasAndImage() {
-        if (!video.videoWidth || !video.videoHeight) {
-          alert('카메라가 아직 준비되지 않았습니다.');
-          return false;
-        }
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        capturedImage.src = canvas.toDataURL('image/png');
-        return true;
-      }
-
-      // OCR 텍스트 정리
-      function cleanOcrText(raw) {
-        if (!raw) return '';
-        return raw
-          .split('\\n')
-          .map(l => l.trim())
-          .filter(l => l.length > 0)
-          .filter(l => !l.match(/https?:\\/\\//i))   // URL 제거
-          .filter(l => !l.match(/\\d{1,2}:\\d{2}/))  // 12:34 같은 시간 제거
-          .filter(l => !l.match(/Copyright|©/i))
-          .join('\\n');
-      }
-
-      // 3) 캡처 + OCR만
-      async function captureAndOcr() {
-        const ok = captureToCanvasAndImage();
-        if (!ok) return;
-        statusEl.textContent = 'OCR 처리 중...';
-        questionTextEl.value = '';
-        answerArea.textContent = '아직 정답 없음';
-
-        try {
-          const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-          const raw = (result.data.text || '').trim();
-          const cleaned = cleanOcrText(raw);
-          questionTextEl.value = cleaned || raw;
-          statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
-        } catch (e) {
-          console.error(e);
-          statusEl.textContent = 'OCR 오류: ' + e.message;
-          alert('OCR 오류: ' + e.message);
-        }
-      }
-
-      // 4) 캡처 + OCR + 바로 풀이
-      async function captureOcrAndSolve() {
-        const ok = captureToCanvasAndImage();
-        if (!ok) return;
-        statusEl.textContent = 'OCR 처리 중...';
-        questionTextEl.value = '';
-        answerArea.textContent = '풀이 준비 중...';
-
-        try {
-          const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-          const raw = (result.data.text || '').trim();
-          const cleaned = cleanOcrText(raw);
-          const finalText = cleaned || raw;
-          questionTextEl.value = finalText;
-          statusEl.textContent = 'OCR 완료, AI 풀이 중...';
-          await solveQuestion(finalText);
-        } catch (e) {
-          console.error(e);
-          statusEl.textContent = 'OCR/풀이 중 오류: ' + e.message;
-          alert('OCR/풀이 중 오류: ' + e.message);
-        }
-      }
-
-      // 5) textarea 텍스트로만 풀이
-      async function solveQuestionFromTextarea() {
-        const text = questionTextEl.value.trim();
-        if (!text) {
-          alert('보낼 텍스트가 없습니다.');
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          statusEl.textContent = '이 브라우저는 getUserMedia를 지원하지 않습니다.';
           return;
         }
-        statusEl.textContent = 'AI 풀이 중...';
-        await solveQuestion(text);
-      }
 
-      // 실제 Netlify 함수 호출
-      async function solveQuestion(questionText) {
-        try {
-          const res = await fetch('/.netlify/functions/solve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: questionText }),
-          });
-          if (!res.ok) throw new Error('서버 오류: ' + res.status);
-          const data = await res.json();
-          answerArea.textContent = data.answer || '응답 포맷 오류';
-          statusEl.textContent = '풀이 완료.';
-        } catch (e) {
-          console.error(e);
-          statusEl.textContent = '풀이 오류: ' + e.message;
-          alert('풀이 오류: ' + e.message);
+        if (stream) {
+          statusEl.textContent = '이미 카메라가 켜져 있습니다.';
+          return;
         }
-      }
 
-      // 이벤트 연결 (여기서 에러 안 나게 방어)
-      startBtn.addEventListener('click', startCamera);
-      if (captureOcrBtn) captureOcrBtn.addEventListener('click', captureAndOcr);
-      if (captureOcrSolveBtn) captureOcrSolveBtn.addEventListener('click', captureOcrAndSolve);
-      if (solveBtn) solveBtn.addEventListener('click', solveQuestionFromTextarea);
-      if (zoomRange) zoomRange.addEventListener('input', onZoomChange);
-    });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }, // 후면 카메라 우선
+          audio: false,
+        });
+
+        video.srcObject = stream;
+
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            statusEl.textContent =
+              '카메라 연결 성공 ✅\n' +
+              '실제 해상도: ' + video.videoWidth + ' x ' + video.videoHeight;
+          },
+          { once: true }
+        );
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent =
+          '카메라 오류 ❌\n' +
+          '메시지: ' + err.name + ' - ' + err.message +
+          '\n\n브라우저 주소창 옆 자물쇠(🔒) 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+        alert('카메라 오류: ' + err.name + '\\n' + err.message);
+      }
+    }
+
+    startBtn.addEventListener('click', startCamera);
   </script>
 </body>
 </html>
