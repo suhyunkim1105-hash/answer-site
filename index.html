@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 + OCR</title>
+  <title>answer-site 카메라 + OCR + 풀이</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * {
@@ -79,11 +79,16 @@
       padding: 8px;
       font-size: 0.9rem;
     }
+    #answerArea {
+      font-size: 2rem;
+      font-weight: bold;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
-  <h1>카메라 + OCR 테스트</h1>
-  <p>카메라로 문제를 비추고, 캡처 + OCR 버튼을 누르면 영어 텍스트로 인식한다.</p>
+  <h1>카메라 + OCR + 자동 풀이 (1~5)</h1>
+  <p>문제+보기(1~5)를 화면에 맞추고 <b>캡처 + OCR + 풀이</b>를 누르면 AI가 1~5 중 정답 번호를 알려준다.</p>
 
   <!-- 카메라 프리뷰 -->
   <div class="section">
@@ -92,8 +97,8 @@
 
     <div class="buttons">
       <button id="startBtn">카메라 켜기</button>
-      <button id="captureBtn">지금 화면 캡처</button>
-      <button id="captureOcrBtn">캡처 + OCR</button>
+      <button id="captureOcrSolveBtn">캡처 + OCR + 풀이(1~5)</button>
+      <button id="captureOcrBtn">캡처 + OCR만</button>
     </div>
 
     <!-- 줌 슬라이더 -->
@@ -115,9 +120,18 @@
 
   <!-- 인식된 텍스트 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">인식된 텍스트 (OCR 결과)</h2>
+    <h2 style="font-size:1.1rem;">인식된 텍스트 (필요하면 수정 후 풀이)</h2>
     <textarea id="questionText" rows="8"
-      placeholder="캡처 + OCR 버튼을 누르면 여기에 텍스트가 표시됩니다."></textarea>
+      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다. 필요하면 여기서 보기/번호 정리 후 풀이 버튼을 눌러도 됨."></textarea>
+    <div class="buttons" style="margin-top:8px;">
+      <button id="solveBtn">이 텍스트로만 풀이(1~5)</button>
+    </div>
+  </div>
+
+  <!-- 정답 표시 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">AI 정답 (1~5 번호)</h2>
+    <div id="answerArea">아직 정답 없음</div>
   </div>
 
   <!-- 캔버스 (숨김) -->
@@ -129,16 +143,17 @@
   <script>
     const video = document.getElementById('camera');
     const startBtn = document.getElementById('startBtn');
-    const captureBtn = document.getElementById('captureBtn');
     const captureOcrBtn = document.getElementById('captureOcrBtn');
+    const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
+    const solveBtn = document.getElementById('solveBtn');
     const canvas = document.getElementById('canvas');
     const capturedImage = document.getElementById('capturedImage');
     const statusEl = document.getElementById('status');
-
     const zoomWrapper = document.getElementById('zoomWrapper');
     const zoomRange = document.getElementById('zoomRange');
     const zoomValue = document.getElementById('zoomValue');
     const questionTextEl = document.getElementById('questionText');
+    const answerArea = document.getElementById('answerArea');
 
     let stream = null;
     let videoTrack = null;
@@ -234,6 +249,7 @@
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
 
+      // 필요하면 여기서 상/하단 일부 잘라내는 crop도 가능
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       const dataUrl = canvas.toDataURL('image/png');
@@ -242,29 +258,38 @@
       return true;
     }
 
-    // 3) 단순 캡처만
-    function captureFrame() {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-      statusEl.textContent = '프레임 캡처 완료.';
+    // OCR 전에 텍스트 대충 정리 (URL/시간 같은 건 버리기)
+    function cleanOcrText(raw) {
+      if (!raw) return '';
+      return raw
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .filter(line => !line.match(/https?:\/\//i))       // URL 제거
+        .filter(line => !line.match(/\d{1,2}:\d{2}/))       // 12:34 같은 시간 제거
+        .filter(line => !line.match(/Copyright|©/i))        // 저작권 라인 제거
+        .join('\n');
     }
 
-    // 4) 캡처 + OCR
+    // 3) 캡처 + OCR만
     async function captureAndOcr() {
       const ok = captureToCanvasAndImage();
       if (!ok) return;
 
-      statusEl.textContent = 'OCR 처리 중... (조금 걸릴 수 있음)';
+      statusEl.textContent = 'OCR 처리 중...';
       questionTextEl.value = '';
+      answerArea.textContent = '아직 정답 없음';
 
       try {
         const result = await Tesseract.recognize(canvas, 'eng', {
-          logger: (m) => console.log(m), // 진행상황 콘솔 출력
+          logger: (m) => console.log(m),
         });
 
-        const text = (result.data.text || '').trim();
-        questionTextEl.value = text;
-        statusEl.textContent = 'OCR 완료.';
+        const raw = (result.data.text || '').trim();
+        const cleaned = cleanOcrText(raw);
+
+        questionTextEl.value = cleaned || raw;
+        statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 조금 정리한 뒤, 풀이 버튼을 누르세요.';
       } catch (err) {
         console.error(err);
         statusEl.textContent = 'OCR 중 오류 발생';
@@ -272,10 +297,9 @@
       }
     }
 
-    startBtn.addEventListener('click', startCamera);
-    captureBtn.addEventListener('click', captureFrame);
-    captureOcrBtn.addEventListener('click', captureAndOcr);
-    zoomRange.addEventListener('input', onZoomChange);
-  </script>
-</body>
-</html>
+    // 4) 캡처 + OCR + 바로 풀이(1~5)
+    async function captureOcrAndSolve() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
+
+      statusEl.textConte
