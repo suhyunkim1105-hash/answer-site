@@ -168,7 +168,7 @@
     import { initializeApp }   from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-    // 🔹 네 Firebase 설정 (이미 확인한 값)
+    // Firebase 설정
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -180,14 +180,14 @@
       measurementId: "G-C8MRHK5ZGS"
     };
 
-    const ROOM_ID = "room1"; // 휴대폰/원격 둘 다 동일하게 사용
+    const ROOM_ID = "room1";
 
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
     const commandRef = ref(db, `rooms/${ROOM_ID}/command`);
     const resultRef  = ref(db, `rooms/${ROOM_ID}/result`);
 
-    // --- DOM 요소 ---
+    // DOM 요소
     const startBtn   = document.getElementById('startBtn');
     const statusEl   = document.getElementById('status');
     const video      = document.getElementById('video');
@@ -207,7 +207,7 @@
 
     let stream = null;
     let lastAnswer = null;
-    let passageText = '';      // 지문 텍스트 캐시
+    let passageText = '';
 
     // 원격 요청 처리용
     let lastRemoteRequestId = null;
@@ -239,7 +239,7 @@
           'loadedmetadata',
           () => {
             statusEl.textContent =
-              '카메라 연결 성공 ✅\\n실제 해상도: ' +
+              '카메라 연결 성공 ✅\n실제 해상도: ' +
               video.videoWidth + ' x ' + video.videoHeight;
           },
           { once: true }
@@ -247,16 +247,16 @@
       } catch (err) {
         console.error(err);
         statusEl.textContent =
-          '카메라 오류 ❌\\n' +
+          '카메라 오류 ❌\n' +
           '메시지: ' + err.name + ' - ' + err.message +
-          '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
-        alert('카메라 오류: ' + err.name + '\\n' + err.message);
+          '\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+        alert('카메라 오류: ' + err.name + '\n' + err.message);
       }
     }
 
     startBtn.addEventListener('click', startCamera);
 
-    // 2) 현재 프레임을 캔버스/이미지로 캡처 (위/아래 10% 잘라서 중앙 80%만 사용)
+    // 2) 현재 프레임을 캔버스/이미지로 캡처 (위/아래 10% 잘라서 중앙 80%)
     function captureToCanvasAndImage() {
       if (!video.videoWidth || !video.videoHeight) {
         alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 시도하세요.');
@@ -286,16 +286,16 @@
     function cleanOcrText(raw) {
       if (!raw) return '';
       return raw
-        .split('\\n')
+        .split('\n')
         .map(line => line.trim())
         .filter(line => line.length > 0)
-        .filter(line => !line.match(/https?:\\/\\//i))   // URL 제거
-        .filter(line => !line.match(/\\d{1,2}:\\d{2}/))  // 12:34 같은 시간 제거
-        .filter(line => !line.match(/Copyright|©/i))     // 저작권 라인 제거
-        .join('\\n');
+        .filter(line => !line.match(/https?:\/\//i))
+        .filter(line => !line.match(/\d{1,2}:\d{2}/))
+        .filter(line => !line.match(/Copyright|©/i))
+        .join('\n');
     }
 
-    // 4) 지문 캡처 + OCR (한 번만 하면 됨)
+    // 4) 지문 캡처 + OCR
     async function capturePassageOcr() {
       const ok = captureToCanvasAndImage();
       if (!ok) return;
@@ -395,7 +395,7 @@
     async function solveQuestion(questionText, options = {}) {
       const { sendRemote = false, requestId = null } = options;
 
-      const section = 'reading';  // 지금은 Reading 연구용만 사용
+      const section = 'reading';
       const qType   = qTypeSelect ? qTypeSelect.value : 'reading_general';
       const passage = (passageTextEl.value || '').trim() || null;
 
@@ -442,7 +442,7 @@
       }
     }
 
-    // 9) Firebase에서 원격 캡처 명령 듣기 (remote.html → 휴대폰)
+    // 9) Firebase에서 원격 캡처 명령 듣기
     onValue(commandRef, async (snapshot) => {
       const cmd = snapshot.val();
       if (!cmd) return;
