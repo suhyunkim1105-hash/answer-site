@@ -2,173 +2,107 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site Reading 연구용 (카메라 + OCR + 풀이)</title>
+  <title>answer-site 카메라</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * { box-sizing: border-box; }
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #111;
-      color: #eee;
       margin: 0;
-      padding: 16px;
+      padding: 8px;
+      background: #050505;
+      color: #f5f5f5;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-    h2 { font-size: 1.1rem; margin: 12px 0 4px; }
-    p  { font-size: 0.9rem; color: #bbb; margin: 4px 0; }
-    .section { margin-top: 16px; }
-    video, img {
+    .wrap {
+      max-width: 600px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    h1 {
+      font-size: 1.1rem;
+      margin: 0 0 4px;
+      font-weight: 600;
+    }
+    video {
       width: 100%;
-      max-width: 480px;
+      border-radius: 12px;
       background: #000;
-      border-radius: 10px;
-      display: block;
-      margin-top: 12px;
+      transform-origin: center center;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+    }
+    .row label {
+      white-space: nowrap;
+    }
+    input[type="range"] {
+      flex: 1;
     }
     button {
-      margin-top: 8px;
-      padding: 10px 16px;
-      font-size: 15px;
+      flex: 1;
+      padding: 8px 10px;
       border-radius: 999px;
       border: none;
-      background: #2a2a2a;
+      background: #2b2b2b;
       color: #fff;
+      font-size: 0.85rem;
       cursor: pointer;
     }
-    button:active { opacity: 0.8; }
-    .buttons {
-      margin-top: 8px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
+    button:active {
+      opacity: 0.85;
     }
-    #status, #solveStatus {
-      margin-top: 8px;
-      font-size: 0.85rem;
-      color: #ccc;
+    #status {
+      font-size: 0.78rem;
+      color: #c0c0c0;
+      min-height: 1.2em;
       white-space: pre-line;
     }
-    textarea {
-      width: 100%;
-      max-width: 600px;
+    #passagePreview {
+      font-size: 0.78rem;
+      color: #a0a0a0;
+      max-height: 4.5em;
+      overflow: hidden;
       border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
-      color: #eee;
-      padding: 8px;
-      font-size: 0.9rem;
-      margin-top: 4px;
-    }
-    label {
-      display: block;
-      font-size: 0.85rem;
-      color: #aaa;
-      margin-top: 8px;
-    }
-    select {
-      margin-top: 4px;
-      padding: 6px 10px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
-      color: #eee;
-      font-size: 0.9rem;
-    }
-    #answerArea {
-      font-size: 2rem;
-      font-weight: bold;
-      margin-top: 8px;
+      padding: 6px;
+      background: #141414;
+      white-space: pre-wrap;
     }
   </style>
 </head>
 <body>
-  <h1>📚 Reading 연구용: 카메라 + OCR + 자동 풀이(1~5)</h1>
-  <p>
-    이 버전은 <b>Reading 지문 + 문제 구조</b>를 연구용으로 맞춘 거야.<br />
-    1) 지문을 한 번만 캡처해서 저장하고,<br />
-    2) 같은 지문에 대한 여러 문제를 따로 캡처해서 풀 수 있음.
-  </p>
+  <div class="wrap">
+    <h1>answer-site 카메라</h1>
 
-  <!-- 카메라 영역 -->
-  <div class="section">
-    <h2>1. 카메라</h2>
-    <button id="startBtn">카메라 켜기</button>
-    <div id="status">대기 중...</div>
-    <video id="video" autoplay playsinline muted></video>
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="captureCanvas" style="display:none"></canvas>
 
-    <div class="buttons">
-      <!-- 빠른 테스트용: 현재 화면을 문제로 보고 곧바로 풀이 -->
-      <button id="captureOcrSolveBtn">📸 (빠른 테스트) 현재 화면 캡처 + OCR + 풀이</button>
-    </div>
-  </div>
-
-  <!-- 캡처된 이미지 -->
-  <div class="section">
-    <h2>2. 현재 캡처된 이미지 (중앙 80% 사용)</h2>
-    <img id="capturedImage" alt="캡처된 화면" />
-  </div>
-
-  <!-- Reading 연구용 텍스트 -->
-  <div class="section">
-    <h2>3. Reading 연구용 텍스트</h2>
-
-    <!-- 지문 -->
-    <label for="passageText">지문 (Passage) – 같은 지문이면 한 번만 OCR해서 여기 저장</label>
-    <textarea id="passageText" rows="8"
-      placeholder="지문 전체를 한 번만 캡처해서 OCR 결과를 여기 저장합니다."></textarea>
-    <button id="capturePassageBtn">📚 현재 화면을 지문으로 OCR (한 번만)</button>
-    <p style="font-size:0.8rem;">
-      Reading 실제 구조처럼, 지문은 한 번만 캡처하고<br />
-      같은 지문에 대한 여러 문제를 아래에서 따로 캡처해서 풀 수 있게 하는 구조야.
-    </p>
-
-    <!-- 문제 -->
-    <label for="questionText">문제 + 보기 (Question + Options)</label>
-    <textarea id="questionText" rows="8"
-      placeholder="문제 1개와 보기(1~5)를 캡처하거나 직접 붙여넣습니다."></textarea>
-
-    <div class="buttons">
-      <button id="captureOcrBtn">📸 현재 화면을 문제로 OCR</button>
-      <button id="solveBtn">이 텍스트로 AI 풀이 (1~5)</button>
+    <div class="row">
+      <button id="startBtn">카메라 켜기</button>
     </div>
 
-    <!-- 문제 유형 태그 -->
-    <label for="qTypeSelect">문제 유형 (연구용 태그)</label>
-    <select id="qTypeSelect">
-      <option value="reading_general">일반 객관식 (기본값)</option>
-      <option value="vocab">Vocabulary (단어 의미)</option>
-      <option value="reference">Reference (지시어)</option>
-      <option value="factual">Factual (사실 정보)</option>
-      <option value="negative">Negative Factual</option>
-      <option value="inference">Inference (추론)</option>
-      <option value="function">Function / Purpose</option>
-      <option value="simplification">Sentence Simplification</option>
-      <option value="insert">Insert Sentence</option>
-      <option value="summary">Summary (요약)</option>
-      <option value="table">Table / Organization</option>
-    </select>
+    <div class="row">
+      <label for="zoomRange">줌</label>
+      <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1" />
+    </div>
 
-    <div id="solveStatus">아직 풀이 요청 없음</div>
+    <div id="status"></div>
+    <div id="passagePreview"></div>
   </div>
 
-  <!-- 정답 표시 -->
-  <div class="section">
-    <h2>4. AI 정답 (1~5 번호)</h2>
-    <div id="answerArea">아직 정답 없음</div>
-  </div>
+  <!-- Tesseract.js: OCR (영어+한국어) -->
+  <script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
 
-  <!-- 숨겨진 캔버스 -->
-  <canvas id="canvas" style="display:none;"></canvas>
-
-  <!-- Tesseract.js (OCR 라이브러리) -->
-  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
-
-  <!-- 앱 로직 + Firebase 연동 -->
+  <!-- Firebase + 원격 캡처 + OCR + AI 풀이 -->
   <script type="module">
-    import { initializeApp }   from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-    // Firebase 설정
+    // ==== Firebase config (네 프로젝트 값) ====
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -187,285 +121,106 @@
     const commandRef = ref(db, `rooms/${ROOM_ID}/command`);
     const resultRef  = ref(db, `rooms/${ROOM_ID}/result`);
 
-    // DOM 요소
-    const startBtn   = document.getElementById('startBtn');
-    const statusEl   = document.getElementById('status');
-    const video      = document.getElementById('video');
-
-    const canvas         = document.getElementById('canvas');
-    const capturedImage  = document.getElementById('capturedImage');
-    const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
-
-    const passageTextEl   = document.getElementById('passageText');
-    const capturePassageBtn = document.getElementById('capturePassageBtn');
-    const questionTextEl  = document.getElementById('questionText');
-    const captureOcrBtn   = document.getElementById('captureOcrBtn');
-    const qTypeSelect     = document.getElementById('qTypeSelect');
-    const solveBtn        = document.getElementById('solveBtn');
-    const solveStatus     = document.getElementById('solveStatus');
-    const answerArea      = document.getElementById('answerArea');
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("captureCanvas");
+    const startBtn = document.getElementById("startBtn");
+    const zoomRange = document.getElementById("zoomRange");
+    const statusEl = document.getElementById("status");
+    const passagePreviewEl = document.getElementById("passagePreview");
 
     let stream = null;
-    let lastAnswer = null;
-    let passageText = '';
-
-    // 원격 요청 처리용
-    let lastRemoteRequestId = null;
+    let videoTrack = null;
     let remoteProcessing = false;
+    let lastRemoteRequestId = null;
+    let currentPassage = "";
+    let currentPassageSnippet = "";
+    const OCR_LANG = "eng+kor";
 
-    // 1) 카메라 켜기
+    // ===== 카메라 켜기 & 고해상도 =====
     async function startCamera() {
-      statusEl.textContent = '버튼 눌림 → 카메라 요청 중...';
-
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          statusEl.textContent = '이 브라우저는 getUserMedia를 지원하지 않습니다.';
-          return;
-        }
-
-        if (stream) {
-          statusEl.textContent = '이미 카메라가 켜져 있습니다.';
-          return;
-        }
+        if (stream) return;
+        statusEl.textContent = "카메라 여는 중…";
 
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false,
+          video: {
+            facingMode: { ideal: "environment" },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          audio: false
         });
 
         video.srcObject = stream;
+        await video.play();
 
-        video.addEventListener(
-          'loadedmetadata',
-          () => {
-            statusEl.textContent =
-              '카메라 연결 성공 ✅\n실제 해상도: ' +
-              video.videoWidth + ' x ' + video.videoHeight;
-          },
-          { once: true }
-        );
+        videoTrack = stream.getVideoTracks()[0];
+        setupZoomControl();
+        statusEl.textContent = "카메라 준비 완료.";
       } catch (err) {
         console.error(err);
-        statusEl.textContent =
-          '카메라 오류 ❌\n' +
-          '메시지: ' + err.name + ' - ' + err.message +
-          '\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
-        alert('카메라 오류: ' + err.name + '\n' + err.message);
+        statusEl.textContent = "카메라 시작 오류: " + err.message;
+        alert("카메라를 열 수 없습니다: " + err.message);
       }
     }
 
-    startBtn.addEventListener('click', startCamera);
+    startBtn.addEventListener("click", startCamera);
 
-    // 2) 현재 프레임을 캔버스/이미지로 캡처 (위/아래 10% 잘라서 중앙 80%)
-    function captureToCanvasAndImage() {
+    // ===== 줌 컨트롤 =====
+    function setupZoomControl() {
+      if (!videoTrack) {
+        zoomRange.disabled = true;
+        return;
+      }
+
+      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+      if (caps.zoom) {
+        // 네이티브 줌 지원
+        zoomRange.min = caps.zoom.min;
+        zoomRange.max = caps.zoom.max;
+        zoomRange.step = caps.zoom.step || 0.1;
+        zoomRange.value = caps.zoom.min;
+
+        zoomRange.oninput = async () => {
+          const z = Number(zoomRange.value);
+          try {
+            await videoTrack.applyConstraints({ advanced: [{ zoom: z }] });
+          } catch (e) {
+            console.warn("zoom applyConstraints 실패", e);
+          }
+        };
+      } else {
+        // CSS 스케일 줌 (디지털 줌 느낌)
+        zoomRange.min = 1;
+        zoomRange.max = 3;
+        zoomRange.step = 0.05;
+        zoomRange.value = 1;
+        video.style.transformOrigin = "center center";
+
+        zoomRange.oninput = () => {
+          const z = Number(zoomRange.value);
+          video.style.transform = `scale(${z})`;
+        };
+      }
+    }
+
+    // ===== 프레임 캡처 (최대 해상도) =====
+    async function captureFrame() {
       if (!video.videoWidth || !video.videoHeight) {
-        alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 시도하세요.');
-        return false;
+        await new Promise(r => setTimeout(r, 100));
       }
-
-      const cropTop    = Math.floor(video.videoHeight * 0.1);
-      const cropHeight = Math.floor(video.videoHeight * 0.8);
-
-      canvas.width  = video.videoWidth;
-      canvas.height = cropHeight;
-
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(
-        video,
-        0, cropTop, video.videoWidth, cropHeight,
-        0, 0, canvas.width, canvas.height
-      );
-
-      const dataUrl = canvas.toDataURL('image/png');
-      capturedImage.src = dataUrl;
-
-      return true;
+      const w = video.videoWidth || 1280;
+      const h = video.videoHeight || 720;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, w, h);
+      return canvas.toDataURL("image/jpeg", 0.9);
     }
 
-    // 3) OCR 텍스트 정리 (URL/시간/저작권 같은 노이즈 제거)
-    function cleanOcrText(raw) {
-      if (!raw) return '';
-      return raw
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .filter(line => !line.match(/https?:\/\//i))
-        .filter(line => !line.match(/\d{1,2}:\d{2}/))
-        .filter(line => !line.match(/Copyright|©/i))
-        .join('\n');
-    }
-
-    // 4) 지문 캡처 + OCR
-    async function capturePassageOcr() {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-
-      statusEl.textContent = '지문 OCR 처리 중...';
-      try {
-        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-        const raw    = (result.data.text || '').trim();
-        const cleaned   = cleanOcrText(raw);
-        const finalText = cleaned || raw;
-
-        passageText = finalText;
-        passageTextEl.value = finalText;
-        statusEl.textContent = '지문 OCR 완료. 이제 같은 지문에 대한 문제들을 아래에서 캡처해서 풀 수 있습니다.';
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = '지문 OCR 오류: ' + err.message;
-        alert('지문 OCR 오류: ' + err.message);
-      }
-    }
-
-    capturePassageBtn.addEventListener('click', capturePassageOcr);
-
-    // 5) 문제 캡처 + OCR만
-    async function captureQuestionOcr() {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-
-      statusEl.textContent   = '문제 OCR 처리 중...';
-      questionTextEl.value   = '';
-      answerArea.textContent = '아직 정답 없음';
-      solveStatus.textContent = '아직 풀이 요청 없음';
-      lastAnswer             = null;
-
-      try {
-        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-        const raw    = (result.data.text || '').trim();
-        const cleaned   = cleanOcrText(raw);
-        const finalText = cleaned || raw;
-
-        questionTextEl.value = finalText;
-        statusEl.textContent = '문제 OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = '문제 OCR 오류: ' + err.message;
-        alert('문제 OCR 오류: ' + err.message);
-      }
-    }
-
-    captureOcrBtn.addEventListener('click', captureQuestionOcr);
-
-    // 6) 캡처 + OCR + 바로 풀이 (빠른 테스트 / 원격용 공통)
-    async function captureOcrAndSolve(sendRemote = false, requestId = null) {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-
-      statusEl.textContent   = '문제 OCR 처리 중...';
-      questionTextEl.value   = '';
-      answerArea.textContent = '풀이 준비 중...';
-      solveStatus.textContent = 'AI 풀이 대기 중...';
-      lastAnswer             = null;
-
-      try {
-        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-        const raw    = (result.data.text || '').trim();
-        const cleaned   = cleanOcrText(raw);
-        const finalText = cleaned || raw;
-
-        questionTextEl.value = finalText;
-        statusEl.textContent = '문제 OCR 완료, AI 풀이 중...';
-
-        await solveQuestion(finalText, { sendRemote, requestId });
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = 'OCR/풀이 중 오류: ' + err.message;
-        alert('OCR/풀이 중 오류: ' + err.message);
-      }
-    }
-
-    captureOcrSolveBtn.addEventListener('click', () => captureOcrAndSolve(false, null));
-
-    // 7) 텍스트로만 AI 풀이
-    async function solveQuestionFromTextarea() {
-      const text = questionTextEl.value.trim();
-      if (!text) {
-        alert('보낼 문제 텍스트가 없습니다.');
-        return;
-      }
-      solveStatus.textContent = 'AI 풀이 중...';
-      answerArea.textContent  = '...';
-      await solveQuestion(text, { sendRemote: false, requestId: null });
-    }
-
-    solveBtn.addEventListener('click', solveQuestionFromTextarea);
-
-    // 8) 실제 AI 호출 (Netlify Functions의 solve.js)
-    async function solveQuestion(questionText, options = {}) {
-      const { sendRemote = false, requestId = null } = options;
-
-      const section = 'reading';
-      const qType   = qTypeSelect ? qTypeSelect.value : 'reading_general';
-      const passage = (passageTextEl.value || '').trim() || null;
-
-      try {
-        const res = await fetch('/.netlify/functions/solve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            section,
-            qType,
-            passage,
-            question: questionText
-          }),
-        });
-
-        if (!res.ok) {
-          throw new Error('서버 오류: ' + res.status);
-        }
-
-        const data = await res.json();
-        const finalAnswer = data.answer || '';
-
-        lastAnswer = finalAnswer;
-
-        answerArea.textContent  = finalAnswer || '응답 포맷 오류';
-        solveStatus.textContent = '풀이 완료.';
-
-        if (sendRemote) {
-          await set(resultRef, {
-            requestId: requestId || null,
-            section,
-            qType,
-            passageSnippet: passage ? passage.slice(0, 200) : null,
-            text: questionText,
-            answer: finalAnswer,
-            image: capturedImage.src || null,
-            updatedAt: Date.now()
-          });
-        }
-      } catch (err) {
-        console.error(err);
-        solveStatus.textContent = '풀이 오류: ' + err.message;
-        alert('풀이 오류: ' + err.message);
-      }
-    }
-
-    // 9) Firebase에서 원격 캡처 명령 듣기
-    onValue(commandRef, async (snapshot) => {
-      const cmd = snapshot.val();
-      if (!cmd) return;
-      if (cmd.type !== 'capture') return;
-
-      const reqId = cmd.requestId || null;
-
-      // 같은 요청 여러 번 처리하지 않도록
-      if (lastRemoteRequestId && reqId && lastRemoteRequestId === reqId) {
-        return;
-      }
-      lastRemoteRequestId = reqId || Date.now();
-
-      if (remoteProcessing) return;
-      remoteProcessing = true;
-
-      statusEl.textContent = `원격 캡처 요청 수신 (ID: ${reqId || '없음'}) → 처리 중...`;
-      try {
-        await captureOcrAndSolve(true, reqId);
-      } finally {
-        remoteProcessing = false;
-      }
-    });
-  </script>
-</body>
-</html>
+    // ===== OCR (영어+한국어) =====
+    async function runOcr(dataUrl) {
+      statusEl.textContent = "텍스트 인식 중…(eng+kor)";
+      const { data } = await Tesseract.recognize(dataUrl, OCR_LANG);
+      const rawText = (data.text || "").trim();
+      s
