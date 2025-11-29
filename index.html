@@ -2,9 +2,10 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>카메라 테스트 전용</title>
+  <title>answer-site 카메라 + OCR + 풀이</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       background: #111;
@@ -16,21 +17,20 @@
       font-size: 1.4rem;
       margin-bottom: 0.5rem;
     }
-    #status {
-      margin-top: 8px;
-      font-size: 0.85rem;
-      color: #ccc;
-      white-space: pre-line;
+    p {
+      font-size: 0.9rem;
+      color: #bbb;
     }
-    video {
+    .section { margin-top: 16px; }
+    video, img {
       width: 100%;
       max-width: 480px;
       background: #000;
       border-radius: 10px;
-      margin-top: 12px;
+      display: block;
     }
     button {
-      margin-top: 12px;
+      margin-top: 8px;
       padding: 10px 16px;
       font-size: 15px;
       border-radius: 999px;
@@ -38,67 +38,53 @@
       background: #2a2a2a;
       color: #fff;
     }
-    button:active {
-      opacity: 0.8;
+    button:active { opacity: 0.8; }
+    .buttons {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 0.85rem;
+      color: #ccc;
+      white-space: pre-line;
+    }
+    textarea {
+      width: 100%;
+      max-width: 480px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #181818;
+      color: #eee;
+      padding: 8px;
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
+    #answerArea {
+      font-size: 2rem;
+      font-weight: bold;
+      margin-top: 8px;
     }
   </style>
 </head>
 <body>
-  <h1>📷 카메라 동작 테스트</h1>
-  <p>이 페이지는 카메라가 되는지 확인만 하는 용도다. 안 되면 권한/브라우저 문제.</p>
+  <h1>카메라 + OCR + 자동 풀이 (1~5)</h1>
+  <p>문제+보기(1~5)를 화면에 맞추고 <b>캡처 + OCR + 풀이</b>를 누르면 AI가 정답 번호(1~5)만 알려준다.</p>
 
-  <button id="startBtn">카메라 켜기</button>
-  <div id="status">대기 중...</div>
-  <video id="video" autoplay playsinline muted></video>
+  <!-- 카메라 영역 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">카메라 화면</h2>
+    <video id="video" autoplay playsinline muted></video>
+    <button id="startBtn">카메라 켜기</button>
 
-  <script>
-    const startBtn = document.getElementById('startBtn');
-    const statusEl = document.getElementById('status');
-    const video = document.getElementById('video');
+    <div class="buttons">
+      <button id="captureOcrSolveBtn">캡처 + OCR + 풀이(1~5)</button>
+      <button id="captureOcrBtn">캡처 + OCR만</button>
+    </div>
 
-    let stream = null;
+    <div id="status">대기 중...</div>
+  </div>
 
-    async function startCamera() {
-      statusEl.textContent = '버튼 눌림 → 카메라 요청 중...';
-
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          statusEl.textContent = '이 브라우저는 getUserMedia를 지원하지 않습니다.';
-          return;
-        }
-
-        if (stream) {
-          statusEl.textContent = '이미 카메라가 켜져 있습니다.';
-          return;
-        }
-
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }, // 후면 카메라 우선
-          audio: false,
-        });
-
-        video.srcObject = stream;
-
-        video.addEventListener(
-          'loadedmetadata',
-          () => {
-            statusEl.textContent =
-              '카메라 연결 성공 ✅\n' +
-              '실제 해상도: ' + video.videoWidth + ' x ' + video.videoHeight;
-          },
-          { once: true }
-        );
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent =
-          '카메라 오류 ❌\n' +
-          '메시지: ' + err.name + ' - ' + err.message +
-          '\n\n브라우저 주소창 옆 자물쇠(🔒) 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
-        alert('카메라 오류: ' + err.name + '\\n' + err.message);
-      }
-    }
-
-    startBtn.addEventListener('click', startCamera);
-  </script>
-</body>
-</html>
+  <!-- 캡처된 이미지
