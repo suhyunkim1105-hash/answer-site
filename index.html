@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 + AI 풀이(1~5)</title>
+  <title>answer-site 카메라 + OCR + 풀이(1~5)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * { box-sizing: border-box; }
@@ -16,11 +16,12 @@
     h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
     p  { font-size: 0.9rem; color: #bbb; }
     .section { margin-top: 16px; }
-    video {
+    video, img {
       width: 100%;
       max-width: 480px;
       background: #000;
       border-radius: 10px;
+      display: block;
       margin-top: 12px;
     }
     button {
@@ -33,6 +34,12 @@
       color: #fff;
     }
     button:active { opacity: 0.8; }
+    .buttons {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     #status, #solveStatus {
       margin-top: 8px;
       font-size: 0.85rem;
@@ -58,34 +65,37 @@
   </style>
 </head>
 <body>
-  <h1>카메라 테스트 + AI 자동 풀이(1~5)</h1>
-  <p>1단계: 카메라는 위에서 확인용, 문제는 아래에 직접 붙여넣고 AI가 1~5 중 하나만 고르게 만든다.</p>
+  <h1>카메라 + OCR + 자동 풀이(1~5)</h1>
+  <p>문제+보기(1~5)를 화면에 맞추고 <b>캡처 + OCR + 풀이</b>를 누르면 AI가 정답 번호(1~5)만 알려준다.</p>
 
-  <!-- 카메라 영역 (그냥 미리보기/확인용) -->
+  <!-- 카메라 영역 -->
   <div class="section">
     <h2 style="font-size:1.1rem;">📷 카메라 화면</h2>
     <button id="startBtn">카메라 켜기</button>
     <div id="status">대기 중...</div>
     <video id="video" autoplay playsinline muted></video>
+
+    <div class="buttons">
+      <button id="captureOcrSolveBtn">캡처 + OCR + 풀이(1~5)</button>
+      <button id="captureOcrBtn">캡처 + OCR만</button>
+    </div>
+  </div>
+
+  <!-- 캡처된 이미지 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">🖼 캡처된 이미지</h2>
+    <img id="capturedImage" alt="캡처된 화면" />
   </div>
 
   <!-- 문제 텍스트 입력 + AI 풀이 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">📝 문제 텍스트</h2>
+    <h2 style="font-size:1.1rem;">📝 인식된 텍스트 (수정 가능)</h2>
     <p style="font-size:0.85rem; color:#bbb;">
-      아래에 <b>문제 + 보기 1~5</b>를 그대로 붙여넣고, <b>AI 풀이 버튼</b>을 누르면 1~5 중 정답 번호만 나온다.
+      <b>캡처 + OCR</b> 버튼을 누르면 여기로 글자가 들어온다.  
+      필요하면 보기/번호를 조금 손으로 정리한 뒤 아래 버튼으로 다시 풀이해도 된다.
     </p>
     <textarea id="questionText" rows="10"
-      placeholder="예시:
-In recent years, many universities have started offering online courses...
-
-Question:
-What is the main purpose of the passage?
-1. ...
-2. ...
-3. ...
-4. ...
-5. ..."></textarea>
+      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다."></textarea>
     <button id="solveBtn">이 텍스트로 AI 풀이 요청 (1~5)</button>
     <div id="solveStatus">아직 풀이 요청 없음</div>
   </div>
@@ -96,8 +106,14 @@ What is the main purpose of the passage?
     <div id="answerArea">아직 정답 없음</div>
   </div>
 
+  <!-- 숨겨진 캔버스 -->
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <!-- Tesseract.js (OCR 라이브러리) -->
+  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+
   <script>
-    // ------- 카메라 부분 (이미 잘 되던 코드 기반) -------
+    // ------- 카메라 부분 (이미 검증된 코드 기반) -------
     const startBtn   = document.getElementById('startBtn');
     const statusEl   = document.getElementById('status');
     const video      = document.getElementById('video');
@@ -129,7 +145,7 @@ What is the main purpose of the passage?
           'loadedmetadata',
           () => {
             statusEl.textContent =
-              '카메라 연결 성공 ✅\\n실제 해상도: ' +
+              '카메라 연결 성공 ✅\n실제 해상도: ' +
               video.videoWidth + ' x ' + video.videoHeight;
           },
           { once: true }
@@ -137,36 +153,115 @@ What is the main purpose of the passage?
       } catch (err) {
         console.error(err);
         statusEl.textContent =
-          '카메라 오류 ❌\\n' +
+          '카메라 오류 ❌\n' +
           '메시지: ' + err.name + ' - ' + err.message +
-          '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+          '\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
         alert('카메라 오류: ' + err.name + '\\n' + err.message);
       }
     }
 
     startBtn.addEventListener('click', startCamera);
 
-    // ------- AI 풀이(1~5) 부분 -------
+    // ------- OCR 캡처 관련 -------
+    const canvas         = document.getElementById('canvas');
+    const capturedImage  = document.getElementById('capturedImage');
+    const captureOcrBtn  = document.getElementById('captureOcrBtn');
+    const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
+
+    // 공통: 현재 프레임을 캔버스/이미지로 캡처
+    function captureToCanvasAndImage() {
+      if (!video.videoWidth || !video.videoHeight) {
+        alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 시도하세요.');
+        return false;
+      }
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      capturedImage.src = dataUrl;
+
+      return true;
+    }
+
+    // OCR 텍스트 정리 (URL/시간/저작권 같은 노이즈 제거)
+    function cleanOcrText(raw) {
+      if (!raw) return '';
+      return raw
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .filter(line => !line.match(/https?:\/\//i))   // URL 제거
+        .filter(line => !line.match(/\d{1,2}:\d{2}/))  // 12:34 시간 제거
+        .filter(line => !line.match(/Copyright|©/i))   // 저작권 라인 제거
+        .join('\n');
+    }
+
     const questionTextEl = document.getElementById('questionText');
     const solveBtn       = document.getElementById('solveBtn');
     const solveStatus    = document.getElementById('solveStatus');
     const answerArea     = document.getElementById('answerArea');
 
-    async function solveQuestion() {
-      const text = questionTextEl.value.trim();
-      if (!text) {
-        alert('보낼 문제 텍스트가 없습니다.');
-        return;
+    // 단순 캡처 + OCR만
+    async function captureAndOcr() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
+
+      statusEl.textContent = 'OCR 처리 중...';
+      questionTextEl.value = '';
+      answerArea.textContent = '아직 정답 없음';
+
+      try {
+        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
+        const raw = (result.data.text || '').trim();
+        const cleaned = cleanOcrText(raw);
+        questionTextEl.value = cleaned || raw;
+        statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'OCR 오류: ' + err.message;
+        alert('OCR 오류: ' + err.message);
       }
+    }
 
-      solveStatus.textContent = 'AI 풀이 중...';
-      answerArea.textContent  = '...';
+    // 캡처 + OCR + 바로 풀이
+    async function captureOcrAndSolve() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
 
+      statusEl.textContent   = 'OCR 처리 중...';
+      questionTextEl.value   = '';
+      answerArea.textContent = '풀이 준비 중...';
+
+      try {
+        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
+        const raw = (result.data.text || '').trim();
+        const cleaned = cleanOcrText(raw);
+        const finalText = cleaned || raw;
+
+        questionTextEl.value = finalText;
+        statusEl.textContent = 'OCR 완료, AI 풀이 중...';
+
+        await solveQuestion(finalText);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'OCR/풀이 중 오류: ' + err.message;
+        alert('OCR/풀이 중 오류: ' + err.message);
+      }
+    }
+
+    captureOcrBtn.addEventListener('click', captureAndOcr);
+    captureOcrSolveBtn.addEventListener('click', captureOcrAndSolve);
+
+    // ------- AI 풀이(1~5) 부분 (텍스트→백엔드) -------
+    async function solveQuestion(questionText) {
       try {
         const res = await fetch('/.netlify/functions/solve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: text }),
+          body: JSON.stringify({ question: questionText }),
         });
 
         if (!res.ok) {
@@ -183,7 +278,18 @@ What is the main purpose of the passage?
       }
     }
 
-    solveBtn.addEventListener('click', solveQuestion);
+    async function solveQuestionFromTextarea() {
+      const text = questionTextEl.value.trim();
+      if (!text) {
+        alert('보낼 문제 텍스트가 없습니다.');
+        return;
+      }
+      solveStatus.textContent = 'AI 풀이 중...';
+      answerArea.textContent  = '...';
+      await solveQuestion(text);
+    }
+
+    solveBtn.addEventListener('click', solveQuestionFromTextarea);
   </script>
 </body>
 </html>
