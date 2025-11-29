@@ -87,4 +87,206 @@
     <div id="status">대기 중...</div>
   </div>
 
-  <!-- 캡처된 이미지
+  <!-- 캡처된 이미지 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">캡처된 이미지</h2>
+    <img id="capturedImage" alt="캡처된 화면" />
+  </div>
+
+  <!-- 인식된 텍스트 & 직접 풀이 버튼 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">인식된 텍스트 (필요하면 수정 후 풀이)</h2>
+    <textarea id="questionText" rows="8"
+      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다. 필요하면 여기서 보기/번호를 정리한 뒤 '이 텍스트로만 풀이'를 눌러도 됨."></textarea>
+    <button id="solveBtn">이 텍스트로만 풀이(1~5)</button>
+  </div>
+
+  <!-- 정답 표시 -->
+  <div class="section">
+    <h2 style="font-size:1.1rem;">AI 정답 (1~5 번호)</h2>
+    <div id="answerArea">아직 정답 없음</div>
+  </div>
+
+  <!-- 캔버스 (숨김) -->
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <!-- Tesseract.js (OCR) -->
+  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const captureOcrBtn = document.getElementById('captureOcrBtn');
+    const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
+    const solveBtn = document.getElementById('solveBtn');
+
+    const statusEl = document.getElementById('status');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const capturedImage = document.getElementById('capturedImage');
+    const questionTextEl = document.getElementById('questionText');
+    const answerArea = document.getElementById('answerArea');
+
+    let stream = null;
+
+    // 1) 카메라 켜기 (지금 잘 되던 코드 기반)
+    async function startCamera() {
+      statusEl.textContent = '버튼 눌림 → 카메라 요청 중...';
+
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          statusEl.textContent = '이 브라우저는 카메라 API(getUserMedia)를 지원하지 않습니다.';
+          return;
+        }
+
+        if (stream) {
+          statusEl.textContent = '이미 카메라가 켜져 있습니다.';
+          return;
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false,
+        });
+
+        video.srcObject = stream;
+
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            statusEl.textContent =
+              '카메라 연결 성공 ✅\\n실제 해상도: ' +
+              video.videoWidth + ' x ' + video.videoHeight;
+          },
+          { once: true }
+        );
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent =
+          '카메라 오류 ❌\\n' +
+          '메시지: ' + err.name + ' - ' + err.message +
+          '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+        alert('카메라 오류: ' + err.name + '\\n' + err.message);
+      }
+    }
+
+    // 2) 현재 프레임을 캔버스/이미지로 캡처
+    function captureToCanvasAndImage() {
+      if (!video.videoWidth || !video.videoHeight) {
+        alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 시도하세요.');
+        return false;
+      }
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      capturedImage.src = dataUrl;
+
+      return true;
+    }
+
+    // 3) OCR 텍스트 정리 (URL/시간 같은 노이즈 제거)
+    function cleanOcrText(raw) {
+      if (!raw) return '';
+      return raw
+        .split('\\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .filter(line => !line.match(/https?:\\/\\//i))  // URL 제거
+        .filter(line => !line.match(/\\d{1,2}:\\d{2}/)) // 12:34 같은 시간 제거
+        .filter(line => !line.match(/Copyright|©/i))
+        .join('\\n');
+    }
+
+    // 4) 캡처 + OCR만
+    async function captureAndOcr() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
+
+      statusEl.textContent = 'OCR 처리 중...';
+      questionTextEl.value = '';
+      answerArea.textContent = '아직 정답 없음';
+
+      try {
+        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
+        const raw = (result.data.text || '').trim();
+        const cleaned = cleanOcrText(raw);
+        questionTextEl.value = cleaned || raw;
+        statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'OCR 오류: ' + err.message;
+        alert('OCR 오류: ' + err.message);
+      }
+    }
+
+    // 5) 캡처 + OCR + 바로 풀이(1~5)
+    async function captureOcrAndSolve() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
+
+      statusEl.textContent = 'OCR 처리 중...';
+      questionTextEl.value = '';
+      answerArea.textContent = '풀이 준비 중...';
+
+      try {
+        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
+        const raw = (result.data.text || '').trim();
+        const cleaned = cleanOcrText(raw);
+        const finalText = cleaned || raw;
+
+        questionTextEl.value = finalText;
+        statusEl.textContent = 'OCR 완료, AI 풀이 중...';
+
+        await solveQuestion(finalText);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'OCR/풀이 중 오류: ' + err.message;
+        alert('OCR/풀이 중 오류: ' + err.message);
+      }
+    }
+
+    // 6) textarea 텍스트로만 풀이
+    async function solveQuestionFromTextarea() {
+      const text = questionTextEl.value.trim();
+      if (!text) {
+        alert('보낼 텍스트가 없습니다.');
+        return;
+      }
+      statusEl.textContent = 'AI 풀이 중...';
+      await solveQuestion(text);
+    }
+
+    // 7) Netlify 함수 호출 → 1~5 숫자 받기
+    async function solveQuestion(questionText) {
+      try {
+        const res = await fetch('/.netlify/functions/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: questionText }),
+        });
+
+        if (!res.ok) {
+          throw new Error('서버 오류: ' + res.status);
+        }
+
+        const data = await res.json();
+        answerArea.textContent = data.answer || '응답 포맷 오류';
+        statusEl.textContent = '풀이 완료.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = '풀이 오류: ' + err.message;
+        alert('풀이 오류: ' + err.message);
+      }
+    }
+
+    // 이벤트 연결
+    startBtn.addEventListener('click', startCamera);
+    captureOcrBtn.addEventListener('click', captureAndOcr);
+    captureOcrSolveBtn.addEventListener('click', captureOcrAndSolve);
+    solveBtn.addEventListener('click', solveQuestionFromTextarea);
+  </script>
+</body>
+</html>
