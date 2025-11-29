@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 + OCR + 풀이(1~5)</title>
+  <title>answer-site Reading 연구용 (카메라 + OCR + 풀이)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * { box-sizing: border-box; }
@@ -14,7 +14,8 @@
       padding: 16px;
     }
     h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-    p  { font-size: 0.9rem; color: #bbb; }
+    h2 { font-size: 1.1rem; margin: 12px 0 4px; }
+    p  { font-size: 0.9rem; color: #bbb; margin: 4px 0; }
     .section { margin-top: 16px; }
     video, img {
       width: 100%;
@@ -32,6 +33,7 @@
       border: none;
       background: #2a2a2a;
       color: #fff;
+      cursor: pointer;
     }
     button:active { opacity: 0.8; }
     .buttons {
@@ -48,14 +50,29 @@
     }
     textarea {
       width: 100%;
-      max-width: 480px;
+      max-width: 600px;
       border-radius: 8px;
       border: 1px solid #444;
       background: #181818;
       color: #eee;
       padding: 8px;
       font-size: 0.9rem;
+      margin-top: 4px;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: #aaa;
       margin-top: 8px;
+    }
+    select {
+      margin-top: 4px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #181818;
+      color: #eee;
+      font-size: 0.9rem;
     }
     #answerArea {
       font-size: 2rem;
@@ -65,47 +82,78 @@
   </style>
 </head>
 <body>
-  <h1>📷 카메라 + OCR + 자동 풀이(1~5)</h1>
+  <h1>📚 Reading 연구용: 카메라 + OCR + 자동 풀이(1~5)</h1>
   <p>
-    휴대폰에서 이 페이지를 열고, 문제+보기(1~5)를 비춘 뒤<br />
-    • 직접 <b>캡처 + OCR + 풀이</b> 버튼을 눌러도 되고<br />
-    • 노트북에서 <code>remote.html</code>에서 원격 캡처 요청을 보내도 된다.
+    이 버전은 <b>Reading 지문 + 문제 구조</b>를 연구용으로 맞춘 거야.<br />
+    1) 지문을 한 번만 캡처해서 저장하고,<br />
+    2) 같은 지문에 대한 여러 문제를 따로 캡처해서 풀 수 있음.
   </p>
 
   <!-- 카메라 영역 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">카메라 화면 (휴대폰용)</h2>
+    <h2>1. 카메라</h2>
     <button id="startBtn">카메라 켜기</button>
     <div id="status">대기 중...</div>
     <video id="video" autoplay playsinline muted></video>
 
     <div class="buttons">
-      <button id="captureOcrSolveBtn">📸 캡처 + OCR + 풀이(1~5)</button>
-      <button id="captureOcrBtn">📸 캡처 + OCR만</button>
+      <!-- 빠른 테스트용: 현재 화면을 문제로 보고 곧바로 풀이 -->
+      <button id="captureOcrSolveBtn">📸 (빠른 테스트) 현재 화면 캡처 + OCR + 풀이</button>
     </div>
   </div>
 
   <!-- 캡처된 이미지 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">🖼 캡처된 이미지 (중앙 80%만 사용)</h2>
+    <h2>2. 현재 캡처된 이미지 (중앙 80% 사용)</h2>
     <img id="capturedImage" alt="캡처된 화면" />
   </div>
 
-  <!-- 인식된 텍스트 & AI 풀이 -->
+  <!-- Reading 연구용 텍스트 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">📝 인식된 텍스트 (수정 가능)</h2>
-    <p style="font-size:0.85rem; color:#bbb;">
-      OCR 결과가 여기로 들어온다. 보기 번호가 이상하면 손으로 조금 고쳐서 다시 <b>텍스트로 AI 풀이</b> 눌러도 된다.
+    <h2>3. Reading 연구용 텍스트</h2>
+
+    <!-- 지문 -->
+    <label for="passageText">지문 (Passage) – 같은 지문이면 한 번만 OCR해서 여기 저장</label>
+    <textarea id="passageText" rows="8"
+      placeholder="지문 전체를 한 번만 캡처해서 OCR 결과를 여기 저장합니다."></textarea>
+    <button id="capturePassageBtn">📚 현재 화면을 지문으로 OCR (한 번만)</button>
+    <p style="font-size:0.8rem;">
+      Reading 실제 구조처럼, 지문은 한 번만 캡처하고<br />
+      같은 지문에 대한 여러 문제를 아래에서 따로 캡처해서 풀 수 있게 하는 구조야.
     </p>
-    <textarea id="questionText" rows="10"
-      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다."></textarea>
-    <button id="solveBtn">이 텍스트로 AI 풀이 요청 (1~5)</button>
+
+    <!-- 문제 -->
+    <label for="questionText">문제 + 보기 (Question + Options)</label>
+    <textarea id="questionText" rows="8"
+      placeholder="문제 1개와 보기(1~5)를 캡처하거나 직접 붙여넣습니다."></textarea>
+
+    <div class="buttons">
+      <button id="captureOcrBtn">📸 현재 화면을 문제로 OCR</button>
+      <button id="solveBtn">이 텍스트로 AI 풀이 (1~5)</button>
+    </div>
+
+    <!-- 문제 유형 태그 -->
+    <label for="qTypeSelect">문제 유형 (연구용 태그)</label>
+    <select id="qTypeSelect">
+      <option value="reading_general">일반 객관식 (기본값)</option>
+      <option value="vocab">Vocabulary (단어 의미)</option>
+      <option value="reference">Reference (지시어)</option>
+      <option value="factual">Factual (사실 정보)</option>
+      <option value="negative">Negative Factual</option>
+      <option value="inference">Inference (추론)</option>
+      <option value="function">Function / Purpose</option>
+      <option value="simplification">Sentence Simplification</option>
+      <option value="insert">Insert Sentence</option>
+      <option value="summary">Summary (요약)</option>
+      <option value="table">Table / Organization</option>
+    </select>
+
     <div id="solveStatus">아직 풀이 요청 없음</div>
   </div>
 
   <!-- 정답 표시 -->
   <div class="section">
-    <h2 style="font-size:1.1rem;">✅ AI 정답 (1~5 번호)</h2>
+    <h2>4. AI 정답 (1~5 번호)</h2>
     <div id="answerArea">아직 정답 없음</div>
   </div>
 
@@ -120,7 +168,7 @@
     import { initializeApp }   from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
     import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
 
-    // Firebase 설정 (네 프로젝트 전용)
+    // 🔹 네 Firebase 설정 (이미 확인한 값)
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -132,30 +180,34 @@
       measurementId: "G-C8MRHK5ZGS"
     };
 
-    const ROOM_ID = "room1"; // 휴대폰/노트북 둘 다 같은 값 쓰면 됨
+    const ROOM_ID = "room1"; // 휴대폰/원격 둘 다 동일하게 사용
 
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
     const commandRef = ref(db, `rooms/${ROOM_ID}/command`);
     const resultRef  = ref(db, `rooms/${ROOM_ID}/result`);
 
-    // DOM 요소
+    // --- DOM 요소 ---
     const startBtn   = document.getElementById('startBtn');
     const statusEl   = document.getElementById('status');
     const video      = document.getElementById('video');
 
     const canvas         = document.getElementById('canvas');
     const capturedImage  = document.getElementById('capturedImage');
-    const captureOcrBtn  = document.getElementById('captureOcrBtn');
     const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
 
-    const questionTextEl = document.getElementById('questionText');
-    const solveBtn       = document.getElementById('solveBtn');
-    const solveStatus    = document.getElementById('solveStatus');
-    const answerArea     = document.getElementById('answerArea');
+    const passageTextEl   = document.getElementById('passageText');
+    const capturePassageBtn = document.getElementById('capturePassageBtn');
+    const questionTextEl  = document.getElementById('questionText');
+    const captureOcrBtn   = document.getElementById('captureOcrBtn');
+    const qTypeSelect     = document.getElementById('qTypeSelect');
+    const solveBtn        = document.getElementById('solveBtn');
+    const solveStatus     = document.getElementById('solveStatus');
+    const answerArea      = document.getElementById('answerArea');
 
     let stream = null;
     let lastAnswer = null;
+    let passageText = '';      // 지문 텍스트 캐시
 
     // 원격 요청 처리용
     let lastRemoteRequestId = null;
@@ -187,7 +239,7 @@
           'loadedmetadata',
           () => {
             statusEl.textContent =
-              '카메라 연결 성공 ✅\n실제 해상도: ' +
+              '카메라 연결 성공 ✅\\n실제 해상도: ' +
               video.videoWidth + ' x ' + video.videoHeight;
           },
           { once: true }
@@ -195,10 +247,10 @@
       } catch (err) {
         console.error(err);
         statusEl.textContent =
-          '카메라 오류 ❌\n' +
+          '카메라 오류 ❌\\n' +
           '메시지: ' + err.name + ' - ' + err.message +
-          '\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
-        alert('카메라 오류: ' + err.name + '\n' + err.message);
+          '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+        alert('카메라 오류: ' + err.name + '\\n' + err.message);
       }
     }
 
@@ -220,8 +272,8 @@
       const ctx = canvas.getContext('2d');
       ctx.drawImage(
         video,
-        0, cropTop, video.videoWidth, cropHeight, // 원본에서 잘라올 영역
-        0, 0, canvas.width, canvas.height        // 캔버스 전체에 그리기
+        0, cropTop, video.videoWidth, cropHeight,
+        0, 0, canvas.width, canvas.height
       );
 
       const dataUrl = canvas.toDataURL('image/png');
@@ -234,23 +286,48 @@
     function cleanOcrText(raw) {
       if (!raw) return '';
       return raw
-        .split('\n')
+        .split('\\n')
         .map(line => line.trim())
         .filter(line => line.length > 0)
-        .filter(line => !line.match(/https?:\/\/?/i))   // URL 제거
-        .filter(line => !line.match(/\d{1,2}:\d{2}/))  // 12:34 같은 시간 제거
-        .filter(line => !line.match(/Copyright|©/i))   // 저작권 라인 제거
-        .join('\n');
+        .filter(line => !line.match(/https?:\\/\\//i))   // URL 제거
+        .filter(line => !line.match(/\\d{1,2}:\\d{2}/))  // 12:34 같은 시간 제거
+        .filter(line => !line.match(/Copyright|©/i))     // 저작권 라인 제거
+        .join('\\n');
     }
 
-    // 4) 단순 캡처 + OCR만
-    async function captureAndOcr() {
+    // 4) 지문 캡처 + OCR (한 번만 하면 됨)
+    async function capturePassageOcr() {
       const ok = captureToCanvasAndImage();
       if (!ok) return;
 
-      statusEl.textContent   = 'OCR 처리 중...';
+      statusEl.textContent = '지문 OCR 처리 중...';
+      try {
+        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
+        const raw    = (result.data.text || '').trim();
+        const cleaned   = cleanOcrText(raw);
+        const finalText = cleaned || raw;
+
+        passageText = finalText;
+        passageTextEl.value = finalText;
+        statusEl.textContent = '지문 OCR 완료. 이제 같은 지문에 대한 문제들을 아래에서 캡처해서 풀 수 있습니다.';
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = '지문 OCR 오류: ' + err.message;
+        alert('지문 OCR 오류: ' + err.message);
+      }
+    }
+
+    capturePassageBtn.addEventListener('click', capturePassageOcr);
+
+    // 5) 문제 캡처 + OCR만
+    async function captureQuestionOcr() {
+      const ok = captureToCanvasAndImage();
+      if (!ok) return;
+
+      statusEl.textContent   = '문제 OCR 처리 중...';
       questionTextEl.value   = '';
       answerArea.textContent = '아직 정답 없음';
+      solveStatus.textContent = '아직 풀이 요청 없음';
       lastAnswer             = null;
 
       try {
@@ -260,20 +337,22 @@
         const finalText = cleaned || raw;
 
         questionTextEl.value = finalText;
-        statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
+        statusEl.textContent = '문제 OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
       } catch (err) {
         console.error(err);
-        statusEl.textContent = 'OCR 오류: ' + err.message;
-        alert('OCR 오류: ' + err.message);
+        statusEl.textContent = '문제 OCR 오류: ' + err.message;
+        alert('문제 OCR 오류: ' + err.message);
       }
     }
 
-    // 5) 캡처 + OCR + 바로 풀이 (옵션: sendRemote=true이면 Firebase로도 결과 전송)
+    captureOcrBtn.addEventListener('click', captureQuestionOcr);
+
+    // 6) 캡처 + OCR + 바로 풀이 (빠른 테스트 / 원격용 공통)
     async function captureOcrAndSolve(sendRemote = false, requestId = null) {
       const ok = captureToCanvasAndImage();
       if (!ok) return;
 
-      statusEl.textContent   = 'OCR 처리 중...';
+      statusEl.textContent   = '문제 OCR 처리 중...';
       questionTextEl.value   = '';
       answerArea.textContent = '풀이 준비 중...';
       solveStatus.textContent = 'AI 풀이 대기 중...';
@@ -286,7 +365,7 @@
         const finalText = cleaned || raw;
 
         questionTextEl.value = finalText;
-        statusEl.textContent = 'OCR 완료, AI 풀이 중...';
+        statusEl.textContent = '문제 OCR 완료, AI 풀이 중...';
 
         await solveQuestion(finalText, { sendRemote, requestId });
       } catch (err) {
@@ -296,10 +375,9 @@
       }
     }
 
-    captureOcrBtn.addEventListener('click', () => captureAndOcr());
     captureOcrSolveBtn.addEventListener('click', () => captureOcrAndSolve(false, null));
 
-    // 6) 텍스트로만 AI 풀이
+    // 7) 텍스트로만 AI 풀이
     async function solveQuestionFromTextarea() {
       const text = questionTextEl.value.trim();
       if (!text) {
@@ -313,15 +391,24 @@
 
     solveBtn.addEventListener('click', solveQuestionFromTextarea);
 
-    // 7) 실제 AI 호출 (Netlify Functions의 solve.js)
+    // 8) 실제 AI 호출 (Netlify Functions의 solve.js)
     async function solveQuestion(questionText, options = {}) {
       const { sendRemote = false, requestId = null } = options;
+
+      const section = 'reading';  // 지금은 Reading 연구용만 사용
+      const qType   = qTypeSelect ? qTypeSelect.value : 'reading_general';
+      const passage = (passageTextEl.value || '').trim() || null;
 
       try {
         const res = await fetch('/.netlify/functions/solve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: questionText }),
+          body: JSON.stringify({
+            section,
+            qType,
+            passage,
+            question: questionText
+          }),
         });
 
         if (!res.ok) {
@@ -339,6 +426,9 @@
         if (sendRemote) {
           await set(resultRef, {
             requestId: requestId || null,
+            section,
+            qType,
+            passageSnippet: passage ? passage.slice(0, 200) : null,
             text: questionText,
             answer: finalAnswer,
             image: capturedImage.src || null,
@@ -352,7 +442,7 @@
       }
     }
 
-    // 8) Firebase에서 원격 캡처 명령 듣기
+    // 9) Firebase에서 원격 캡처 명령 듣기 (remote.html → 휴대폰)
     onValue(commandRef, async (snapshot) => {
       const cmd = snapshot.val();
       if (!cmd) return;
@@ -360,7 +450,7 @@
 
       const reqId = cmd.requestId || null;
 
-      // 같은 요청 여러 번 처리하지 않도록 막기
+      // 같은 요청 여러 번 처리하지 않도록
       if (lastRemoteRequestId && reqId && lastRemoteRequestId === reqId) {
         return;
       }
