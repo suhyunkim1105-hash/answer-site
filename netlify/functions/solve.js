@@ -1,77 +1,83 @@
-// netlify/functions/solve.js  (Netlify "Response" 반환 방식)
-export default async (req) => {
+// netlify/functions/solve.js
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      body: 'Method Not Allowed',
+    };
+  }
+
   try {
-    const { question } = await req.json();
+    const body = JSON.parse(event.body || '{}');
+    const question = (body.question || '').trim();
+
     if (!question) {
-      return new Response(JSON.stringify({ error: "Missing question" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'question is required' }),
+      };
     }
 
-    const system = `
-You are a strict exam solver for English/Korean MCQ and blank/underline questions.
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Missing OPENROUTER_API_KEY' }),
+      };
+    }
+
+    const prompt = `
+You are solving an English multiple-choice exam question.
+The text may include extra lines such as URLs, timestamps, or page numbers.
+Ignore any lines that are clearly not part of the exam question or answer choices.
+
 Rules:
-- If choices are present like "[CHOICES] 1) ... | 2) ... | 3) ... | 4) ... | 5) ...":
-  Return ONLY one of: 1 or 2 or 3 or 4 or 5. No words, no punctuation, no explanation.
-- If the prompt mentions underline/blank ("underlined", "밑줄", "빈칸", "blank"):
-  Use the context to choose the best meaning/synonym or fit for the blank.
-  If [HINT] is present, consider it only as a hint.
-  Still return ONLY the index 1~5.
-- If there are NO choices, return ONLY one short word/phrase (English or Korean).
-- Temperature low. Never output anything else.
-`.trim();
+- Focus on the main question and the answer choices labeled 1, 2, 3, 4, 5.
+- Decide which option (1-5) is the single best answer.
+- Output ONLY the number of the correct option: 1, 2, 3, 4, or 5.
+- Do NOT output any words, explanations, punctuation, or extra characters. Just one digit.
 
-    const user = `
-Question/OCR text:
----
+Here is the OCR text (question + options + possible noise):
 ${question}
----
-Remember:
-- If choices exist: answer ONLY 1/2/3/4/5.
-- Otherwise: answer ONLY one short word/phrase.
 `.trim();
 
-    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: "openai/gpt-4o-mini",
+        model: 'openai/gpt-4o-mini',
         messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
+          {
+            role: 'system',
+            content: 'You answer ONLY with a single digit 1-5 (the correct option). Ignore URLs, timestamps, page numbers, and any unrelated text.',
+          },
+          { role: 'user', content: prompt },
         ],
-        temperature: 0.1,
-        max_tokens: 8
+        max_tokens: 5,
+        temperature: 0,
       }),
     });
 
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = (j && (j.error?.message || j.error)) || r.statusText;
-      return new Response(JSON.stringify({ error: msg }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const data = await response.json();
+    const raw = (data.choices?.[0]?.message?.content || '').trim();
 
-    let answer = (j?.choices?.[0]?.message?.content || "").trim();
-    // 혹시 "3) ..." 식이면 숫자만 추출
-    const m = answer.match(/\b([1-5])\b/);
-    if (m) answer = m[1];
+    // 응답에서 1~5 숫자 하나만 뽑기
+    const match = raw.match(/[1-5]/);
+    const finalAnswer = match ? match[0] : raw;
 
-    return new Response(JSON.stringify({ answer }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: e.message || String(e) }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ answer: finalAnswer }),
+    };
+  } catch (err) {
+    console.error(err);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: 'Server error' }),
+    };
   }
 };
-
