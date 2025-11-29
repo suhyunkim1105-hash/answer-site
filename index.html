@@ -2,49 +2,87 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 테스트</title>
+  <title>answer-site 카메라 캡처</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    * {
+      box-sizing: border-box;
+    }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       padding: 16px;
+      margin: 0;
+      background: #111;
+      color: #eee;
+    }
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.5rem;
+    }
+    p {
+      font-size: 0.9rem;
+      color: #bbb;
+    }
+    .section {
+      margin-top: 16px;
     }
     video, img {
       width: 100%;
       max-width: 480px;
       background: #000;
-      border-radius: 8px;
+      border-radius: 10px;
+      display: block;
+    }
+    .buttons {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     button {
-      margin-top: 8px;
+      flex: 1;
+      min-width: 120px;
       padding: 10px 16px;
-      font-size: 16px;
-      border-radius: 8px;
+      font-size: 15px;
+      border-radius: 999px;
       border: none;
-      background: #333;
+      background: #2a2a2a;
       color: #fff;
     }
     button:active {
       opacity: 0.8;
     }
+    #status {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      color: #aaa;
+    }
   </style>
 </head>
 <body>
-  <h1>카메라 캡처 테스트</h1>
-  <p>1단계: 카메라 켜고, 버튼 누르면 화면을 사진으로 캡처하기만 한다.</p>
+  <h1>카메라 캡처 테스트 (1단계)</h1>
+  <p>휴대폰에서 카메라 켜고, 버튼 누르면 화면을 고해상도로 캡처하는 것까지.</p>
 
   <!-- 카메라 프리뷰 -->
-  <h2>카메라 화면</h2>
-  <video id="camera" autoplay playsinline muted></video>
-  <br />
-  <button id="startBtn">카메라 켜기</button>
-  <button id="captureBtn">지금 화면 캡처</button>
+  <div class="section">
+    <h2 style="font-size:1.1rem;">카메라 화면</h2>
+    <video id="camera" autoplay playsinline muted></video>
+
+    <div class="buttons">
+      <button id="startBtn">카메라 켜기</button>
+      <button id="captureBtn">지금 화면 캡처</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
 
   <!-- 캡처된 이미지 -->
-  <h2>캡처된 이미지</h2>
-  <img id="capturedImage" alt="캡처된 화면" />
+  <div class="section">
+    <h2 style="font-size:1.1rem;">캡처된 이미지</h2>
+    <img id="capturedImage" alt="캡처된 화면" />
+  </div>
 
-  <!-- 캔버스 (숨김) -->
+  <!-- 캔버스 (화면에는 안 보이게 숨김) -->
   <canvas id="canvas" style="display:none;"></canvas>
 
   <script>
@@ -53,23 +91,41 @@
     const captureBtn = document.getElementById('captureBtn');
     const canvas = document.getElementById('canvas');
     const capturedImage = document.getElementById('capturedImage');
+    const statusEl = document.getElementById('status');
 
     let stream = null;
 
-    // 1) 카메라 켜기 (후면 카메라 우선)
+    // 1) 카메라 켜기 (후면 + 고해상도 요청)
     async function startCamera() {
       try {
-        if (stream) return; // 이미 켜져 있으면 무시
+        if (stream) {
+          statusEl.textContent = '이미 카메라가 켜져 있습니다.';
+          return;
+        }
+
+        statusEl.textContent = '카메라 요청 중...';
 
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: {
+            facingMode: { ideal: 'environment' }, // 후면 카메라 우선
+            width: { ideal: 1920 },               // 가능하면 FHD
+            height: { ideal: 1080 }
+          },
           audio: false,
         });
 
         video.srcObject = stream;
+
+        video.addEventListener('loadedmetadata', () => {
+          statusEl.textContent =
+            '실제 영상 해상도: ' +
+            video.videoWidth + ' x ' + video.videoHeight;
+          console.log('실제 영상 해상도:', video.videoWidth, video.videoHeight);
+        }, { once: true });
       } catch (err) {
         console.error(err);
-        alert('카메라를 불러올 수 없습니다. 브라우저 권한을 확인하세요.');
+        alert('카메라를 불러올 수 없습니다. 브라우저 권한/설정을 확인하세요.');
+        statusEl.textContent = '카메라 오류: ' + err.message;
       }
     }
 
@@ -80,13 +136,18 @@
         return;
       }
 
+      // 비디오 실제 해상도로 캔버스 설정
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
+
+      // 원본 그대로 그리기 (추후 문제 영역만 자르려면 여기서 crop 가능)
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      const dataUrl = canvas.toDataURL('image/png');
+      const dataUrl = canvas.toDataURL('image/png'); // 고화질 PNG
       capturedImage.src = dataUrl;
+
+      statusEl.textContent = '프레임 캡처 완료.';
     }
 
     startBtn.addEventListener('click', startCamera);
