@@ -2,10 +2,9 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 + OCR + 풀이</title>
+  <title>answer-site 카메라 테스트 (복구용)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       background: #111;
@@ -17,20 +16,21 @@
       font-size: 1.4rem;
       margin-bottom: 0.5rem;
     }
-    p {
-      font-size: 0.9rem;
-      color: #bbb;
+    #status {
+      margin-top: 8px;
+      font-size: 0.85rem;
+      color: #ccc;
+      white-space: pre-line;
     }
-    .section { margin-top: 16px; }
-    video, img {
+    video {
       width: 100%;
       max-width: 480px;
       background: #000;
       border-radius: 10px;
-      display: block;
+      margin-top: 12px;
     }
     button {
-      margin-top: 8px;
+      margin-top: 12px;
       padding: 10px 16px;
       font-size: 15px;
       border-radius: 999px;
@@ -38,103 +38,32 @@
       background: #2a2a2a;
       color: #fff;
     }
-    button:active { opacity: 0.8; }
-    .buttons {
-      margin-top: 8px;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    #status {
-      margin-top: 8px;
-      font-size: 0.85rem;
-      color: #ccc;
-      white-space: pre-line;
-    }
-    textarea {
-      width: 100%;
-      max-width: 480px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
-      color: #eee;
-      padding: 8px;
-      font-size: 0.9rem;
-      margin-top: 8px;
-    }
-    #answerArea {
-      font-size: 2rem;
-      font-weight: bold;
-      margin-top: 8px;
+    button:active {
+      opacity: 0.8;
     }
   </style>
 </head>
 <body>
-  <h1>카메라 + OCR + 자동 풀이 (1~5)</h1>
-  <p>문제+보기(1~5)를 화면에 맞추고 <b>캡처 + OCR + 풀이</b>를 누르면 AI가 정답 번호(1~5)만 알려준다.</p>
+  <h1>📷 카메라 동작 테스트 (복구용)</h1>
+  <p>이 페이지는 카메라만 확인하는 용도다. 이게 확실히 된 다음에 OCR/AI를 다시 얹자.</p>
 
-  <!-- 카메라 영역 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">카메라 화면</h2>
-    <video id="video" autoplay playsinline muted></video>
-    <button id="startBtn">카메라 켜기</button>
-
-    <div class="buttons">
-      <button id="captureOcrSolveBtn">캡처 + OCR + 풀이(1~5)</button>
-      <button id="captureOcrBtn">캡처 + OCR만</button>
-    </div>
-
-    <div id="status">대기 중...</div>
-  </div>
-
-  <!-- 캡처된 이미지 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">캡처된 이미지</h2>
-    <img id="capturedImage" alt="캡처된 화면" />
-  </div>
-
-  <!-- 인식된 텍스트 & 직접 풀이 버튼 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">인식된 텍스트 (필요하면 수정 후 풀이)</h2>
-    <textarea id="questionText" rows="8"
-      placeholder="캡처 + OCR를 누르면 여기에 텍스트가 표시됩니다. 필요하면 여기서 보기/번호를 정리한 뒤 '이 텍스트로만 풀이'를 눌러도 됨."></textarea>
-    <button id="solveBtn">이 텍스트로만 풀이(1~5)</button>
-  </div>
-
-  <!-- 정답 표시 -->
-  <div class="section">
-    <h2 style="font-size:1.1rem;">AI 정답 (1~5 번호)</h2>
-    <div id="answerArea">아직 정답 없음</div>
-  </div>
-
-  <!-- 캔버스 (숨김) -->
-  <canvas id="canvas" style="display:none;"></canvas>
-
-  <!-- Tesseract.js (OCR) -->
-  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+  <button id="startBtn">카메라 켜기</button>
+  <div id="status">대기 중...</div>
+  <video id="video" autoplay playsinline muted></video>
 
   <script>
     const startBtn = document.getElementById('startBtn');
-    const captureOcrBtn = document.getElementById('captureOcrBtn');
-    const captureOcrSolveBtn = document.getElementById('captureOcrSolveBtn');
-    const solveBtn = document.getElementById('solveBtn');
-
     const statusEl = document.getElementById('status');
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const capturedImage = document.getElementById('capturedImage');
-    const questionTextEl = document.getElementById('questionText');
-    const answerArea = document.getElementById('answerArea');
 
     let stream = null;
 
-    // 1) 카메라 켜기 (지금 잘 되던 코드 기반)
     async function startCamera() {
       statusEl.textContent = '버튼 눌림 → 카메라 요청 중...';
 
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          statusEl.textContent = '이 브라우저는 카메라 API(getUserMedia)를 지원하지 않습니다.';
+          statusEl.textContent = '이 브라우저는 getUserMedia를 지원하지 않습니다.';
           return;
         }
 
@@ -154,139 +83,22 @@
           'loadedmetadata',
           () => {
             statusEl.textContent =
-              '카메라 연결 성공 ✅\\n실제 해상도: ' +
-              video.videoWidth + ' x ' + video.videoHeight;
+              '카메라 연결 성공 ✅\n' +
+              '실제 해상도: ' + video.videoWidth + ' x ' + video.videoHeight;
           },
           { once: true }
         );
       } catch (err) {
         console.error(err);
         statusEl.textContent =
-          '카메라 오류 ❌\\n' +
+          '카메라 오류 ❌\n' +
           '메시지: ' + err.name + ' - ' + err.message +
-          '\\n브라우저 주소창 옆 자물쇠 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
+          '\n\n브라우저 주소창 옆 자물쇠(🔒) 아이콘에서 카메라 권한이 차단돼 있지 않은지 확인해.';
         alert('카메라 오류: ' + err.name + '\\n' + err.message);
       }
     }
 
-    // 2) 현재 프레임을 캔버스/이미지로 캡처
-    function captureToCanvasAndImage() {
-      if (!video.videoWidth || !video.videoHeight) {
-        alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 시도하세요.');
-        return false;
-      }
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const dataUrl = canvas.toDataURL('image/png');
-      capturedImage.src = dataUrl;
-
-      return true;
-    }
-
-    // 3) OCR 텍스트 정리 (URL/시간 같은 노이즈 제거)
-    function cleanOcrText(raw) {
-      if (!raw) return '';
-      return raw
-        .split('\\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .filter(line => !line.match(/https?:\\/\\//i))  // URL 제거
-        .filter(line => !line.match(/\\d{1,2}:\\d{2}/)) // 12:34 같은 시간 제거
-        .filter(line => !line.match(/Copyright|©/i))
-        .join('\\n');
-    }
-
-    // 4) 캡처 + OCR만
-    async function captureAndOcr() {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-
-      statusEl.textContent = 'OCR 처리 중...';
-      questionTextEl.value = '';
-      answerArea.textContent = '아직 정답 없음';
-
-      try {
-        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-        const raw = (result.data.text || '').trim();
-        const cleaned = cleanOcrText(raw);
-        questionTextEl.value = cleaned || raw;
-        statusEl.textContent = 'OCR 완료. 필요하면 텍스트를 정리한 뒤, 풀이 버튼을 누르세요.';
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = 'OCR 오류: ' + err.message;
-        alert('OCR 오류: ' + err.message);
-      }
-    }
-
-    // 5) 캡처 + OCR + 바로 풀이(1~5)
-    async function captureOcrAndSolve() {
-      const ok = captureToCanvasAndImage();
-      if (!ok) return;
-
-      statusEl.textContent = 'OCR 처리 중...';
-      questionTextEl.value = '';
-      answerArea.textContent = '풀이 준비 중...';
-
-      try {
-        const result = await Tesseract.recognize(canvas, 'eng', { logger: m => console.log(m) });
-        const raw = (result.data.text || '').trim();
-        const cleaned = cleanOcrText(raw);
-        const finalText = cleaned || raw;
-
-        questionTextEl.value = finalText;
-        statusEl.textContent = 'OCR 완료, AI 풀이 중...';
-
-        await solveQuestion(finalText);
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = 'OCR/풀이 중 오류: ' + err.message;
-        alert('OCR/풀이 중 오류: ' + err.message);
-      }
-    }
-
-    // 6) textarea 텍스트로만 풀이
-    async function solveQuestionFromTextarea() {
-      const text = questionTextEl.value.trim();
-      if (!text) {
-        alert('보낼 텍스트가 없습니다.');
-        return;
-      }
-      statusEl.textContent = 'AI 풀이 중...';
-      await solveQuestion(text);
-    }
-
-    // 7) Netlify 함수 호출 → 1~5 숫자 받기
-    async function solveQuestion(questionText) {
-      try {
-        const res = await fetch('/.netlify/functions/solve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: questionText }),
-        });
-
-        if (!res.ok) {
-          throw new Error('서버 오류: ' + res.status);
-        }
-
-        const data = await res.json();
-        answerArea.textContent = data.answer || '응답 포맷 오류';
-        statusEl.textContent = '풀이 완료.';
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = '풀이 오류: ' + err.message;
-        alert('풀이 오류: ' + err.message);
-      }
-    }
-
-    // 이벤트 연결
     startBtn.addEventListener('click', startCamera);
-    captureOcrBtn.addEventListener('click', captureAndOcr);
-    captureOcrSolveBtn.addEventListener('click', captureOcrAndSolve);
-    solveBtn.addEventListener('click', solveQuestionFromTextarea);
   </script>
 </body>
 </html>
