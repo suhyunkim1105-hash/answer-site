@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site 카메라 캡처</title>
+  <title>answer-site 카메라 캡처 + 줌</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     * {
@@ -57,11 +57,23 @@
       font-size: 0.8rem;
       color: #aaa;
     }
+    .zoom-wrapper {
+      margin-top: 8px;
+    }
+    .zoom-wrapper label {
+      font-size: 0.85rem;
+      color: #ccc;
+      display: block;
+      margin-bottom: 4px;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
   </style>
 </head>
 <body>
-  <h1>카메라 캡처 테스트 (1단계)</h1>
-  <p>휴대폰에서 카메라 켜고, 버튼 누르면 화면을 고해상도로 캡처하는 것까지.</p>
+  <h1>카메라 캡처 테스트 (줌 지원)</h1>
+  <p>휴대폰에서 카메라 켜고, 줌 조절 후 버튼으로 화면을 캡처.</p>
 
   <!-- 카메라 프리뷰 -->
   <div class="section">
@@ -73,6 +85,14 @@
       <button id="captureBtn">지금 화면 캡처</button>
     </div>
 
+    <!-- 줌 슬라이더 -->
+    <div class="zoom-wrapper" id="zoomWrapper" style="display:none;">
+      <label for="zoomRange">
+        줌(배율) 조절: <span id="zoomValue"></span>
+      </label>
+      <input type="range" id="zoomRange" />
+    </div>
+
     <div id="status"></div>
   </div>
 
@@ -82,7 +102,7 @@
     <img id="capturedImage" alt="캡처된 화면" />
   </div>
 
-  <!-- 캔버스 (화면에는 안 보이게 숨김) -->
+  <!-- 캔버스 (숨김) -->
   <canvas id="canvas" style="display:none;"></canvas>
 
   <script>
@@ -93,7 +113,14 @@
     const capturedImage = document.getElementById('capturedImage');
     const statusEl = document.getElementById('status');
 
+    const zoomWrapper = document.getElementById('zoomWrapper');
+    const zoomRange = document.getElementById('zoomRange');
+    const zoomValue = document.getElementById('zoomValue');
+
     let stream = null;
+    let videoTrack = null;
+    let zoomCap = null;   // capabilities.zoom
+    let zoomSetting = null; // 현재 zoom 값
 
     // 1) 카메라 켜기 (후면 + 고해상도 요청)
     async function startCamera() {
@@ -107,21 +134,51 @@
 
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: 'environment' }, // 후면 카메라 우선
-            width: { ideal: 1920 },               // 가능하면 FHD
-            height: { ideal: 1080 }
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
           audio: false,
         });
 
         video.srcObject = stream;
 
-        video.addEventListener('loadedmetadata', () => {
-          statusEl.textContent =
-            '실제 영상 해상도: ' +
-            video.videoWidth + ' x ' + video.videoHeight;
-          console.log('실제 영상 해상도:', video.videoWidth, video.videoHeight);
-        }, { once: true });
+        video.addEventListener(
+          'loadedmetadata',
+          () => {
+            statusEl.textContent =
+              '실제 영상 해상도: ' +
+              video.videoWidth + ' x ' + video.videoHeight;
+            console.log('실제 영상 해상도:', video.videoWidth, video.videoHeight);
+          },
+          { once: true }
+        );
+
+        // 줌 지원 여부 검사
+        videoTrack = stream.getVideoTracks()[0];
+        const capabilities = videoTrack.getCapabilities
+          ? videoTrack.getCapabilities()
+          : {};
+
+        if (capabilities.zoom) {
+          zoomCap = capabilities.zoom;
+          const settings = videoTrack.getSettings();
+
+          // 슬라이더 세팅
+          zoomRange.min = zoomCap.min;
+          zoomRange.max = zoomCap.max;
+          zoomRange.step = zoomCap.step || 0.1;
+          zoomRange.value = settings.zoom || zoomCap.min;
+
+          zoomSetting = parseFloat(zoomRange.value);
+          zoomValue.textContent = zoomSetting.toFixed(2) + 'x';
+
+          zoomWrapper.style.display = 'block';
+          statusEl.textContent += ' / 줌 지원됨';
+        } else {
+          zoomWrapper.style.display = 'none';
+          statusEl.textContent += ' / 이 기기에서는 카메라 줌 미지원';
+        }
       } catch (err) {
         console.error(err);
         alert('카메라를 불러올 수 없습니다. 브라우저 권한/설정을 확인하세요.');
@@ -129,22 +186,38 @@
       }
     }
 
-    // 2) 현재 프레임 캡처
+    // 2) 줌 슬라이더 변경 시 카메라 줌 변경
+    async function onZoomChange(e) {
+      if (!videoTrack || !zoomCap) return;
+
+      const value = parseFloat(e.target.value);
+      zoomSetting = value;
+      zoomValue.textContent = value.toFixed(2) + 'x';
+
+      try {
+        await videoTrack.applyConstraints({
+          advanced: [{ zoom: value }],
+        });
+      } catch (err) {
+        console.error('줌 적용 오류:', err);
+        statusEl.textContent = '줌 적용 중 오류 발생';
+      }
+    }
+
+    // 3) 현재 프레임 캡처
     function captureFrame() {
       if (!video.videoWidth || !video.videoHeight) {
         alert('카메라가 아직 준비되지 않았습니다. 1~2초 뒤 다시 눌러보세요.');
         return;
       }
 
-      // 비디오 실제 해상도로 캔버스 설정
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
 
-      // 원본 그대로 그리기 (추후 문제 영역만 자르려면 여기서 crop 가능)
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      const dataUrl = canvas.toDataURL('image/png'); // 고화질 PNG
+      const dataUrl = canvas.toDataURL('image/png');
       capturedImage.src = dataUrl;
 
       statusEl.textContent = '프레임 캡처 완료.';
@@ -152,6 +225,7 @@
 
     startBtn.addEventListener('click', startCamera);
     captureBtn.addEventListener('click', captureFrame);
+    zoomRange.addEventListener('input', onZoomChange);
   </script>
 </body>
 </html>
