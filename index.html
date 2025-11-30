@@ -2,67 +2,101 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Capture & STT</title>
+  <title>answer-site | Camera (Phone)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
   <!-- Tesseract OCR -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+  <script src="https://unpkg.com/tesseract.js@4/dist/tesseract.min.js"></script>
 
   <style>
-    body { margin: 0; background: #000; overflow: hidden; }
-    #video {
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 8px;
       background: #000;
-    }
-    #msg {
-      position: absolute;
-      top: 0; left: 0;
-      color: #ffcccc;
-      background: rgba(0,0,0,0.6);
-      padding: 6px 10px;
-      font-size: 12px;
-      z-index: 10;
-      white-space: pre-wrap;
-      max-width: 100vw;
-    }
-    #zoomBar {
-      position: absolute;
-      bottom: 8px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0,0,0,0.6);
       color: #fff;
-      padding: 4px 8px;
+      font-family: system-ui, sans-serif;
+    }
+    .wrap {
+      width: 100%;
+    }
+    #videoContainer {
+      position: relative;
+      width: 100%;
+      max-height: calc(100vh - 90px);
+      overflow: hidden;
+      background: #000;
+      border-radius: 8px;
+    }
+    #video {
+      width: 100%;
+      height: auto;
+      transform-origin: center center;
+    }
+    #overlayCenter {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 60%;
+      height: 40%;
+      transform: translate(-50%, -50%);
+      border: 2px solid rgba(0, 255, 0, 0.6);
       border-radius: 6px;
+      pointer-events: none;
+    }
+
+    #bottomPanel {
+      margin-top: 8px;
       font-size: 12px;
-      z-index: 10;
+    }
+    #status {
+      margin-bottom: 4px;
+      color: #c4f1ff;
+      white-space: pre-wrap;
+    }
+    .row {
       display: flex;
       align-items: center;
       gap: 6px;
+      margin-bottom: 4px;
     }
-    #zoomSlider {
-      width: 160px;
+    .label {
+      font-size: 11px;
+      color: #aaa;
+    }
+    #zoomRange {
+      width: 100%;
     }
   </style>
 </head>
 <body>
+<div class="wrap">
+  <div id="videoContainer">
+    <video id="video" autoplay playsinline></video>
+    <!-- 중앙 OCR 영역 가이드 박스 -->
+    <div id="overlayCenter"></div>
+  </div>
 
-<div id="msg"></div>
-<video id="video" autoplay playsinline></video>
+  <div id="bottomPanel">
+    <div id="status">카메라 준비 중...</div>
 
-<div id="zoomBar">
-  <span>Zoom</span>
-  <input id="zoomSlider" type="range" min="1" max="3" step="0.1" value="1">
-  <span id="zoomValue">1.0×</span>
+    <div class="row">
+      <span class="label">배율</span>
+      <input id="zoomRange" type="range" min="1" max="2.2" step="0.05" value="1">
+    </div>
+    <div class="row">
+      <span class="label">현재 OCR 언어</span>
+      <span id="currentLang">eng+kor</span>
+    </div>
+  </div>
 </div>
 
 <script>
-  // ---------------------- Firebase ----------------------
+  // ---------------- Firebase 초기화 ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -76,231 +110,156 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const video      = document.getElementById('video');
-  const msg        = document.getElementById('msg');
-  const zoomSlider = document.getElementById('zoomSlider');
-  const zoomValue  = document.getElementById('zoomValue');
+  const video        = document.getElementById('video');
+  const statusEl     = document.getElementById('status');
+  const zoomRange    = document.getElementById('zoomRange');
+  const currentLang  = document.getElementById('currentLang');
 
-  let passageCache  = "";
-  let questionCache = "";
-  let sttCache      = "";
-  let currentZoom   = 1.0;
-  let videoTrack    = null;
-  let zoomCap       = null;   // 카메라 자체 줌 지원 여부
+  let currentOCRLang = "eng+kor";
+  let lastCmdTs = 0;
+  let streamingInterval = null;
 
-  // ---------------------- Camera Init ----------------------
+  // ---------- 카메라 세팅 ----------
   async function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      msg.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
-      return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+      statusEl.textContent = "카메라 ON (원격에서 캡처 요청 시 OCR 수행)";
+      startLiveFrameStream();
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "카메라 접근 실패: " + e.toString();
     }
-
-    const tries = [
-      { audio: false, video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      { audio: false, video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      { audio: false, video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
-      { audio: false, video: true }
-    ];
-
-    for (const c of tries) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(c);
-        const tracks = stream.getVideoTracks();
-        if (tracks && tracks[0]) {
-          videoTrack = tracks[0];
-          try {
-            const caps = videoTrack.getCapabilities && videoTrack.getCapabilities();
-            if (caps && typeof caps.zoom === "object") {
-              zoomCap = caps.zoom;
-            }
-          } catch {}
-        }
-        video.srcObject = stream;
-        msg.textContent = "카메라 준비됨";
-        return;
-      } catch (e) {
-        console.warn("camera attempt failed", c, e);
-      }
-    }
-    msg.textContent = "카메라 시작 실패. 권한/보안앱 설정 확인.";
-  }
-  startCamera();
-
-  async function waitVideoReady() {
-    if (video.videoWidth && video.videoHeight) return;
-    await new Promise(resolve => {
-      const t = setTimeout(resolve, 3000);
-      video.addEventListener('loadedmetadata', () => {
-        clearTimeout(t);
-        resolve();
-      }, { once: true });
-    });
   }
 
-  // ---------------------- Zoom Control ----------------------
-  zoomSlider.addEventListener("input", () => {
-    currentZoom = parseFloat(zoomSlider.value) || 1;
-    zoomValue.textContent = currentZoom.toFixed(1) + "×";
-
-    // 카메라가 진짜 zoom 지원하면 그걸 사용
-    if (videoTrack && zoomCap) {
-      const zMin = zoomCap.min ?? 1;
-      const zMax = zoomCap.max ?? 3;
-      const mapped = Math.min(zMax, Math.max(zMin, currentZoom));
-      videoTrack.applyConstraints({ advanced: [{ zoom: mapped }] }).catch(() => {});
-    }
-
-    // 미리보기는 그냥 그대로 (이미 화면 전체라 CSS 줌은 굳이 안 함)
+  zoomRange.addEventListener("input", () => {
+    const scale = parseFloat(zoomRange.value);
+    video.style.transform = `scale(${scale})`;
   });
 
-  // ---------------------- OCR (zoom 반영: 중앙부 더 좁게 크롭) ----------------------
-  async function captureAndOcr(target, lang, mode) {
-    await waitVideoReady();
-
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (!w || !h) {
-      msg.textContent = "카메라 준비 안 됨";
-      return;
-    }
-
-    // 기본 중앙 80%에서 시작, zoom 값에 따라 더 좁은 영역만 사용
-    const baseFactor = 0.8;
-    const zoomFactor = Math.max(1, currentZoom);
-    const cropW = w * baseFactor / zoomFactor;
-    const cropH = h * baseFactor / zoomFactor;
-    const cropX = (w - cropW) / 2;
-    const cropY = (h - cropH) / 2;
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = cropW;
-    canvas.height = cropH;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-    const tLang = (lang === "eng") ? "eng" : "eng+kor";
-    msg.textContent = `OCR 중 (${tLang}, zoom=${currentZoom.toFixed(1)}×)...`;
-
-    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), tLang);
-    const text = (data.text || "").trim();
-    const confidence = (typeof data.confidence === "number")
-      ? Math.round(data.confidence)
-      : null;
-
-    msg.textContent = confidence ? `OCR 완료 (${confidence}%)` : "OCR 완료";
-
-    const now = Date.now();
-    if (target === "passage") {
-      passageCache = text;
-      db.ref("p2p/state").update({
-        mode,
-        passage: passageCache,
-        passageConf: confidence,
-        updatedAt: now
-      });
-    } else if (target === "question") {
-      questionCache = text;
-      db.ref("p2p/state").update({
-        mode,
-        question: questionCache,
-        questionConf: confidence,
-        updatedAt: now
-      });
-    }
-  }
-
-  // ---------------------- STT ----------------------
-  let recognition = null;
-  let sttRunning  = false;
-
-  function startSTT(mode) {
-    if (sttRunning) return;
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      msg.textContent = "STT 미지원 브라우저 (Chrome 권장)";
-      return;
-    }
-
-    recognition = new SR();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    sttCache = "";
-    db.ref("p2p/state").update({
-      mode,
-      stt: "",
-      sttUpdatedAt: Date.now()
-    });
-
-    recognition.onresult = (e) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const txt = e.results[i][0].transcript;
-        if (e.results[i].isFinal) {
-          sttCache += txt + "\n";
-        } else {
-          interim += txt;
-        }
-      }
-      let full = (sttCache + "\n" + interim).trim();
-      if (full.length > 4000) full = full.slice(-4000);
-      sttCache = full;
-      db.ref("p2p/state").update({
-        mode,
-        stt: sttCache,
-        sttUpdatedAt: Date.now()
-      });
-      msg.textContent = "STT 수신 중...";
-    };
-
-    recognition.onstart = () => {
-      sttRunning = true;
-      msg.textContent = "STT 시작 (마이크)";
-    };
-    recognition.onend = () => {
-      sttRunning = false;
-      msg.textContent = "STT 종료";
-    };
-
-    recognition.start();
-  }
-
-  function stopSTT() {
-    if (recognition && sttRunning) {
-      recognition.stop();
-    }
-  }
-
-  // ---------------------- Command Listener ----------------------
-  let lastCmdTs = 0;
-
-  function handleCommand(cmd) {
-    const { type, mode, lang } = cmd;
-    if (type === "capture_passage_new") {
-      captureAndOcr("passage", lang, mode);
-    } else if (type === "capture_question_new") {
-      captureAndOcr("question", lang, mode);
-    } else if (type === "stt_start") {
-      startSTT(mode);
-    } else if (type === "stt_stop") {
-      stopSTT();
-    } else if (type === "clear_state") {
-      passageCache = "";
-      questionCache = "";
-      sttCache = "";
-      db.ref("p2p/state").set({ mode, passage: "", question: "", stt: "", updatedAt: Date.now() });
-      msg.textContent = "상태 초기화";
-    }
-  }
-
+  // ---------- Firebase 명령 구독 ----------
   db.ref("p2p/command").on("value", snap => {
     const cmd = snap.val();
     if (!cmd) return;
     if (!cmd.timestamp || cmd.timestamp <= lastCmdTs) return;
     lastCmdTs = cmd.timestamp;
-    handleCommand(cmd);
+
+    const type = cmd.type;
+    currentOCRLang = cmd.lang || "eng+kor";
+    currentLang.textContent = currentOCRLang;
+
+    if (type === "capture_passage_new") {
+      captureAndOCR("passage");
+    } else if (type === "capture_question_new") {
+      captureAndOCR("question");
+    } else if (type === "clear_state") {
+      clearState();
+    }
   });
+
+  // ---------- OCR 캡처 ----------
+  async function captureAndOCR(target) {
+    try {
+      if (!video.videoWidth) {
+        statusEl.textContent = "비디오 준비 전이라 OCR 불가.";
+        return;
+      }
+
+      statusEl.textContent = `OCR (${target}) 진행 중...`;
+
+      // 중앙부만 크롭해서 OCR (속도 향상)
+      const fullW = video.videoWidth;
+      const fullH = video.videoHeight;
+
+      const cropW = Math.floor(fullW * 0.7);
+      const cropH = Math.floor(fullH * 0.5);
+      const sx = Math.floor((fullW - cropW) / 2);
+      const sy = Math.floor((fullH - cropH) / 2);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cropW;
+      canvas.height = cropH;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+
+      const lang = currentOCRLang || "eng+kor";
+
+      const result = await Tesseract.recognize(canvas, lang, {
+        logger: m => {
+          if (m.status === "recognizing text") {
+            statusEl.textContent = `OCR (${target}) 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
+          }
+        }
+      });
+
+      const text = (result.data.text || "").trim();
+      const conf = result.data.confidence || 0;
+
+      statusEl.textContent = `OCR 완료 (${target}) | 평균 신뢰도: ${conf.toFixed(1)}%`;
+
+      const update = {};
+      if (target === "passage") {
+        update.passage = text;
+      } else {
+        update.question = text;
+      }
+      update.ocrTarget = target;
+      update.ocrConfidence = conf;
+      update.ocrUpdatedAt = Date.now();
+
+      await db.ref("p2p/state").update(update);
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "OCR 에러: " + e.toString();
+    }
+  }
+
+  function clearState() {
+    db.ref("p2p/state").set({
+      mode: "reading",
+      passage: "",
+      question: "",
+      stt: "",
+      updatedAt: Date.now()
+    });
+    statusEl.textContent = "상태 초기화 완료.";
+  }
+
+  // ---------- 휴대폰 → 원격으로 실시간 프레임 전송 ----------
+  function startLiveFrameStream() {
+    if (streamingInterval) return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    streamingInterval = setInterval(() => {
+      if (!video.videoWidth) return;
+
+      const targetW = 320;
+      const ratio   = targetW / video.videoWidth;
+      const targetH = Math.floor(video.videoHeight * ratio);
+
+      canvas.width  = targetW;
+      canvas.height = targetH;
+
+      ctx.drawImage(video, 0, 0, targetW, targetH);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.4); // 낮은 화질로 용량 줄이기
+
+      db.ref("p2p/liveFrame").set({
+        dataUrl,
+        ts: Date.now()
+      });
+    }, 600); // 약 1.5fps 정도
+  }
+
+  startCamera();
 </script>
 </body>
 </html>
