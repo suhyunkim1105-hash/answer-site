@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>answer-site | Result</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
@@ -12,7 +13,7 @@
     body {
       font-family: system-ui, sans-serif;
       margin: 0;
-      padding: 16px;
+      padding: 10px;
       background: #f5f5f5;
       box-sizing: border-box;
       display: flex;
@@ -20,42 +21,65 @@
     }
     .wrap {
       width: 100%;
-      max-width: 900px;
+      box-sizing: border-box;
     }
-    h2 { margin: 4px 0 8px 0; font-size: 24px; }
-    #modeLabel { font-size: 14px; color:#555; }
-    #status { font-size: 13px; color:#555; margin-top:6px; }
+    h2 {
+      margin: 2px 0 4px 0;
+      font-size: 18px;
+    }
+    #modeLabel {
+      font-size: 12px;
+      color:#555;
+    }
+    #status {
+      font-size: 11px;
+      color:#555;
+      margin-top:4px;
+    }
 
     .box {
-      margin-top: 14px;
-      padding: 16px;
+      margin-top: 10px;
+      padding: 10px;
       border-radius: 8px;
       border: 1px solid #ddd;
       background: #fff;
     }
     .answer-big {
-      font-size: 32px;
+      font-size: 24px;
       font-weight: bold;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       word-break: break-all;
     }
     pre {
       white-space: pre-wrap;
       margin: 0;
-      font-size: 15px;
-      line-height: 1.6;
+      font-size: 13px;
+      line-height: 1.5;
       font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
     }
     h3 {
-      margin: 10px 0 6px 0;
-      font-size: 17px;
+      margin: 8px 0 4px 0;
+      font-size: 15px;
     }
 
-    @media (max-width: 480px) {
-      body { padding: 12px; }
-      h2 { font-size: 22px; }
-      .answer-big { font-size: 30px; }
-      pre { font-size: 15px; }
+    #previewVideo {
+      width: 100%;
+      max-height: 220px;
+      border-radius: 8px;
+      background: #000;
+      object-fit: cover;
+    }
+    #camStatus {
+      font-size: 11px;
+      color:#777;
+      margin-top: 4px;
+    }
+
+    @media (orientation: landscape) {
+      body { padding: 8px; }
+      h2 { font-size: 17px; }
+      .answer-big { font-size: 22px; }
+      pre { font-size: 13px; }
     }
   </style>
 </head>
@@ -89,6 +113,13 @@
     <h3>Korean Tips</h3>
     <pre id="s-korean"></pre>
   </div>
+
+  <!-- 현재 이 기기 카메라 미리보기 -->
+  <div id="box-preview" class="box">
+    <h3>현재 카메라 미리보기 (이 기기)</h3>
+    <video id="previewVideo" autoplay playsinline></video>
+    <div id="camStatus">카메라 준비 중...</div>
+  </div>
 </div>
 
 <script>
@@ -120,6 +151,9 @@
   const sEvalEl    = document.getElementById('s-eval');
   const sModelEl   = document.getElementById('s-model');
   const sKorEl     = document.getElementById('s-korean');
+
+  const previewVideo = document.getElementById('previewVideo');
+  const camStatus    = document.getElementById('camStatus');
 
   let latestState = { mode: "reading" };
   let lastSolveTs = 0;
@@ -187,13 +221,13 @@
 
   function renderByMode(mode, text) {
     if (mode === "reading" || mode === "listening") {
-      // ANSWER 전체 줄 가져오기 (단일, 복수, INSERT, SUMMARY, TABLE 다 지원)
+      // ANSWER 전체 줄
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       let ansText = mAns ? mAns[1].trim() : "";
       if (!ansText) ansText = "?";
       rlAnswerEl.textContent = "정답: " + ansText;
 
-      // WHY 이후 전체를 해설로
+      // WHY 이후 전체
       const split = text.split(/\[WHY\]/i);
       const why = split[1] ? split[1].trim() : "";
       rlWhyEl.textContent = why;
@@ -241,11 +275,32 @@
       return;
     }
 
-    // fallback: 그냥 전체 텍스트를 해설로 보여줌
+    // fallback
     rlAnswerEl.textContent = "";
     rlWhyEl.textContent = text;
     showModeBox("reading", true);
   }
+
+  // ---------------- 이 기기 카메라 미리보기 ----------------
+  async function startPreviewCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      camStatus.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false
+      });
+      previewVideo.srcObject = stream;
+      camStatus.textContent = "카메라 미리보기 중 (이 기기)";
+    } catch (e) {
+      console.warn("preview camera error", e);
+      camStatus.textContent = "카메라 접근 실패 (권한/설정 확인).";
+    }
+  }
+
+  startPreviewCamera();
 </script>
 </body>
 </html>
