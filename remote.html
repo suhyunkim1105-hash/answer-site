@@ -200,13 +200,11 @@
 
   function renderByMode(mode, text) {
     if (mode === "reading" || mode === "listening") {
-      // [ANSWER] 전체 줄
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       let ansText = mAns ? mAns[1].trim() : "";
       if (!ansText) ansText = "?";
       rlAnswerEl.textContent = "정답: " + ansText;
 
-      // [WHY] 이후 전체
       const split = text.split(/\[WHY\]/i);
       const why = split[1] ? split[1].trim() : "";
       rlWhyEl.textContent = why;
