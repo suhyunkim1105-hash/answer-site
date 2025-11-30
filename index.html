@@ -37,7 +37,7 @@
       height: auto;
       transform-origin: center center;
     }
-    /* 중앙 OCR 영역 가이드 박스 (초록색 띠) */
+    /* 중앙 OCR 영역 가이드 박스 */
     #overlayCenter {
       position: absolute;
       top: 50%;
@@ -78,7 +78,7 @@
 <div class="wrap">
   <div id="videoContainer">
     <video id="video" autoplay playsinline></video>
-    <!-- 이 박스 안쪽이 OCR 우선 영역 -->
+    <!-- 이 박스 안쪽을 OCR 우선 영역으로 사용 -->
     <div id="overlayCenter"></div>
   </div>
 
@@ -153,18 +153,20 @@
     const type = cmd.type;
     currentOCRLang = cmd.lang || "eng+kor";
     currentLang.textContent = currentOCRLang;
+    const mode = cmd.mode || "reading";
 
     if (type === "capture_passage_new") {
-      captureAndOCR("passage");
+      captureAndOCR("passage", false, mode);
     } else if (type === "capture_question_new") {
-      captureAndOCR("question");
+      const autoSolve = !!cmd.autoSolve;
+      captureAndOCR("question", autoSolve, mode);
     } else if (type === "clear_state") {
-      clearState();
+      clearState(mode);
     }
   });
 
-  // ---------- OCR 캡처 (중앙 영역 크롭, 고해상도 유지) ----------
-  async function captureAndOCR(target) {
+  // ---------- OCR 캡처 (중앙 영역, 고해상도 유지) ----------
+  async function captureAndOCR(target, autoSolve = false, autoMode = "reading") {
     try {
       if (!video.videoWidth) {
         statusEl.textContent = "비디오 준비 전이라 OCR 불가.";
@@ -176,7 +178,7 @@
       const fullW = video.videoWidth;
       const fullH = video.videoHeight;
 
-      // 중앙 70% x 50% 영역 (해상도는 그대로, 일부만 잘라서 인식)
+      // 중앙 70% x 50% 영역만 잘라서 OCR (속도+정확도 타협)
       const cropW = Math.floor(fullW * 0.7);
       const cropH = Math.floor(fullH * 0.5);
       const sx = Math.floor((fullW - cropW) / 2);
@@ -215,15 +217,26 @@
       update.ocrUpdatedAt = Date.now();
 
       await db.ref("p2p/state").update(update);
+
+      // ---- autoSolve가 true면, OCR 끝난 직후 solve 명령 자동 전송 ----
+      if (autoSolve) {
+        await db.ref("p2p/command").set({
+          type: "solve",
+          mode: autoMode,
+          lang: currentOCRLang,
+          timestamp: Date.now()
+        });
+      }
     } catch (e) {
       console.error(e);
       statusEl.textContent = "OCR 에러: " + e.toString();
     }
   }
 
-  function clearState() {
+  function clearState(modeArg) {
+    const mode = modeArg || "reading";
     db.ref("p2p/state").set({
-      mode: "reading",
+      mode,
       passage: "",
       question: "",
       stt: "",
