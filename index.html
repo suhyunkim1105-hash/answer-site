@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Camera (Phone)</title>
+  <title>answer-site | Camera (Auto)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
   <!-- Firebase -->
@@ -37,14 +37,13 @@
       height: auto;
       transform-origin: center center;
     }
-    /* 이제 화면 전체를 감싸는 초록 테두리 (참고용) */
-    #overlayCenter {
+    /* 화면 전체 테두리 – 그냥 "카메라 활성" 표시용 */
+    #overlayFrame {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      transform: none;
       border: 2px solid rgba(0, 255, 0, 0.5);
       border-radius: 6px;
       pointer-events: none;
@@ -78,8 +77,7 @@
 <div class="wrap">
   <div id="videoContainer">
     <video id="video" autoplay playsinline></video>
-    <!-- 화면 전체 테두리 (이제 OCR은 전체 프레임 사용) -->
-    <div id="overlayCenter"></div>
+    <div id="overlayFrame"></div>
   </div>
 
   <div id="bottomPanel">
@@ -90,14 +88,14 @@
       <input id="zoomRange" type="range" min="1" max="2.2" step="0.05" value="1">
     </div>
     <div class="row">
-      <span class="label">현재 OCR 언어</span>
-      <span id="currentLang">eng+kor</span>
+      <span class="label">OCR 언어</span>
+      <span id="currentLang">eng+kor (고정)</span>
     </div>
   </div>
 </div>
 
 <script>
-  // ---------------- Firebase 초기화 ----------------
+  // ---------------- Firebase ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -111,15 +109,25 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const video        = document.getElementById('video');
-  const statusEl     = document.getElementById('status');
-  const zoomRange    = document.getElementById('zoomRange');
-  const currentLang  = document.getElementById('currentLang');
+  const video    = document.getElementById('video');
+  const statusEl = document.getElementById('status');
+  const zoomRange = document.getElementById('zoomRange');
 
-  let currentOCRLang = "eng+kor";
-  let lastCmdTs = 0;
+  const OCR_LANG = "eng+kor";
 
-  // ---------- 카메라 세팅 (풀HD 우선 요청) ----------
+  let ocrRunning = false;
+  let lastSolvedSnippet = "";
+  let lastBlocked = null;
+  let lastOcrTime = 0;
+
+  // 밝기 측정용 작은 캔버스
+  const bCanvas = document.createElement('canvas');
+  const bCtx = bCanvas.getContext('2d');
+  const BW = 64, BH = 36;
+  bCanvas.width = BW;
+  bCanvas.height = BH;
+
+  // ---------- 카메라 세팅 ----------
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -131,7 +139,8 @@
         audio: false
       });
       video.srcObject = stream;
-      statusEl.textContent = "카메라 ON (원격에서 캡처 요청 시 OCR 수행)";
+      statusEl.textContent = "카메라 ON – 화면 자동 인식 중...";
+      startAutoLoop();
     } catch (e) {
       console.error(e);
       statusEl.textContent = "카메라 접근 실패: " + e.toString();
@@ -143,37 +152,61 @@
     video.style.transform = `scale(${scale})`;
   });
 
-  // ---------- Firebase 명령 구독 ----------
-  db.ref("p2p/command").on("value", snap => {
-    const cmd = snap.val();
-    if (!cmd) return;
-    if (!cmd.timestamp || cmd.timestamp <= lastCmdTs) return;
-    lastCmdTs = cmd.timestamp;
-
-    const type = cmd.type;
-    currentOCRLang = cmd.lang || "eng+kor";
-    currentLang.textContent = currentOCRLang;
-    const mode = cmd.mode || "reading";
-
-    if (type === "capture_passage_new") {
-      captureAndOCR("passage", false, mode);
-    } else if (type === "capture_question_new") {
-      const autoSolve = !!cmd.autoSolve;
-      captureAndOCR("question", autoSolve, mode);
-    } else if (type === "clear_state") {
-      clearState(mode);
+  // ---------- 카메라 가려짐(어두움) 감지 ----------
+  function isCameraBlocked() {
+    if (!video.videoWidth || !video.videoHeight) return false;
+    bCtx.drawImage(video, 0, 0, BW, BH);
+    const imgData = bCtx.getImageData(0, 0, BW, BH).data;
+    let sum = 0;
+    const totalPixels = imgData.length / 4;
+    for (let i = 0; i < imgData.length; i += 4) {
+      const r = imgData[i];
+      const g = imgData[i + 1];
+      const b = imgData[i + 2];
+      sum += (r + g + b) / 3;
     }
-  });
+    const avg = sum / totalPixels; // 0 ~ 255
+    // 평균 밝기 25 미만이면 "가려졌다"고 본다
+    return avg < 25;
+  }
 
-  // ---------- OCR 캡처 (이제 전체 프레임 사용) ----------
-  async function captureAndOCR(target, autoSolve = false, autoMode = "reading") {
-    try {
+  // ---------- 자동 루프: 가려짐 체크 + OCR 스케줄 ----------
+  function startAutoLoop() {
+    function loop() {
       if (!video.videoWidth) {
-        statusEl.textContent = "비디오 준비 전이라 OCR 불가.";
+        requestAnimationFrame(loop);
         return;
       }
 
-      statusEl.textContent = `OCR (${target}) 진행 중...`;
+      const blocked = isCameraBlocked();
+      if (blocked !== lastBlocked) {
+        lastBlocked = blocked;
+        db.ref("p2p/state").update({
+          cameraBlocked: blocked,
+          cameraUpdatedAt: Date.now()
+        });
+        statusEl.textContent = blocked
+          ? "카메라가 가려짐 – 마지막 답 유지 중"
+          : "카메라 ON – 화면 자동 인식 중...";
+      }
+
+      const now = Date.now();
+      if (!blocked && !ocrRunning && now - lastOcrTime > 8000) { // 8초 간격
+        lastOcrTime = now;
+        doOCROnce();
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- 전체 프레임 OCR + 자동 solve 트리거 ----------
+  async function doOCROnce() {
+    if (!video.videoWidth) return;
+    ocrRunning = true;
+    try {
+      statusEl.textContent = "OCR 진행 중...";
 
       const fullW = video.videoWidth;
       const fullH = video.videoHeight;
@@ -182,16 +215,12 @@
       canvas.width = fullW;
       canvas.height = fullH;
       const ctx = canvas.getContext('2d');
-
-      // 전체 프레임을 그대로 그려서 OCR
       ctx.drawImage(video, 0, 0, fullW, fullH);
 
-      const lang = currentOCRLang || "eng+kor";
-
-      const result = await Tesseract.recognize(canvas, lang, {
+      const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
           if (m.status === "recognizing text") {
-            statusEl.textContent = `OCR (${target}) 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
+            statusEl.textContent = `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         }
       });
@@ -199,45 +228,39 @@
       const text = (result.data.text || "").trim();
       const conf = result.data.confidence || 0;
 
-      statusEl.textContent = `OCR 완료 (${target}) | 평균 신뢰도: ${conf.toFixed(1)}%`;
-
-      const update = {};
-      if (target === "passage") {
-        update.passage = text;
-      } else {
-        update.question = text;
+      if (!text || text.length < 20) {
+        statusEl.textContent = `OCR 완료 (텍스트 거의 없음, 무시)`;
+        ocrRunning = false;
+        return;
       }
-      update.ocrTarget = target;
-      update.ocrConfidence = conf;
-      update.ocrUpdatedAt = Date.now();
 
-      await db.ref("p2p/state").update(update);
+      statusEl.textContent = `OCR 완료 | 평균 신뢰도: ${conf.toFixed(1)}%`;
 
-      // ---- autoSolve가 true면, OCR 끝난 직후 solve 명령 자동 전송 ----
-      if (autoSolve) {
+      // Firebase에 화면 텍스트 저장
+      await db.ref("p2p/state").update({
+        ocrText: text,
+        ocrConfidence: conf,
+        cameraBlocked: false,
+        ocrUpdatedAt: Date.now()
+      });
+
+      const snippet = text.slice(0, 400);
+      // 이전에 풀었던 문제와 텍스트가 다르면 새 문제로 보고 solve 요청
+      if (snippet !== lastSolvedSnippet) {
+        lastSolvedSnippet = snippet;
         await db.ref("p2p/command").set({
           type: "solve",
-          mode: autoMode,
-          lang: currentOCRLang,
           timestamp: Date.now()
         });
+      } else {
+        // 같은 화면이라고 판단 → 새 solve 트리거 안 함
       }
     } catch (e) {
       console.error(e);
       statusEl.textContent = "OCR 에러: " + e.toString();
+    } finally {
+      ocrRunning = false;
     }
-  }
-
-  function clearState(modeArg) {
-    const mode = modeArg || "reading";
-    db.ref("p2p/state").set({
-      mode,
-      passage: "",
-      question: "",
-      stt: "",
-      updatedAt: Date.now()
-    });
-    statusEl.textContent = "상태 초기화 완료.";
   }
 
   startCamera();
