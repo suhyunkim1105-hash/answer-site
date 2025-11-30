@@ -2,70 +2,179 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Remote Controller</title>
+  <title>answer-site | Remote</title>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
   <style>
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background:#f5f5f5; }
-    h2 { margin-top:0; }
-    textarea { width: 100%; min-height: 100px; margin-top: 6px; padding:8px; box-sizing:border-box; }
-    button { padding: 8px 12px; margin: 4px 4px 4px 0; cursor:pointer; }
-    #result { white-space: pre-wrap; background:#fff; padding:12px; margin-top:10px; border-radius:6px; border:1px solid #ddd; }
-    .section { background:#fff; padding:12px; margin-bottom:12px; border-radius:6px; border:1px solid #ddd; }
-    label { font-weight:bold; }
-    #status { font-size:12px; color:#666; margin-left:8px; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 12px;
+      background: #f5f5f5;
+      box-sizing: border-box;
+    }
+    h2 { margin: 4px 0 10px 0; }
+
+    .top-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .top-row label { font-size: 13px; margin-right: 4px; }
+    select { padding: 4px 6px; font-size: 13px; }
+
+    #status {
+      font-size: 12px;
+      color: #555;
+      flex: 1;
+      text-align: right;
+      min-width: 120px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-auto-rows: minmax(150px, 1fr);
+      gap: 8px;
+    }
+
+    .panel {
+      background: #fff;
+      border-radius: 6px;
+      border: 1px solid #ddd;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .badge {
+      font-size: 11px;
+      color: #555;
+    }
+
+    .btn-row {
+      margin-bottom: 4px;
+    }
+    button {
+      padding: 4px 8px;
+      margin-right: 4px;
+      margin-bottom: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    textarea, pre {
+      flex: 1;
+      width: 100%;
+      resize: vertical;
+      min-height: 80px;
+      font-size: 12px;
+      padding: 6px;
+      box-sizing: border-box;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+      font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    pre {
+      background: #fafafa;
+      margin: 0;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 
 <h2>answer-site Remote</h2>
 
-<div class="section">
-  <label for="mode">Mode</label>
-  <select id="mode">
-    <option value="reading">Reading</option>
-    <option value="writing">Writing</option>
-    <option value="listening">Listening</option>
-    <option value="speaking">Speaking</option>
-  </select>
-  <span id="status"></span>
+<div class="top-row">
+  <div>
+    <label>Mode</label>
+    <select id="mode">
+      <option value="reading">Reading</option>
+      <option value="writing">Writing</option>
+      <option value="listening">Listening</option>
+      <option value="speaking">Speaking</option>
+    </select>
+  </div>
+  <div>
+    <label>OCR</label>
+    <select id="ocrLang">
+      <option value="eng">ENG</option>
+      <option value="eng+kor" selected>ENG+KOR</option>
+    </select>
+  </div>
+  <div id="status"></div>
 </div>
 
-<div class="section">
-  <h3>Reading / 공통 OCR</h3>
-  <button onclick="sendCapture('passage')">📸 지문 캡처</button>
-  <button onclick="sendCapture('question', true)">📸 문제 캡처 + 바로 풀이</button>
-
-  <div style="margin-top:8px;">
-    <label>Passage (지문 OCR 결과)</label>
+<div class="grid">
+  <!-- Passage -->
+  <div class="panel">
+    <div class="panel-header">
+      <span>Passage (지문 / 화면 텍스트)</span>
+      <span id="passageConf" class="badge"></span>
+    </div>
+    <div class="btn-row">
+      <button onclick="sendCapture('passage')">지문 새로</button>
+      <button onclick="sendCapture('passage_append')">지문 추가</button>
+    </div>
     <textarea id="passage"></textarea>
   </div>
-  <div style="margin-top:8px;">
-    <label>Question & Options (문제 + 보기 OCR / 수동 입력)</label>
+
+  <!-- Question -->
+  <div class="panel">
+    <div class="panel-header">
+      <span>Question / Options</span>
+      <span id="questionConf" class="badge"></span>
+    </div>
+    <div class="btn-row">
+      <button onclick="sendCapture('question')">문제 새로</button>
+      <button onclick="sendCapture('question_append')">문제 추가</button>
+    </div>
     <textarea id="question"></textarea>
   </div>
-</div>
 
-<div class="section">
-  <h3>Writing / Listening / Speaking – STT</h3>
-  <button onclick="startSTT()">🎤 STT 시작</button>
-  <button onclick="stopSTT()">⏹ STT 종료</button>
-  <div style="font-size:12px;color:#666;margin-top:4px;">
-    * Writing: 문제를 읽어서 말하기<br>
-    * Listening: 리스닝 스크립트를 들으면서 마이크로 그대로 따라 말하기<br>
-    * Speaking: 내 답변을 말하기
+  <!-- STT -->
+  <div class="panel">
+    <div class="panel-header">
+      <span>STT (audio → text)</span>
+      <span id="sttStatus" class="badge"></span>
+    </div>
+    <div class="btn-row">
+      <button onclick="startSTT()">STT 시작</button>
+      <button onclick="stopSTT()">정지</button>
+    </div>
+    <textarea id="stt" placeholder="Writing/Listening: 오디오 스크립트\nSpeaking: 내 답변"></textarea>
   </div>
-  <textarea id="stt" placeholder="실시간 음성 인식 결과"></textarea>
-</div>
 
-<div class="section">
-  <h3>AI 풀이 / 생성</h3>
-  <button onclick="requestSolve()">🤖 AI 풀이/생성 요청</button>
-  <button onclick="clearAll()">🧹 초기화</button>
-  <div id="result"></div>
+  <!-- Result -->
+  <div class="panel">
+    <div class="panel-header">
+      <span>AI Result</span>
+    </div>
+    <div class="btn-row">
+      <button onclick="requestSolve()">AI 풀이 / 생성</button>
+      <button onclick="clearAll()">초기화</button>
+    </div>
+    <pre id="result"></pre>
+  </div>
 </div>
 
 <script>
@@ -84,59 +193,80 @@
   const db = firebase.database();
 
   const modeSel   = document.getElementById('mode');
+  const ocrLangEl = document.getElementById('ocrLang');
   const passageEl = document.getElementById('passage');
   const questionEl= document.getElementById('question');
   const sttEl     = document.getElementById('stt');
   const resultEl  = document.getElementById('result');
   const statusEl  = document.getElementById('status');
+  const passageConfEl  = document.getElementById('passageConf');
+  const questionConfEl = document.getElementById('questionConf');
+  const sttStatusEl    = document.getElementById('sttStatus');
 
-  let autoSolveOnNextQuestion = false;
-  let lastResultTs = 0;
+  function setConf(el, conf) {
+    if (!el) return;
+    if (typeof conf === "number" && !Number.isNaN(conf)) {
+      el.textContent = `OCR ${conf}%`;
+    } else {
+      el.textContent = "";
+    }
+  }
 
   // ---------------- Send Capture Command ----------------
-  function sendCapture(target, withAutoSolve = false) {
-    autoSolveOnNextQuestion = !!withAutoSolve;
+  function sendCapture(target) {
     const cmd = {
       action: "capture",
       target,
+      lang: ocrLangEl.value,
       timestamp: Date.now()
     };
     db.ref("p2p/latestCommand").set(cmd);
-    statusEl.textContent = `📡 ${target} 캡처 명령 보냄`;
+    statusEl.textContent = `📡 ${target} 캡처 명령 전송`;
   }
 
-  // ---------------- Listen Result from Phone ----------------
+  // ---------------- Listen for OCR Results ----------------
+  let lastResultTs = 0;
+
   db.ref("p2p/latestResult").on("value", snap => {
     const val = snap.val();
     if (!val) return;
     if (!val.timestamp || val.timestamp <= lastResultTs) return;
     lastResultTs = val.timestamp;
 
+    const txt = val.text || "";
+    const conf = val.confidence;
+
     if (val.target === "passage") {
-      passageEl.value = val.text || "";
+      passageEl.value = txt;
+      setConf(passageConfEl, conf);
       statusEl.textContent = "✅ 지문 OCR 수신";
+    } else if (val.target === "passage_append") {
+      passageEl.value = passageEl.value ? (passageEl.value + "\n" + txt) : txt;
+      setConf(passageConfEl, conf);
+      statusEl.textContent = "✅ 지문 추가 OCR 수신";
     } else if (val.target === "question") {
-      questionEl.value = val.text || "";
+      questionEl.value = txt;
+      setConf(questionConfEl, conf);
       statusEl.textContent = "✅ 문제 OCR 수신";
-      if (autoSolveOnNextQuestion && modeSel.value === "reading") {
-        autoSolveOnNextQuestion = false;
-        requestSolve();
-      }
+    } else if (val.target === "question_append") {
+      questionEl.value = questionEl.value ? (questionEl.value + "\n" + txt) : txt;
+      setConf(questionConfEl, conf);
+      statusEl.textContent = "✅ 문제 추가 OCR 수신";
     }
   });
 
   // ---------------- STT (WebSpeech) ----------------
   let recognition = null;
-  let sttFinal = "";
-  let sttRunning = false;
+  let sttRunning  = false;
+  let sttFinal    = "";
 
   function ensureSTT() {
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) {
-      alert("이 브라우저는 WebSpeech STT를 지원하지 않습니다. (크롬 권장)");
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      alert("이 브라우저는 WebSpeech STT를 지원하지 않습니다. (크롬/엣지 권장)");
       return null;
     }
-    const rec = new SpeechRec();
+    const rec = new SR();
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
@@ -150,8 +280,9 @@
 
     sttFinal = "";
     sttEl.value = "";
+    sttStatusEl.textContent = "녹음 중...";
 
-    recognition.onresult = (e) => {
+    recognition.onresult = e => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const txt = e.results[i][0].transcript;
@@ -161,17 +292,18 @@
           interim += txt;
         }
       }
-      const trimmed = (sttFinal + "\n" + interim).trim();
-      // 너무 길어지면 뒷부분만 유지 (4000자 제한)
-      sttEl.value = trimmed.length > 4000 ? trimmed.slice(-4000) : trimmed;
+      let full = (sttFinal + "\n" + interim).trim();
+      if (full.length > 4000) full = full.slice(-4000);
+      sttEl.value = full;
     };
 
     recognition.onstart = () => {
       sttRunning = true;
-      statusEl.textContent = "🎤 STT 진행 중...";
+      statusEl.textContent = "🎤 STT 진행 중";
     };
     recognition.onend = () => {
       sttRunning = false;
+      sttStatusEl.textContent = "";
       statusEl.textContent = "⏹ STT 정지";
     };
 
@@ -184,7 +316,7 @@
     }
   }
 
-  // ---------------- AI Solve Request ----------------
+  // ---------------- AI Solve ----------------
   async function requestSolve() {
     const body = {
       mode: modeSel.value,
@@ -202,16 +334,14 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
-
       const data = await res.json();
       if (data.error) {
         resultEl.textContent = "ERROR: " + data.error;
-        statusEl.textContent = "❌ 에러 발생";
+        statusEl.textContent = "❌ 에러";
         return;
       }
-
       resultEl.textContent = data.result || "";
-      statusEl.textContent = "✅ AI 응답 수신";
+      statusEl.textContent = "✅ AI 응답";
 
       if (data.tts) {
         const u = new SpeechSynthesisUtterance(data.tts);
@@ -228,6 +358,9 @@
     questionEl.value = "";
     sttEl.value = "";
     resultEl.textContent = "";
+    passageConfEl.textContent = "";
+    questionConfEl.textContent = "";
+    sttStatusEl.textContent = "";
     statusEl.textContent = "";
   }
 </script>
