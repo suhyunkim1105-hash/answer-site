@@ -1,14 +1,16 @@
-b// /.netlify/functions/solve.js
+// /.netlify/functions/solve.js
 
 export async function handler(event, context) {
   try {
-    const payload = JSON.parse(event.body || "{}");
+    const payload  = JSON.parse(event.body || "{}");
     const mode     = (payload.mode || "reading").toLowerCase();
     const passage  = (payload.passage || "").trim();
     const question = (payload.question || "").trim();
     const stt      = (payload.stt || "").trim();
 
+    // Netlify 환경변수 OPENROUTER_MODEL 없으면 gpt-5 기본 사용
     const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5";
+
     const prompt = buildPrompt(mode, passage, question, stt);
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -24,7 +26,7 @@ export async function handler(event, context) {
         messages: [
           {
             role: "system",
-            content: "Follow the exact output format requested. Do NOT invent answers if information is insufficient. If uncertain, output [ANSWER] ?."
+            content: "Follow the exact output format requested. Prefer giving a concrete answer when there is at least weak evidence. Only use [ANSWER] ? when you truly cannot tell at all."
           },
           { role: "user", content: prompt }
         ]
@@ -51,6 +53,7 @@ export async function handler(event, context) {
 // ---------------- PROMPT BUILDER ----------------
 
 function buildPrompt(mode, passage, question, stt) {
+  // ---------- READING ----------
   if (mode === "reading") {
     return `
 You are a TOEFL iBT Reading answer engine.
@@ -62,9 +65,10 @@ ${passage}
 ${question}
 
 Rules:
-- Choose the correct option among 1~5 ONLY if you are at least 70% confident.
-- If the answer CANNOT be safely determined from the passage and question, do NOT guess.
-- In that case, output "[ANSWER] ?" and explain why it is unclear.
+- Choose the correct option among 1~5 when there is at least about 20% confidence (even weak evidence is OK).
+- Try to eliminate clearly wrong choices and then pick the best remaining option.
+- Only when you truly cannot eliminate any options and it would be pure random guessing, output "[ANSWER] ?".
+- Do NOT output multiple answers.
 
 Output Format (STRICT):
 [ANSWER] N or ?
@@ -72,6 +76,7 @@ Output Format (STRICT):
 `;
   }
 
+  // ---------- LISTENING ----------
   if (mode === "listening") {
     return `
 You are a TOEFL iBT Listening answer engine.
@@ -88,9 +93,10 @@ ${question}
 Rules:
 - Use the transcript and any on-screen text together.
 - Consider that STT may contain small recognition errors.
-- Only choose an option 1~5 if you are at least 70% confident.
-- If the answer cannot be safely determined, output "[ANSWER] ?".
-- Never randomly guess.
+- Choose an option 1~5 whenever you have at least about 20% confidence.
+- Try to eliminate obviously wrong answers first and pick the best remaining.
+- Only when you truly cannot tell and every option is equally plausible, output "[ANSWER] ?".
+- Never output more than one number.
 
 Output Format (STRICT):
 [ANSWER] N or ?
@@ -98,6 +104,7 @@ Output Format (STRICT):
 `;
   }
 
+  // ---------- WRITING ----------
   if (mode === "writing") {
     return `
 You are a TOEFL iBT Writing essay generator.
@@ -129,6 +136,7 @@ Output Format (STRICT):
 `;
   }
 
+  // ---------- SPEAKING ----------
   if (mode === "speaking") {
     return `
 You are a TOEFL iBT Speaking evaluator.
@@ -169,6 +177,7 @@ Output Format (STRICT):
 `;
   }
 
+  // fallback
   return "Invalid mode. Use reading / listening / writing / speaking.";
 }
 
