@@ -76,30 +76,6 @@
       color: #ccc;
       min-height: 18px;
     }
-    #answerBox {
-      max-width: 800px;
-      margin: 10px auto 0;
-      padding: 10px 14px;
-      border-radius: 12px;
-      background: #151515;
-      font-size: 16px;
-    }
-    #answerBox span {
-      font-weight: 700;
-      color: #4dd0ff;
-    }
-    #ocrText {
-      max-width: 800px;
-      margin: 10px auto 0;
-      padding: 10px 14px;
-      border-radius: 12px;
-      background: #050505;
-      font-size: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 220px;
-      overflow-y: auto;
-    }
     canvas {
       display: none;
     }
@@ -119,27 +95,18 @@
     <input id="zoom" type="range" min="1" max="2.5" step="0.1" value="1" />
   </div>
 
-  <button id="btnCapture">현재 화면 캡처 + 풀이</button>
-
   <div id="status"></div>
-
-  <div id="answerBox">
-    정답: <span id="answer"></span>
-  </div>
-
-  <pre id="ocrText"></pre>
 
   <canvas id="canvas"></canvas>
 
-  <!-- Tesseract (영어 + 한국어 OCR) -->
+  <!-- Tesseract (영어+한국어 OCR) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
-  <!-- Firebase + 메인 로직 -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
     import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
 
-    // ===== 1. Firebase 설정 (네 프로젝트 값 그대로) =====
+    // ===== Firebase 설정 (네 프로젝트 값) =====
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -154,28 +121,24 @@
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    // ===== 2. DOM 요소 =====
     const video = document.getElementById("camera");
     const canvas = document.getElementById("canvas");
     const zoomInput = document.getElementById("zoom");
     const statusEl = document.getElementById("status");
-    const ocrEl = document.getElementById("ocrText");
-    const answerEl = document.getElementById("answer");
     const btnStart = document.getElementById("btnStart");
-    const btnCapture = document.getElementById("btnCapture");
 
     let stream = null;
     let lastRemoteRequestId = null;
     let remoteProcessing = false;
 
-    // ===== 3. 줌 (CSS 확대) =====
+    // ===== 줌 (CSS 스케일) =====
     function applyZoom() {
       const s = parseFloat(zoomInput.value) || 1;
       video.style.transform = `scale(${s})`;
     }
     zoomInput.addEventListener("input", applyZoom);
 
-    // ===== 4. 카메라 켜기 =====
+    // ===== 카메라 켜기 =====
     async function startCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         statusEl.textContent = "이 브라우저에서는 카메라를 사용할 수 없습니다.";
@@ -185,14 +148,14 @@
       const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
 
       const base = {
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 960 },
+        height: { ideal: 540 }
       };
 
       const constraints = {
         video: isMobile
-          ? { ...base, facingMode: { ideal: "environment" } } // 휴대폰: 후면 우선
-          : { ...base } // PC: 기본 카메라
+          ? { ...base, facingMode: { ideal: "environment" } }
+          : { ...base }
       };
 
       try {
@@ -212,7 +175,7 @@
 
     btnStart.addEventListener("click", startCamera);
 
-    // ===== 5. 현재 프레임 캡처 =====
+    // ===== 현재 프레임 캡처 =====
     async function captureFrame() {
       if (!stream) {
         statusEl.textContent = "카메라가 꺼져 있어서 캡처할 수 없습니다.";
@@ -220,8 +183,8 @@
       }
       const track = stream.getVideoTracks()[0];
       const settings = track.getSettings ? track.getSettings() : {};
-      const width = settings.width || 1280;
-      const height = settings.height || 720;
+      const width = settings.width || 960;
+      const height = settings.height || 540;
 
       canvas.width = width;
       canvas.height = height;
@@ -231,95 +194,52 @@
       return canvas.toDataURL("image/png");
     }
 
-    // ===== 6. OCR (영어 + 한국어) =====
+    // ===== OCR (영어+한국어) =====
     async function runOcr(dataUrl) {
       statusEl.textContent = "OCR 중...";
       const { data } = await Tesseract.recognize(dataUrl, "eng+kor");
       const text = (data.text || "").trim();
-      ocrEl.textContent = text;
       return text;
     }
 
-    // ===== 7. AI에 문제 풀이 요청 =====
-    async function askAI(text) {
-      statusEl.textContent = "AI 풀이 중...";
-      const res = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text })
-      });
-
-      if (!res.ok) {
-        const msg = await res.text();
-        throw new Error("solve 함수 오류: " + msg);
-      }
-      const json = await res.json(); // { answer: "2", ... } 형태라고 가정
-      return json;
-    }
-
-    // ===== 8. 캡처 + OCR + 풀이 전체 파이프라인 =====
-    async function captureOcrAndSolve(isRemote = false, requestId = null) {
-      try {
-        const dataUrl = await captureFrame();
-        if (!dataUrl) return;
-
-        const text = await runOcr(dataUrl);
-        if (!text) {
-          statusEl.textContent = "OCR 결과가 비어 있습니다.";
-          return;
-        }
-
-        const result = await askAI(text);
-
-        const answer = result.answer ?? result.choice ?? result.result ?? null;
-        answerEl.textContent = answer ? String(answer) : "(알 수 없음)";
-        statusEl.textContent = isRemote
-          ? "원격 캡처 요청 처리 완료"
-          : "로컬 캡처 처리 완료";
-
-        // Firebase에 결과 저장 → remote.html 에서 읽도록
-        const payload = {
-          requestId: requestId ?? null,
-          createdAt: Date.now(),
-          ocrText: text,
-          rawAnswer: result,
-          answer: answer ?? null
-        };
-        await set(ref(db, "p2p/latestResult"), payload);
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "에러: " + err.message;
-      }
-    }
-
-    btnCapture.addEventListener("click", () =>
-      captureOcrAndSolve(false, null)
-    );
-
-    // ===== 9. Firebase 원격 캡처 명령 수신 =====
+    // ===== Firebase 원격 캡처 명령 수신 =====
     function setupRemoteListener() {
       const cmdRef = ref(db, "p2p/latestCommand");
+
       onValue(cmdRef, async snap => {
         const cmd = snap.val();
         if (!cmd) return;
-        if (cmd.type !== "capture") return;
 
-        const reqId = cmd.requestId || null;
+        const reqId = cmd.requestId;
+        if (!reqId) return;
 
-        // 같은 요청 여러 번 처리하지 않도록
-        if (lastRemoteRequestId && reqId && lastRemoteRequestId === reqId) {
-          return;
-        }
-        lastRemoteRequestId = reqId || Date.now();
+        if (lastRemoteRequestId === reqId) return;
+        lastRemoteRequestId = reqId;
 
         if (remoteProcessing) return;
         remoteProcessing = true;
 
-        statusEl.textContent = `원격 캡처 요청 수신 (ID: ${
-          reqId || "없음"
-        }) → 처리 중...`;
+        const target = cmd.target || "question";
+        statusEl.textContent = `원격 캡처 요청 수신 (${target}) → 처리 중...`;
+
         try {
-          await captureOcrAndSolve(true, reqId);
+          const dataUrl = await captureFrame();
+          if (!dataUrl) return;
+
+          const text = await runOcr(dataUrl);
+
+          await set(ref(db, "p2p/latestResult"), {
+            requestId: reqId,
+            target,
+            mode: cmd.mode || "reading",
+            createdAt: Date.now(),
+            ocrText: text
+          });
+
+          statusEl.textContent = `원격 캡처 완료 (${target})`;
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "원격 캡처 에러: " + err.message;
         } finally {
           remoteProcessing = false;
         }
