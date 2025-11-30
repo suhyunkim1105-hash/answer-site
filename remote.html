@@ -85,10 +85,34 @@
       word-break: break-all;
     }
 
+    /* 모드 버튼: 답 박스 밑에 위치 */
+    .mode-row {
+      display: flex;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .mode-btn {
+      flex: 1 1 0;
+      padding: 6px 0;
+      border-radius: 999px;
+      border: 1px solid #666;
+      background: #fff;
+      color: #333;
+      font-size: 12px;
+      text-align: center;
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      background: #4f46e5;
+      border-color: #4f46e5;
+      color: #fff;
+    }
+
     @media (orientation: landscape) {
       body { padding: 8px; }
       h2 { font-size: 19px; }
       .answer-big { font-size: 20px; }
+      .mode-btn { font-size: 11px; }
     }
   </style>
 </head>
@@ -96,14 +120,22 @@
 
 <div class="wrap">
   <h2>answer-site Auto</h2>
-  <div id="modeInfo">현재 모드: -</div>
+  <div id="modeInfo">현재 모드: reading</div>
   <div id="camStatus">카메라 상태: -</div>
 
-  <!-- 정답/피드백 박스를 최상단 -->
+  <!-- 정답/피드백 박스 -->
   <div class="box" id="answerBox">
     <h3>AI 정답 / 피드백</h3>
     <div class="answer-big" id="answerMain">아직 정답 없음</div>
     <pre id="answerDetail"></pre>
+  </div>
+
+  <!-- 모드 선택 버튼 (답 박스 바로 아래) -->
+  <div id="modeRow" class="mode-row">
+    <button class="mode-btn active" data-mode="reading">Reading</button>
+    <button class="mode-btn" data-mode="listening">Listening</button>
+    <button class="mode-btn" data-mode="writing">Writing</button>
+    <button class="mode-btn" data-mode="speaking">Speaking</button>
   </div>
 
   <!-- STT 시작 버튼 -->
@@ -146,8 +178,35 @@
   const answerMainEl   = document.getElementById('answerMain');
   const answerDetailEl = document.getElementById('answerDetail');
 
+  const modeButtons    = document.querySelectorAll('.mode-btn');
+
   let latestState = {};
   let lastSolveTs = 0;
+
+  let currentMode = "reading";
+
+  // ------------ 모드 선택 (여기서만 모드 바꿈) ------------
+  function setMode(mode) {
+    currentMode = mode;
+    modeButtons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+    modeInfoEl.textContent = `현재 모드: ${mode}`;
+    db.ref("p2p/state").update({
+      modeHint: mode,
+      modeUpdatedAt: Date.now()
+    });
+  }
+
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-mode');
+      setMode(mode);
+    });
+  });
+
+  // 초기값 reading으로 설정
+  setMode("reading");
 
   // STT
   let sttActive = false;
@@ -158,7 +217,7 @@
   function setupRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다. (Chrome 데스크톱 권장)";
+      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다. (Chrome 권장)";
       return null;
     }
     const rec = new SpeechRecognition();
@@ -217,7 +276,7 @@
       sttActive = true;
       btnStart.disabled = true;
       btnStart.textContent = "자동 모드 ON (마이크 수신 중)";
-      statusEl.textContent = "STT 시작 – 영어 음성을 자동으로 인식 중 (Chrome 데스크톱 권장)";
+      statusEl.textContent = "STT 시작 – 영어 음성을 자동으로 인식 중 (Chrome 권장)";
     } catch (e) {
       console.error(e);
       statusEl.textContent = "STT 시작 실패: " + e.toString();
@@ -228,9 +287,16 @@
   db.ref("p2p/state").on("value", snap => {
     latestState = snap.val() || {};
     const blocked = !!latestState.cameraBlocked;
-    const modeHint = latestState.modeHint || "auto";
+    const modeHint = latestState.modeHint;
 
-    modeInfoEl.textContent = `현재 모드: ${modeHint}`;
+    if (modeHint && modeHint !== currentMode) {
+      currentMode = modeHint;
+      modeButtons.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === currentMode);
+      });
+      modeInfoEl.textContent = `현재 모드: ${currentMode}`;
+    }
+
     camStatusEl.textContent = blocked
       ? "카메라 상태: 가려짐(마지막 답 유지 중)"
       : "카메라 상태: 보임(새 문제 인식 가능)";
@@ -257,7 +323,7 @@
   async function doSolve() {
     statusEl.textContent = "AI 풀이/생성 중...";
 
-    const modeToSend = (latestState.modeHint || "auto");
+    const modeToSend = currentMode || latestState.modeHint || "auto";
     const body = {
       mode: modeToSend,
       ocrText: latestState.ocrText || "",
