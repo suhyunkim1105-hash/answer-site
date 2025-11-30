@@ -12,26 +12,32 @@
     body {
       font-family: system-ui, sans-serif;
       margin: 0;
-      padding: 12px;
+      padding: 16px;
       background: #f5f5f5;
       box-sizing: border-box;
+      display: flex;
+      justify-content: center;
     }
-    h2 { margin: 4px 0 10px 0; }
+    .wrap {
+      width: 100%;
+      max-width: 420px;
+    }
+    h2 { margin: 4px 0 12px 0; }
 
     .top {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: center;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
+      margin-bottom: 12px;
     }
     .mode-btn {
-      padding: 6px 10px;
-      border-radius: 4px;
+      padding: 8px 12px;
+      border-radius: 6px;
       border: 1px solid #999;
       background: #fff;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 14px;
     }
     .mode-btn.active {
       background: #4f46e5;
@@ -39,94 +45,72 @@
       border-color: #4f46e5;
     }
 
-    select {
-      padding: 4px 6px;
-      font-size: 12px;
+    #ocrLang {
+      padding: 6px 8px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
     }
 
     #status {
       font-size: 12px;
       margin-left: auto;
       color: #555;
+      flex: 1;
+      text-align: right;
+      min-width: 120px;
     }
 
     .panel {
-      display: none;
       margin-top: 8px;
       padding: 10px;
-      border-radius: 6px;
+      border-radius: 8px;
       border: 1px solid #ddd;
       background: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
-    .panel.active { display: block; }
 
     button.action {
-      padding: 6px 10px;
-      font-size: 13px;
-      margin: 4px;
+      padding: 10px 12px;
+      font-size: 15px;
       cursor: pointer;
-      border-radius: 4px;
+      border-radius: 6px;
       border: 1px solid #ccc;
       background: #fff;
+      text-align: left;
     }
   </style>
 </head>
 <body>
 
-<h2>answer-site Control</h2>
+<div class="wrap">
+  <h2>answer-site Control</h2>
 
-<div class="top">
-  <button class="mode-btn active" data-mode="reading">Reading</button>
-  <button class="mode-btn" data-mode="writing">Writing</button>
-  <button class="mode-btn" data-mode="listening">Listening</button>
-  <button class="mode-btn" data-mode="speaking">Speaking</button>
+  <div class="top">
+    <button class="mode-btn active" data-mode="reading">Reading</button>
+    <button class="mode-btn" data-mode="writing">Writing</button>
+    <button class="mode-btn" data-mode="listening">Listening</button>
+    <button class="mode-btn" data-mode="speaking">Speaking</button>
 
-  <div>
     <select id="ocrLang">
       <option value="eng">OCR: ENG</option>
       <option value="eng+kor" selected>OCR: ENG+KOR</option>
     </select>
+
+    <div id="status"></div>
   </div>
 
-  <div id="status"></div>
-</div>
-
-<!-- Reading -->
-<div class="panel active" id="panel-reading">
-  <button class="action" onclick="cmdCapture('passage','new')">지문 새로</button>
-  <button class="action" onclick="cmdCapture('passage','append')">지문 추가</button>
-  <button class="action" onclick="cmdCapture('question','new')">문제 새로</button>
-  <button class="action" onclick="cmdCapture('question','append')">문제 추가</button>
-  <button class="action" onclick="cmdSolve()">풀이</button>
-</div>
-
-<!-- Writing -->
-<div class="panel" id="panel-writing">
-  <button class="action" onclick="cmdCapture('passage','new')">자료 지문 새로</button>
-  <button class="action" onclick="cmdCapture('passage','append')">자료 지문 추가</button>
-  <button class="action" onclick="cmdCapture('question','new')">프롬프트 새로</button>
-  <button class="action" onclick="cmdCapture('question','append')">프롬프트 추가</button>
-  <button class="action" onclick="cmdSTTStart()">프롬프트 STT 시작</button>
-  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
-  <button class="action" onclick="cmdSolve()">에세이 생성</button>
-</div>
-
-<!-- Listening -->
-<div class="panel" id="panel-listening">
-  <button class="action" onclick="cmdSTTStart()">리스닝 STT 시작</button>
-  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
-  <button class="action" onclick="cmdCapture('question','new')">문제 새로</button>
-  <button class="action" onclick="cmdCapture('question','append')">문제 추가</button>
-  <button class="action" onclick="cmdSolve()">풀이</button>
-</div>
-
-<!-- Speaking -->
-<div class="panel" id="panel-speaking">
-  <button class="action" onclick="cmdCapture('question','new')">질문 새로</button>
-  <button class="action" onclick="cmdCapture('question','append')">질문 추가</button>
-  <button class="action" onclick="cmdSTTStart()">답변 STT 시작</button>
-  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
-  <button class="action" onclick="cmdSolve()">평가</button>
+  <div class="panel">
+    <button class="action" onclick="cmdCapture('passage','new')">📄 지문 새로 캡처</button>
+    <button class="action" onclick="cmdCapture('passage','append')">📄 지문 추가 캡처</button>
+    <button class="action" onclick="cmdCapture('question','new')">❓ 문제/질문 새로 캡처</button>
+    <button class="action" onclick="cmdCapture('question','append')">❓ 문제/질문 추가 캡처</button>
+    <button class="action" onclick="cmdSTTStart()">🎤 STT 시작</button>
+    <button class="action" onclick="cmdSTTStop()">⏹ STT 정지</button>
+    <button class="action" onclick="cmdSolve()">🤖 풀이/평가 요청</button>
+  </div>
 </div>
 
 <script>
@@ -134,7 +118,7 @@
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
-    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1-firebasedatabase.app".replace("firebasedatabase","firebasedatabase"), // 그대로 유지
     projectId: "answer-site-p2p",
     storageBucket: "answer-site-p2p.firebasestorage.app",
     messagingSenderId: "364227113735",
@@ -149,7 +133,6 @@
 
   let currentMode = "reading";
 
-  // 모드 버튼
   document.querySelectorAll(".mode-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const mode = btn.getAttribute("data-mode");
@@ -157,9 +140,6 @@
 
       document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-
-      document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-      document.getElementById(`panel-${mode}`).classList.add("active");
 
       db.ref("p2p/state").update({ mode, updatedAt: Date.now() });
       statusEl.textContent = `모드: ${mode}`;
