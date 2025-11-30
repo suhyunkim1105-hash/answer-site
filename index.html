@@ -51,32 +51,10 @@
       pointer-events: none;
     }
 
-    /* 하단 컨트롤: 모드 버튼 + 상태 + 배율 + 수동 인식 */
+    /* 하단 컨트롤: 상태 + 배율 + 수동 인식 */
     #controls {
       margin-top: 6px;
       font-size: 11px;
-    }
-
-    #modeRow {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 4px;
-    }
-    .mode-btn {
-      flex: 1 1 0;
-      padding: 4px 0;
-      border-radius: 999px;
-      border: 1px solid #666;
-      background: #111;
-      color: #ddd;
-      font-size: 11px;
-      text-align: center;
-      cursor: pointer;
-    }
-    .mode-btn.active {
-      background: #4f46e5;
-      border-color: #4f46e5;
-      color: #fff;
     }
 
     #statusLine {
@@ -123,14 +101,6 @@
   </div>
 
   <div id="controls">
-    <!-- 모드 선택 -->
-    <div id="modeRow">
-      <button class="mode-btn active" data-mode="reading">Reading</button>
-      <button class="mode-btn" data-mode="listening">Listening</button>
-      <button class="mode-btn" data-mode="writing">Writing</button>
-      <button class="mode-btn" data-mode="speaking">Speaking</button>
-    </div>
-
     <div id="statusLine">카메라 준비 중...</div>
 
     <div class="row">
@@ -164,7 +134,18 @@
   // 🔤 영어만 인식 (가로/세로 상관 없이)
   const OCR_LANG = "eng";
 
+  // remote.html에서 선택한 모드 읽어서 표시만 함 (여기서는 버튼 없음)
   let currentMode = "reading";
+
+  // Firebase에서 modeHint 구독해서 상태만 보여주기
+  db.ref("p2p/state/modeHint").on("value", snap => {
+    const m = snap.val();
+    if (m) {
+      currentMode = m;
+      statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+    }
+  });
+
   let ocrRunning = false;
   let lastSolvedSnippet = "";
   let lastBlocked = null;
@@ -181,27 +162,6 @@
 
   // 고해상도 스틸 프레임용 ImageCapture
   let imageCapture = null;
-
-  // ---------- 모드 선택 ----------
-  const modeButtons = document.querySelectorAll('.mode-btn');
-  function setMode(mode) {
-    currentMode = mode;
-    modeButtons.forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-    db.ref("p2p/state").update({
-      modeHint: mode,
-      modeUpdatedAt: Date.now()
-    });
-    statusLine.textContent = `카메라 ON – 모드: ${mode} (화면 안정되면 자동 인식)`;
-  }
-  modeButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.getAttribute('data-mode');
-      setMode(mode);
-    });
-  });
-  setMode("reading");
 
   // ---------- 카메라 ----------
   async function startCamera() {
@@ -226,7 +186,9 @@
         }
       }
 
-      statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      if (!statusLine.textContent.includes("모드:")) {
+        statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      }
       startAutoLoop();
     } catch (e) {
       console.error(e);
@@ -364,7 +326,6 @@
       const text = rawText.replace(/\s+\n/g, "\n").trim();
       const conf = result.data.confidence || 0;
 
-      // 아주 짧은 경우만 버리고, conf는 거의 안 막음
       const effectiveLen = text.replace(/\s/g, "").length;
       if (!text || effectiveLen < 10) {
         statusLine.textContent =
@@ -380,7 +341,6 @@
         ocrText: text,
         ocrConfidence: conf,
         cameraBlocked: false,
-        modeHint: currentMode,
         ocrUpdatedAt: Date.now()
       });
 
@@ -400,9 +360,9 @@
     }
   }
 
-  // 중앙 90%만 크롭 (가로/세로 상관 없음)
+  // 중앙 90%만 크롭
   function cropCenterToCanvas(fullW, fullH, drawCallback) {
-    const scale = 0.9;  // 중앙 90% 자름 → 글자 크게
+    const scale = 0.9;
     const w = Math.floor(fullW * scale);
     const h = Math.floor(fullH * scale);
     const x = Math.floor((fullW - w) / 2);
