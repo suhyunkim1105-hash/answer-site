@@ -34,9 +34,10 @@
       background: #fff;
     }
     .answer-big {
-      font-size: 36px;
+      font-size: 32px;
       font-weight: bold;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
+      word-break: break-all;
     }
     pre {
       white-space: pre-wrap;
@@ -53,7 +54,7 @@
     @media (max-width: 480px) {
       body { padding: 12px; }
       h2 { font-size: 22px; }
-      .answer-big { font-size: 34px; }
+      .answer-big { font-size: 30px; }
       pre { font-size: 15px; }
     }
   </style>
@@ -186,18 +187,13 @@
 
   function renderByMode(mode, text) {
     if (mode === "reading" || mode === "listening") {
-      const m = text.match(/\[ANSWER\]\s*([0-5?])/i);
-      let ans = m ? m[1] : "?";
-      if (ans < "1" || ans > "5") ans = "?";
+      // ANSWER 전체 줄 가져오기 (단일, 복수, INSERT, SUMMARY, TABLE 다 지원)
+      const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
+      let ansText = mAns ? mAns[1].trim() : "";
+      if (!ansText) ansText = "?";
+      rlAnswerEl.textContent = "정답: " + ansText;
 
-      let label = "정답: ";
-      if (ans >= "1" && ans <= "5") {
-        label += ans;
-      } else {
-        label += "(무응답)";
-      }
-      rlAnswerEl.textContent = label;
-
+      // WHY 이후 전체를 해설로
       const split = text.split(/\[WHY\]/i);
       const why = split[1] ? split[1].trim() : "";
       rlWhyEl.textContent = why;
@@ -245,6 +241,7 @@
       return;
     }
 
+    // fallback: 그냥 전체 텍스트를 해설로 보여줌
     rlAnswerEl.textContent = "";
     rlWhyEl.textContent = text;
     showModeBox("reading", true);
