@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Camera OCR (HD)</title>
+  <title>answer-site | Camera OCR</title>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
@@ -24,8 +24,8 @@
       top: 0; left: 0;
       color: #ff6666;
       background: rgba(0,0,0,0.6);
-      padding: 8px 12px;
-      font-size: 14px;
+      padding: 6px 10px;
+      font-size: 13px;
       z-index: 10;
       white-space: pre-wrap;
     }
@@ -52,7 +52,7 @@
   const db = firebase.database();
 
   const video = document.getElementById('video');
-  const msg  = document.getElementById('msg');
+  const msg   = document.getElementById('msg');
 
   // ---------------------- Camera Init (HD + Fallback) ----------------------
   async function startCamera() {
@@ -78,7 +78,7 @@
         console.warn("camera attempt failed", c, e);
       }
     }
-    msg.textContent = "카메라를 시작할 수 없습니다. 권한/보안앱 설정을 확인하세요.";
+    msg.textContent = "카메라를 시작할 수 없습니다.\n권한 / 보안앱 설정을 확인하세요.";
   }
 
   startCamera();
@@ -105,31 +105,48 @@
       return;
     }
 
-    // 중앙 80% 영역만 캡처
+    // 중앙 80% 영역만 사용
     const cropW = w * 0.8;
     const cropH = h * 0.8;
     const cropX = (w - cropW) / 2;
     const cropY = (h - cropH) / 2;
 
+    // 최대 폭 1280으로 다운스케일 (속도 개선)
+    const maxWidth = 1280;
+    let outW = cropW;
+    let outH = cropH;
+    if (cropW > maxWidth) {
+      const scale = maxWidth / cropW;
+      outW = maxWidth;
+      outH = Math.round(cropH * scale);
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width  = cropW;
-    canvas.height = cropH;
+    canvas.width  = outW;
+    canvas.height = outH;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+
+    const lang = (cmd && cmd.lang === "eng") ? "eng" : "eng+kor";
 
     msg.textContent = "OCR 중...";
-    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng+kor');
+    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), lang);
     const text = (data.text || "").trim();
-    msg.textContent = "";
+    const confidence = (typeof data.confidence === "number")
+      ? Math.round(data.confidence)
+      : null;
+
+    msg.textContent = confidence ? `OCR ${confidence}%` : "";
 
     db.ref("p2p/latestResult").set({
       target: cmd.target,
       text,
+      confidence,
       timestamp: cmd.timestamp || Date.now()
     });
   }
 
-  // ---------------------- Firebase Command Listener ----------------------
+  // ---------------------- Command Listener (중복방지) ----------------------
   let lastHandledTs = 0;
 
   db.ref("p2p/latestCommand").on("value", snap => {
