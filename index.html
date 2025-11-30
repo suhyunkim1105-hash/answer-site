@@ -37,12 +37,13 @@
       height: auto;
       transform-origin: center center;
     }
+    /* 중앙 OCR 영역 가이드 박스 (초록색 띠) */
     #overlayCenter {
       position: absolute;
       top: 50%;
       left: 50%;
-      width: 60%;
-      height: 40%;
+      width: 70%;
+      height: 50%;
       transform: translate(-50%, -50%);
       border: 2px solid rgba(0, 255, 0, 0.6);
       border-radius: 6px;
@@ -77,7 +78,7 @@
 <div class="wrap">
   <div id="videoContainer">
     <video id="video" autoplay playsinline></video>
-    <!-- 중앙 OCR 영역 가이드 박스 -->
+    <!-- 이 박스 안쪽이 OCR 우선 영역 -->
     <div id="overlayCenter"></div>
   </div>
 
@@ -117,22 +118,20 @@
 
   let currentOCRLang = "eng+kor";
   let lastCmdTs = 0;
-  let streamingInterval = null;
 
-  // ---------- 카메라 세팅 ----------
+  // ---------- 카메라 세팅 (풀HD 우선 요청) ----------
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+          width:  { ideal: 1920 },
+          height: { ideal: 1080 }
         },
         audio: false
       });
       video.srcObject = stream;
       statusEl.textContent = "카메라 ON (원격에서 캡처 요청 시 OCR 수행)";
-      startLiveFrameStream();
     } catch (e) {
       console.error(e);
       statusEl.textContent = "카메라 접근 실패: " + e.toString();
@@ -164,7 +163,7 @@
     }
   });
 
-  // ---------- OCR 캡처 ----------
+  // ---------- OCR 캡처 (중앙 영역 크롭, 고해상도 유지) ----------
   async function captureAndOCR(target) {
     try {
       if (!video.videoWidth) {
@@ -174,10 +173,10 @@
 
       statusEl.textContent = `OCR (${target}) 진행 중...`;
 
-      // 중앙부만 크롭해서 OCR (속도 향상)
       const fullW = video.videoWidth;
       const fullH = video.videoHeight;
 
+      // 중앙 70% x 50% 영역 (해상도는 그대로, 일부만 잘라서 인식)
       const cropW = Math.floor(fullW * 0.7);
       const cropH = Math.floor(fullH * 0.5);
       const sx = Math.floor((fullW - cropW) / 2);
@@ -187,6 +186,7 @@
       canvas.width = cropW;
       canvas.height = cropH;
       const ctx = canvas.getContext('2d');
+
       ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
 
       const lang = currentOCRLang || "eng+kor";
@@ -230,33 +230,6 @@
       updatedAt: Date.now()
     });
     statusEl.textContent = "상태 초기화 완료.";
-  }
-
-  // ---------- 휴대폰 → 원격으로 실시간 프레임 전송 ----------
-  function startLiveFrameStream() {
-    if (streamingInterval) return;
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-
-    streamingInterval = setInterval(() => {
-      if (!video.videoWidth) return;
-
-      const targetW = 320;
-      const ratio   = targetW / video.videoWidth;
-      const targetH = Math.floor(video.videoHeight * ratio);
-
-      canvas.width  = targetW;
-      canvas.height = targetH;
-
-      ctx.drawImage(video, 0, 0, targetW, targetH);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.4); // 낮은 화질로 용량 줄이기
-
-      db.ref("p2p/liveFrame").set({
-        dataUrl,
-        ts: Date.now()
-      });
-    }, 600); // 약 1.5fps 정도
   }
 
   startCamera();
