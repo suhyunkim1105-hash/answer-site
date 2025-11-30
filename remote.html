@@ -62,20 +62,6 @@
       font-size: 15px;
     }
 
-    #liveImg {
-      width: 100%;
-      max-height: 260px;
-      border-radius: 8px;
-      background: #000;
-      object-fit: cover;
-      display: block;
-    }
-    #camStatus {
-      font-size: 11px;
-      color:#777;
-      margin-top: 4px;
-    }
-
     @media (orientation: landscape) {
       body { padding: 8px; }
       h2 { font-size: 17px; }
@@ -114,13 +100,6 @@
     <h3>Korean Tips</h3>
     <pre id="s-korean"></pre>
   </div>
-
-  <!-- 1번(휴대폰) 카메라 실시간 프레임 -->
-  <div id="box-preview" class="box">
-    <h3>휴대폰 카메라 (index.html) 실시간 미리보기</h3>
-    <img id="liveImg" alt="live from phone camera">
-    <div id="camStatus">휴대폰(index.html)에서 카메라 실행 중이면 여기에 화면이 뜸.</div>
-  </div>
 </div>
 
 <script>
@@ -152,9 +131,6 @@
   const sEvalEl    = document.getElementById('s-eval');
   const sModelEl   = document.getElementById('s-model');
   const sKorEl     = document.getElementById('s-korean');
-
-  const liveImg    = document.getElementById('liveImg');
-  const camStatus  = document.getElementById('camStatus');
 
   let latestState = { mode: "reading" };
   let lastSolveTs = 0;
@@ -224,13 +200,13 @@
 
   function renderByMode(mode, text) {
     if (mode === "reading" || mode === "listening") {
-      // [ANSWER] 전체 줄 (단일, 복수, INSERT, SUMMARY, TABLE 다 지원)
+      // [ANSWER] 전체 줄
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       let ansText = mAns ? mAns[1].trim() : "";
       if (!ansText) ansText = "?";
       rlAnswerEl.textContent = "정답: " + ansText;
 
-      // [WHY] 이후 전체 → 해설
+      // [WHY] 이후 전체
       const split = text.split(/\[WHY\]/i);
       const why = split[1] ? split[1].trim() : "";
       rlWhyEl.textContent = why;
@@ -283,17 +259,6 @@
     rlWhyEl.textContent = text;
     showModeBox("reading", true);
   }
-
-  // --------- 1번(index.html)에서 올라오는 실시간 프레임 받기 ---------
-  db.ref("p2p/liveFrame").on("value", snap => {
-    const frame = snap.val();
-    if (!frame || !frame.dataUrl) {
-      camStatus.textContent = "휴대폰(index.html) 카메라 신호 없음.";
-      return;
-    }
-    liveImg.src = frame.dataUrl;
-    camStatus.textContent = "휴대폰(index.html) 카메라 실시간 미리보기 중.";
-  });
 </script>
 </body>
 </html>
