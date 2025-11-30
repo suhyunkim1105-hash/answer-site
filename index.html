@@ -3,46 +3,90 @@
 <head>
 <meta charset="UTF-8">
 <title>answer-site | Camera OCR</title>
+
+<!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+
+<!-- Tesseract OCR -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
 
 <style>
 body { margin: 0; background: #000; }
-#video { width: 100vw; height: 100vh; object-fit: cover; }
+#video { width: 100vw; height: 100vh; object-fit: cover; background:black; }
+#errorMsg {
+  color: red; padding: 20px; font-size: 18px;
+  background: #000; position: absolute; top: 0; left: 0;
+}
 </style>
 </head>
 <body>
 
-<video id="video" autoplay></video>
+<div id="errorMsg"></div>
+<video id="video" autoplay playsinline></video>
 
 <script>
 // ---------------------- Firebase ----------------------
 const firebaseConfig = {
-  apiKey: "YOUR_KEY",
-  authDomain: "YOUR_DOMAIN",
-  databaseURL: "YOUR_DB_URL",
-  projectId: "YOUR_PID",
+  apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+  authDomain: "answer-site-p2p.firebaseapp.com",
+  databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "answer-site-p2p",
+  storageBucket: "answer-site-p2p.firebasestorage.app",
+  messagingSenderId: "364227113735",
+  appId: "1:364227113735:web:b18355cf0b16454663cba2",
+  measurementId: "G-C8MRHK5ZGS"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
-// ---------------------- Camera Init ----------------------
 const video = document.getElementById("video");
+const errBox = document.getElementById("errorMsg");
 
-navigator.mediaDevices.getUserMedia({
-  video: { facingMode: "environment" }
-}).then(stream => {
-  video.srcObject = stream;
-});
+// ---------------------- CAMERA INIT (FIXED) ----------------------
+async function startCamera() {
+  try {
+    // 1) Try rear camera
+    const rear = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } },
+      audio: false
+    });
+    video.srcObject = rear;
+    return;
+  } catch (e1) {
+    console.warn("Rear camera failed → trying front camera", e1);
+  }
 
-// ---------------------- OCR Function ----------------------
-async function captureAndOcr(command) {
+  try {
+    // 2) fallback: try front camera
+    const front = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
+      audio: false
+    });
+    video.srcObject = front;
+    return;
+  } catch (e2) {
+    console.warn("Front camera failed too", e2);
+    errBox.innerText = 
+      "카메라를 불러올 수 없습니다.\n브라우저 권한 / 세이프 브라우징 / 보안 앱 설정을 확인하세요.";
+  }
+}
+
+// Start camera
+startCamera();
+
+
+// ---------------------- OCR ----------------------
+async function captureAndOcr(cmd) {
   const canvas = document.createElement("canvas");
   const w = video.videoWidth;
   const h = video.videoHeight;
 
-  // 중앙부 70% 크롭
+  if (!w || !h) {
+    errBox.innerText = "카메라가 아직 초기화되지 않았습니다.";
+    return;
+  }
+
   const cropW = w * 0.7;
   const cropH = h * 0.7;
   const cropX = (w - cropW) / 2;
@@ -50,34 +94,25 @@ async function captureAndOcr(command) {
 
   canvas.width = cropW;
   canvas.height = cropH;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  canvas.getContext("2d").drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-  const dataUrl = canvas.toDataURL("image/png");
-  const result = await Tesseract.recognize(dataUrl, "eng+kor", {
-    logger: m => console.log(m)
-  });
-
+  const result = await Tesseract.recognize(canvas.toDataURL("image/png"), "eng+kor");
   const text = result.data.text.trim();
 
   db.ref("p2p/latestResult").set({
-    target: command.target,
+    target: cmd.target,
     text,
     timestamp: Date.now()
   });
 }
 
-// ---------------------- Listen for Commands ----------------------
+// ---------------------- COMMAND LISTENER ----------------------
 db.ref("p2p/latestCommand").on("value", snap => {
   const cmd = snap.val();
   if (!cmd) return;
-
-  if (cmd.action === "capture") {
-    captureAndOcr(cmd);
-  }
+  if (cmd.action === "capture") captureAndOcr(cmd);
 });
 </script>
-
 </body>
 </html>
 
