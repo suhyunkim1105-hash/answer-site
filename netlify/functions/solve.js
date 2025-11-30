@@ -1,5 +1,4 @@
 // /.netlify/functions/solve.js
-import fetch from "node-fetch";
 
 export async function handler(event, context) {
   try {
@@ -40,9 +39,13 @@ export async function handler(event, context) {
     };
 
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: err.toString() }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: err.toString() })
+    };
   }
 }
+
 
 // ---------------- PROMPT BUILDER ----------------
 function buildPrompt(mode, passage, question, stt) {
@@ -81,7 +84,6 @@ Output Format (STRICT):
 
   if (mode === "writing") {
     const q = stt?.trim() ? stt : question;
-
     return `
 You are a TOEFL Writing essay generator.
 
@@ -134,6 +136,7 @@ Output Format:
 
   return "Invalid mode.";
 }
+
 
 // ---------------- SHORT TTS ----------------
 function extractTTS(mode, text) {
