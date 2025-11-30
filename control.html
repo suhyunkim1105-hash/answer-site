@@ -19,29 +19,31 @@
     }
     .wrap {
       width: 100%;
+      box-sizing: border-box;
     }
     h2 {
-      margin: 4px 0 8px 0;
-      font-size: 20px;
+      margin: 2px 0 6px 0;
+      font-size: 18px;
     }
 
     .top {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 4px;
       align-items: center;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .mode-btn {
-      padding: 6px 8px;
+      flex: 1 1 calc(25% - 4px);
+      min-width: 60px;
+      padding: 5px 0;
       border-radius: 6px;
       border: 1px solid #999;
       background: #fff;
       cursor: pointer;
-      font-size: 13px;
-      flex: 1 1 auto;
+      font-size: 12px;
       text-align: center;
-      min-width: 70px;
+      box-sizing: border-box;
     }
     .mode-btn.active {
       background: #4f46e5;
@@ -51,13 +53,13 @@
 
     #ocrLang {
       padding: 4px 6px;
-      font-size: 12px;
+      font-size: 11px;
       border-radius: 4px;
       border: 1px solid #ccc;
     }
 
     #modeInfo {
-      font-size: 12px;
+      font-size: 11px;
       color:#555;
       margin-top: 4px;
       margin-bottom: 6px;
@@ -78,8 +80,8 @@
 
     button.action {
       width: 100%;
-      padding: 12px 16px;
-      font-size: 18px;
+      padding: 10px 12px;
+      font-size: 15px;
       cursor: pointer;
       border-radius: 8px;
       border: 1px solid #ccc;
@@ -90,8 +92,8 @@
 
     @media (orientation: landscape) {
       body { padding: 6px; }
-      button.action { font-size: 18px; padding: 10px 14px; }
-      h2 { font-size: 19px; }
+      h2 { font-size: 17px; }
+      button.action { font-size: 14px; padding: 8px 10px; }
     }
   </style>
 </head>
@@ -112,7 +114,7 @@
     </select>
   </div>
 
-  <div id="modeInfo">현재 모드: reading (바꾸고 싶을 때만 위 버튼 사용)</div>
+  <div id="modeInfo">현재 모드: reading (바꿀 때만 위 버튼 사용)</div>
 
   <div class="panel">
     <button class="action" onclick="cmdCapture('passage')">📄 지문 캡처 (현재 화면)</button>
@@ -157,7 +159,7 @@
       btn.classList.add("active");
 
       db.ref("p2p/state").update({ mode, updatedAt: Date.now() });
-      modeInfo.textContent = `현재 모드: ${mode} (바꾸고 싶을 때만 위 버튼 사용)`;
+      modeInfo.textContent = `현재 모드: ${mode} (바꿀 때만 위 버튼 사용)`;
     });
   });
 
