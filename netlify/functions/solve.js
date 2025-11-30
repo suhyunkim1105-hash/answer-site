@@ -2,15 +2,14 @@
 
 export async function handler(event, context) {
   try {
-    const { mode, passage, question, stt } = JSON.parse(event.body || "{}");
+    const payload = JSON.parse(event.body || "{}");
+    const mode     = (payload.mode || "reading").toLowerCase();
+    const passage  = (payload.passage || "").trim();
+    const question = (payload.question || "").trim();
+    const stt      = (payload.stt || "").trim();
 
     const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5";
-    const prompt = buildPrompt(
-      mode || "reading",
-      (passage || "").trim(),
-      (question || "").trim(),
-      (stt || "").trim()
-    );
+    const prompt = buildPrompt(mode, passage, question, stt);
 
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -23,7 +22,10 @@ export async function handler(event, context) {
         temperature: 0.2,
         max_tokens: 900,
         messages: [
-          { role: "system", content: "Follow the requested output format exactly. Do NOT invent answers when the information is insufficient." },
+          {
+            role: "system",
+            content: "Follow the exact output format requested. Do NOT invent answers if information is insufficient. If uncertain, output [ANSWER] ?."
+          },
           { role: "user", content: prompt }
         ]
       })
@@ -51,109 +53,119 @@ export async function handler(event, context) {
 function buildPrompt(mode, passage, question, stt) {
   if (mode === "reading") {
     return `
-You are a TOEFL Reading answer engine.
+You are a TOEFL iBT Reading answer engine.
 
 <Reading Passage>
 ${passage}
 
-<Question & Options (may be long; may include 1~5 choices)>
+<Question & Options (1~5, may be long)>
 ${question}
 
 Rules:
-- Choose the correct option only if you are at least 80% confident.
-- If the answer CANNOT be determined safely from the text, do NOT guess.
-- In that case output "[ANSWER] ?" and explain why it is unclear.
+- Choose the correct option among 1~5 ONLY if you are at least 80% confident.
+- If the answer CANNOT be safely determined from the passage and question, do NOT guess.
+- In that case, output "[ANSWER] ?" and explain why it is unclear.
 
 Output Format (STRICT):
 [ANSWER] N or ?
-[WHY] 한국어로 핵심 근거 및 불확실하면 그 이유 2~4줄
+[WHY] 한국어로 핵심 근거 또는 불확실한 이유를 2~4줄로 설명
 `;
   }
 
   if (mode === "listening") {
     return `
-You are a TOEFL Listening answer engine.
+You are a TOEFL iBT Listening answer engine.
 
-<Listening transcript from audio STT (may contain errors)>
+<Listening transcript from audio STT (may contain minor errors)>
 ${stt}
 
-<On-screen question text (optional)>
+<On-screen question text or context (optional)>
 ${passage}
 
 <Options text (1~5, may include question again)>
 ${question}
 
 Rules:
-- Use all information, but consider STT may have minor errors.
-- Only choose an option if you are at least 80% confident.
+- Use the transcript and any on-screen text together.
+- Consider that STT may contain small recognition errors.
+- Only choose an option 1~5 if you are at least 80% confident.
 - If the answer cannot be safely determined, output "[ANSWER] ?".
 - Never randomly guess.
 
 Output Format (STRICT):
 [ANSWER] N or ?
-[WHY] 한국어로 핵심 근거 및 불확실한 경우 그 이유 2~4줄
+[WHY] 한국어로 핵심 근거 또는 불확실한 이유를 2~4줄로 설명
 `;
   }
 
   if (mode === "writing") {
     return `
-You are a TOEFL Writing essay generator.
+You are a TOEFL iBT Writing essay generator.
 
-<Reading passage (optional; for integrated tasks)>
+<Reading passage or notes (optional, for integrated tasks)>
 ${passage}
 
 <On-screen writing prompt text (optional)>
 ${question}
 
-<Spoken writing prompt from audio STT (optional)>
+<Spoken prompt from audio STT (optional)>
 ${stt}
 
-Use whatever information is provided (some sections may be empty).
+Some of the above may be empty; use whatever is available.
 
 Task:
-1) Write a TOEFL-style independent or integrated essay.
-2) Length: 250~320 words STRICTLY.
-3) Clear introduction, 2 body paragraphs, and conclusion.
-4) After the essay, give Korean feedback (3~5 lines) on structure, content, and grammar.
+1) Write a TOEFL-style independent or integrated essay based on the given information.
+2) Length: STRICTLY 250~320 words.
+3) Clear structure: introduction, 2 body paragraphs, and conclusion.
+4) Follow TOEFL Writing criteria: task achievement, organization, development, vocabulary, and grammar.
+5) After the essay, provide Korean feedback (3~5 lines) commenting on structure, content, and grammar as if you were scoring it.
 
 Output Format (STRICT):
 [ESSAY]
 (essay here)
 
 [FEEDBACK]
-(한국어 피드백)
+(한국어 피드백 3~5줄)
 `;
   }
 
   if (mode === "speaking") {
     return `
-You are a TOEFL Speaking evaluator.
+You are a TOEFL iBT Speaking evaluator.
 
 <Question text from screen/OCR (may be empty)>
 ${question}
 
-<Extra context passage (optional)>
+<Extra passage or notes (optional)>
 ${passage}
 
 <My spoken answer (STT transcription; may contain minor errors)>
 ${stt}
 
+Assume:
+- This is a TOEFL iBT Speaking task.
+- The student's speaking time limit is about 45 seconds.
+- A natural model answer should be about 90~120 words (do NOT exceed 130 words).
+
 Task:
-1) Evaluate my answer in English (Delivery / Language use / Topic development).
-2) List strengths and weaknesses.
+1) Evaluate the student's answer in English, using TOEFL Speaking criteria:
+   - Delivery (pronunciation, intonation, pacing)
+   - Language use (grammar, vocabulary)
+   - Topic development (organization, coherence, detail)
+2) Mention specific strengths and weaknesses.
 3) Give an approximate level (e.g., High, Mid, Low).
-4) Provide a 45~60 second model answer in English.
+4) Provide a 45~60 second model answer in English (around 90~120 words).
 5) Finally, give a short Korean summary and improvement tips (3~5 lines).
 
 Output Format (STRICT):
 [EVAL]
-(English evaluation)
+(English evaluation: delivery, language use, topic development, level)
 
 [MODEL]
-(45~60 second model answer)
+(45~60 second model answer in English, about 90~120 words)
 
 [KOREAN]
-(한국어 요약 및 조언)
+(한국어 요약 및 개선 팁 3~5줄)
 `;
   }
 
@@ -165,9 +177,10 @@ Output Format (STRICT):
 
 function extractTTS(mode, text) {
   if (mode === "reading" || mode === "listening") {
-    // only speak when we have a clear numeric answer 1~5
     const m = text && text.match(/\[ANSWER\]\s*([1-5])/i);
-    if (m) return `The correct answer is number ${m[1]}.`;
+    if (m) {
+      return `The correct answer is number ${m[1]}.`;
+    }
   }
   if (mode === "speaking") {
     return "Here is your speaking evaluation summary.";
