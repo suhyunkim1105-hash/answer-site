@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>answer-site | Remote</title>
 
+<!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
@@ -29,8 +30,8 @@ button { padding: 10px 15px; margin: 5px; }
 <hr>
 
 <h3>Reading</h3>
-<button onclick="sendCapture('passage')">지문 캡처</button>
-<button onclick="sendCapture('question')">문제 캡처 + 풀이</button>
+<button onclick="sendCapture('passage')">📸 지문 캡처</button>
+<button onclick="sendCapture('question')">📸 문제 캡처 + 풀이</button>
 
 <textarea id="passageBox" placeholder="지문 OCR 결과"></textarea>
 <textarea id="questionBox" placeholder="문제 OCR 결과"></textarea>
@@ -40,21 +41,25 @@ button { padding: 10px 15px; margin: 5px; }
 <h3>Writing / Listening / Speaking – STT</h3>
 <button onclick="startSTT()">🎤 STT 시작</button>
 <button onclick="stopSTT()">⏹ STT 종료</button>
-<textarea id="sttBox" placeholder="STT 인식 결과"></textarea>
+<textarea id="sttBox" placeholder="여기에 실시간 음성 인식 결과(STT)가 표시됨"></textarea>
 
 <hr>
 
-<button onclick="requestSolve()">AI 풀이/생성 요청</button>
+<button onclick="requestSolve()">🤖 AI 풀이/생성 요청</button>
 
 <div id="resultBox"></div>
 
 <script>
 // ---------------- Firebase Init ----------------
 const firebaseConfig = {
-  apiKey: "YOUR_KEY",
-  authDomain: "YOUR_DOMAIN",
-  databaseURL: "YOUR_DB_URL",
-  projectId: "YOUR_PID",
+  apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+  authDomain: "answer-site-p2p.firebaseapp.com",
+  databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "answer-site-p2p",
+  storageBucket: "answer-site-p2p.firebasestorage.app",
+  messagingSenderId: "364227113735",
+  appId: "1:364227113735:web:b18355cf0b16454663cba2",
+  measurementId: "G-C8MRHK5ZGS"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
@@ -81,29 +86,29 @@ db.ref("p2p/latestResult").on("value", snap => {
   }
 });
 
-// ---------------- STT (WebSpeech API) ----------------
+// ---------------- STT ----------------
 let recognition;
 let recognizing = false;
-let sttFinal = "";
+let finalText = "";
 
 function startSTT() {
   if (!('webkitSpeechRecognition' in window)) {
-    alert("WebSpeech API 지원 안됨.");
+    alert("브라우저가 STT(WebSpeech API)를 지원하지 않습니다.");
     return;
   }
 
   recognition = new webkitSpeechRecognition();
   recognition.lang = "en-US";
-  recognition.interimResults = true;
   recognition.continuous = true;
+  recognition.interimResults = true;
 
   recognition.onresult = e => {
-    let text = "";
+    let temp = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      text += e.results[i][0].transcript;
-      if (e.results[i].isFinal) sttFinal += e.results[i][0].transcript + "\n";
+      temp += e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += e.results[i][0].transcript + "\n";
     }
-    document.getElementById("sttBox").value = sttFinal + "\n" + text;
+    document.getElementById("sttBox").value = finalText + "\n" + temp;
   };
 
   recognition.start();
@@ -137,7 +142,7 @@ async function requestSolve() {
   const out = await res.json();
   document.getElementById("resultBox").innerText = out.result;
 
-  // Optional TTS (정답/총평 읽기)
+  // Optional TTS
   if (out.tts) {
     const u = new SpeechSynthesisUtterance(out.tts);
     speechSynthesis.speak(u);
