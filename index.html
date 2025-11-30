@@ -37,7 +37,7 @@
       height: auto;
       transform-origin: center center;
     }
-    /* 화면 전체 테두리 – "카메라 활성" 표시용 */
+    /* 화면 전체 테두리 – "카메라 활성" 느낌용 */
     #overlayFrame {
       position: absolute;
       top: 0;
@@ -85,7 +85,6 @@
 
     <div class="row">
       <span class="label">배율</span>
-      <!-- 최대 배율 3으로 약간 상향 -->
       <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
     </div>
     <div class="row">
@@ -121,14 +120,16 @@
   let lastBlocked = null;
   let lastOcrTime = 0;
 
-  // 밝기 측정용 작은 캔버스
+  // 밝기 + 움직임 감지용 작은 캔버스
+  const BW = 64, BH = 36;
   const bCanvas = document.createElement('canvas');
   const bCtx = bCanvas.getContext('2d');
-  const BW = 64, BH = 36;
   bCanvas.width = BW;
   bCanvas.height = BH;
+  let prevThumb = null;       // 이전 프레임 thumbnail (grayscale)
+  let lastStableTime = 0;     // 최근에 "안 움직임" 상태가 시작된 시각
 
-  // 고해상도 캡처용 ImageCapture (지원하는 브라우저에서만)
+  // 고해상도 스틸 프레임용 ImageCapture (되면 쓰고, 안 되면 video 프레임)
   let imageCapture = null;
 
   // ---------- 카메라 세팅 ----------
@@ -137,7 +138,6 @@
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          // 해상도 요구 조건을 조금 더 빡세게
           width:  { min: 1280, ideal: 1920, max: 2560 },
           height: { min: 720,  ideal: 1080, max: 1440 }
         },
@@ -145,7 +145,6 @@
       });
       video.srcObject = stream;
 
-      // ImageCapture 지원되면 고해상도 스틸 프레임 사용
       const track = stream.getVideoTracks()[0];
       if ('ImageCapture' in window && track) {
         try {
@@ -156,7 +155,8 @@
         }
       }
 
-      statusEl.textContent = "카메라 ON – 화면 자동 인식 중...";
+      statusEl.textContent = "카메라 ON – 화면 안정되면 자동으로 문제 인식";
+
       startAutoLoop();
     } catch (e) {
       console.error(e);
@@ -169,33 +169,69 @@
     video.style.transform = `scale(${scale})`;
   });
 
-  // ---------- 카메라 가려짐(어두움) 감지 ----------
-  function isCameraBlocked() {
-    if (!video.videoWidth || !video.videoHeight) return false;
-    bCtx.drawImage(video, 0, 0, BW, BH);
-    const imgData = bCtx.getImageData(0, 0, BW, BH).data;
-    let sum = 0;
-    const totalPixels = imgData.length / 4;
-    for (let i = 0; i < imgData.length; i += 4) {
-      const r = imgData[i];
-      const g = imgData[i + 1];
-      const b = imgData[i + 2];
-      sum += (r + g + b) / 3;
+  // ---------- 프레임 분석: 밝기 + 움직임 ----------
+  function analyzeFrame() {
+    if (!video.videoWidth || !video.videoHeight) {
+      return { blocked: false, stable: false };
     }
-    const avg = sum / totalPixels; // 0 ~ 255
-    // 평균 밝기 25 미만이면 "가려졌다"고 본다
-    return avg < 25;
+
+    bCtx.drawImage(video, 0, 0, BW, BH);
+    const data = bCtx.getImageData(0, 0, BW, BH).data;
+    const len = BW * BH;
+
+    let sumBright = 0;
+    let diffSum = 0;
+    const currThumb = new Uint8Array(len);
+
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const gray = (r + g + b) / 3;
+      currThumb[p] = gray;
+      sumBright += gray;
+      if (prevThumb) {
+        diffSum += Math.abs(gray - prevThumb[p]);
+      }
+    }
+
+    const avgBright = sumBright / len;            // 0~255
+    const diffAvg   = prevThumb ? (diffSum / len) : 0;  // 0~255
+
+    const blocked = avgBright < 25;  // 너무 어두우면 가려졌다고 간주
+
+    const now = Date.now();
+    let stable = false;
+
+    // diffAvg가 작으면 "화면 거의 안 움직임"
+    if (diffAvg < 8) { // 이 값이 클수록 더 빡세게 잡음
+      if (!lastStableTime) {
+        lastStableTime = now;
+      } else if (now - lastStableTime > 1000) { // 1초 이상 거의 안 움직였으면
+        stable = true;
+      }
+    } else {
+      // 많이 움직였으면 다시 리셋
+      lastStableTime = 0;
+    }
+
+    prevThumb = currThumb;
+
+    return { blocked, stable };
   }
 
-  // ---------- 자동 루프: 가려짐 체크 + OCR 스케줄 ----------
+  // ---------- 자동 루프: 가려짐 + 움직임 + OCR 스케줄 ----------
   function startAutoLoop() {
     function loop() {
+      const now = Date.now();
+
       if (!video.videoWidth && !imageCapture) {
         requestAnimationFrame(loop);
         return;
       }
 
-      const blocked = isCameraBlocked();
+      const { blocked, stable } = analyzeFrame();
+
       if (blocked !== lastBlocked) {
         lastBlocked = blocked;
         db.ref("p2p/state").update({
@@ -204,11 +240,11 @@
         });
         statusEl.textContent = blocked
           ? "카메라가 가려짐 – 마지막 답 유지 중"
-          : "카메라 ON – 화면 자동 인식 중...";
+          : "카메라 ON – 화면 안정되면 자동으로 문제 인식";
       }
 
-      const now = Date.now();
-      if (!blocked && !ocrRunning && now - lastOcrTime > 8000) { // 8초 간격
+      // 화면이 안 가려져 있고, 충분히 안정(stable)되고, 이전 OCR에서 어느 정도 시간 경과했을 때만 OCR
+      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce();
       }
@@ -218,31 +254,29 @@
     requestAnimationFrame(loop);
   }
 
-  // ---------- 전체 프레임 OCR + 자동 solve 트리거 ----------
+  // ---------- OCR: 가운데 영역만 + 품질 필터 + 자동 solve ----------
   async function doOCROnce() {
     ocrRunning = true;
     try {
       statusEl.textContent = "OCR 진행 중...";
 
-      // 캔버스 준비
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
 
       if (imageCapture) {
-        // 고해상도 스틸 프레임 사용
         try {
           const bitmap = await imageCapture.grabFrame();
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          ctx.drawImage(bitmap, 0, 0);
+          cropCenterToCanvas(bitmap.width, bitmap.height, (x, y, w, h) => {
+            canvas.width = w;
+            canvas.height = h;
+            ctx.drawImage(bitmap, x, y, w, h, 0, 0, w, h);
+          });
         } catch (e) {
-          console.warn("grabFrame 실패, video 프레임으로 fallback:", e);
-          // fallback: 아래 video 프레임 사용
-          fillCanvasFromVideo(canvas, ctx);
+          console.warn("grabFrame 실패, video 프레임 fallback:", e);
+          fillCanvasFromVideoCenter(canvas, ctx);
         }
       } else {
-        // ImageCapture 미지원 → video 프레임 사용
-        fillCanvasFromVideo(canvas, ctx);
+        fillCanvasFromVideoCenter(canvas, ctx);
       }
 
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
@@ -253,18 +287,20 @@
         }
       });
 
-      const text = (result.data.text || "").trim();
+      const rawText = result.data.text || "";
+      const text = rawText.replace(/\s+\n/g, "\n").trim(); // 약간 정리
       const conf = result.data.confidence || 0;
 
-      if (!text || text.length < 20) {
-        statusEl.textContent = `OCR 완료 (텍스트 거의 없음, 무시)`;
+      // 너무 짧거나, 평균 신뢰도가 너무 낮으면 "노이즈"로 보고 무시
+      if (!text || text.length < 30 || conf < 35) {
+        statusEl.textContent =
+          `OCR 완료 (텍스트/신뢰도 낮음 → 무시: 길이=${text.length}, conf=${conf.toFixed(1)}%)`;
         ocrRunning = false;
         return;
       }
 
       statusEl.textContent = `OCR 완료 | 평균 신뢰도: ${conf.toFixed(1)}%`;
 
-      // Firebase에 화면 텍스트 저장
       await db.ref("p2p/state").update({
         ocrText: text,
         ocrConfidence: conf,
@@ -273,7 +309,7 @@
       });
 
       const snippet = text.slice(0, 400);
-      // 이전에 풀었던 문제와 텍스트가 다르면 새 문제로 보고 solve 요청
+      // 이전과 텍스트가 다를 때만 새 문제로 보고 solve 요청
       if (snippet !== lastSolvedSnippet) {
         lastSolvedSnippet = snippet;
         await db.ref("p2p/command").set({
@@ -289,9 +325,18 @@
     }
   }
 
-  function fillCanvasFromVideo(canvas, ctx) {
+  // 가운데 70~75% 영역 잘라서 쓰기
+  function cropCenterToCanvas(fullW, fullH, drawCallback) {
+    const scale = 0.75; // 중앙 75%
+    const w = Math.floor(fullW * scale);
+    const h = Math.floor(fullH * scale);
+    const x = Math.floor((fullW - w) / 2);
+    const y = Math.floor((fullH - h) / 2);
+    drawCallback(x, y, w, h);
+  }
+
+  function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
-      // video 정보가 아직 없으면 그냥 작은 캔버스로 빈 처리
       canvas.width = 640;
       canvas.height = 360;
       ctx.fillStyle = "black";
@@ -300,9 +345,12 @@
     }
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
-    canvas.width = fullW;
-    canvas.height = fullH;
-    ctx.drawImage(video, 0, 0, fullW, fullH);
+
+    cropCenterToCanvas(fullW, fullH, (sx, sy, sw, sh) => {
+      canvas.width = sw;
+      canvas.height = sh;
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    });
   }
 
   startCamera();
