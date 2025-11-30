@@ -3,106 +3,143 @@
 <head>
   <meta charset="UTF-8" />
   <title>answer-site 카메라</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <style>
-    * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 8px;
-      background: #050505;
-      color: #f5f5f5;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    .wrap {
-      max-width: 600px;
-      margin: 0 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+      padding: 16px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #000;
+      color: #fff;
     }
     h1 {
-      font-size: 1.1rem;
-      margin: 0 0 4px;
-      font-weight: 600;
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    #video-container {
+      width: 100%;
+      max-width: 800px;
+      aspect-ratio: 16 / 9;
+      margin: 0 auto 12px;
+      background: #111;
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     video {
       width: 100%;
-      border-radius: 12px;
-      background: #000;
+      height: 100%;
+      object-fit: cover;
       transform-origin: center center;
     }
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.8rem;
-    }
-    .row label {
-      white-space: nowrap;
-    }
-    input[type="range"] {
-      flex: 1;
-    }
     button {
-      flex: 1;
-      padding: 8px 10px;
+      width: 100%;
+      max-width: 800px;
+      display: block;
+      margin: 8px auto;
+      padding: 14px 12px;
       border-radius: 999px;
       border: none;
-      background: #2b2b2b;
+      font-size: 16px;
+      font-weight: 600;
+      background: #333;
       color: #fff;
-      font-size: 0.85rem;
       cursor: pointer;
     }
     button:active {
-      opacity: 0.85;
+      transform: scale(0.98);
+    }
+    .row {
+      max-width: 800px;
+      margin: 4px auto 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .row label {
+      width: 40px;
+      text-align: right;
+      font-size: 14px;
+    }
+    .row input[type="range"] {
+      flex: 1;
     }
     #status {
-      font-size: 0.78rem;
-      color: #c0c0c0;
-      min-height: 1.2em;
-      white-space: pre-line;
+      max-width: 800px;
+      margin: 10px auto 0;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: #111;
+      font-size: 13px;
+      color: #ccc;
+      min-height: 18px;
     }
-    #passagePreview {
-      font-size: 0.78rem;
-      color: #a0a0a0;
-      max-height: 4.5em;
-      overflow: hidden;
-      border-radius: 8px;
-      padding: 6px;
-      background: #141414;
+    #answerBox {
+      max-width: 800px;
+      margin: 10px auto 0;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: #151515;
+      font-size: 16px;
+    }
+    #answerBox span {
+      font-weight: 700;
+      color: #4dd0ff;
+    }
+    #ocrText {
+      max-width: 800px;
+      margin: 10px auto 0;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: #050505;
+      font-size: 12px;
       white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    canvas {
+      display: none;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>answer-site 카메라</h1>
+  <h1>answer-site 카메라</h1>
 
-    <video id="video" playsinline autoplay muted></video>
-    <canvas id="captureCanvas" style="display:none"></canvas>
-
-    <div class="row">
-      <button id="startBtn">카메라 켜기</button>
-    </div>
-
-    <div class="row">
-      <label for="zoomRange">줌</label>
-      <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1" />
-    </div>
-
-    <div id="status"></div>
-    <div id="passagePreview"></div>
+  <div id="video-container">
+    <video id="camera" autoplay playsinline></video>
   </div>
 
-  <!-- Tesseract.js: OCR (영어+한국어) -->
-  <script src="https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+  <button id="btnStart">카메라 켜기</button>
 
-  <!-- Firebase + 원격 캡처 + OCR + AI 풀이 -->
+  <div class="row">
+    <label for="zoom">줌</label>
+    <input id="zoom" type="range" min="1" max="2.5" step="0.1" value="1" />
+  </div>
+
+  <button id="btnCapture">현재 화면 캡처 + 풀이</button>
+
+  <div id="status"></div>
+
+  <div id="answerBox">
+    정답: <span id="answer"></span>
+  </div>
+
+  <pre id="ocrText"></pre>
+
+  <canvas id="canvas"></canvas>
+
+  <!-- Tesseract (영어 + 한국어 OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <!-- Firebase + 메인 로직 -->
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-    import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
+    import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
 
-    // ==== Firebase config (네 프로젝트 값) ====
+    // ===== 1. Firebase 설정 (네 프로젝트 값 그대로) =====
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -114,113 +151,183 @@
       measurementId: "G-C8MRHK5ZGS"
     };
 
-    const ROOM_ID = "room1";
-
     const app = initializeApp(firebaseConfig);
-    const db  = getDatabase(app);
-    const commandRef = ref(db, `rooms/${ROOM_ID}/command`);
-    const resultRef  = ref(db, `rooms/${ROOM_ID}/result`);
+    const db = getDatabase(app);
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("captureCanvas");
-    const startBtn = document.getElementById("startBtn");
-    const zoomRange = document.getElementById("zoomRange");
+    // ===== 2. DOM 요소 =====
+    const video = document.getElementById("camera");
+    const canvas = document.getElementById("canvas");
+    const zoomInput = document.getElementById("zoom");
     const statusEl = document.getElementById("status");
-    const passagePreviewEl = document.getElementById("passagePreview");
+    const ocrEl = document.getElementById("ocrText");
+    const answerEl = document.getElementById("answer");
+    const btnStart = document.getElementById("btnStart");
+    const btnCapture = document.getElementById("btnCapture");
 
     let stream = null;
-    let videoTrack = null;
-    let remoteProcessing = false;
     let lastRemoteRequestId = null;
-    let currentPassage = "";
-    let currentPassageSnippet = "";
-    const OCR_LANG = "eng+kor";
+    let remoteProcessing = false;
 
-    // ===== 카메라 켜기 & 고해상도 =====
-    async function startCamera() {
-      try {
-        if (stream) return;
-        statusEl.textContent = "카메라 여는 중…";
-
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 }
-          },
-          audio: false
-        });
-
-        video.srcObject = stream;
-        await video.play();
-
-        videoTrack = stream.getVideoTracks()[0];
-        setupZoomControl();
-        statusEl.textContent = "카메라 준비 완료.";
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "카메라 시작 오류: " + err.message;
-        alert("카메라를 열 수 없습니다: " + err.message);
-      }
+    // ===== 3. 줌 (CSS 확대) =====
+    function applyZoom() {
+      const s = parseFloat(zoomInput.value) || 1;
+      video.style.transform = `scale(${s})`;
     }
+    zoomInput.addEventListener("input", applyZoom);
 
-    startBtn.addEventListener("click", startCamera);
-
-    // ===== 줌 컨트롤 =====
-    function setupZoomControl() {
-      if (!videoTrack) {
-        zoomRange.disabled = true;
+    // ===== 4. 카메라 켜기 =====
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        statusEl.textContent = "이 브라우저에서는 카메라를 사용할 수 없습니다.";
         return;
       }
 
-      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-      if (caps.zoom) {
-        // 네이티브 줌 지원
-        zoomRange.min = caps.zoom.min;
-        zoomRange.max = caps.zoom.max;
-        zoomRange.step = caps.zoom.step || 0.1;
-        zoomRange.value = caps.zoom.min;
+      const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
 
-        zoomRange.oninput = async () => {
-          const z = Number(zoomRange.value);
-          try {
-            await videoTrack.applyConstraints({ advanced: [{ zoom: z }] });
-          } catch (e) {
-            console.warn("zoom applyConstraints 실패", e);
-          }
-        };
-      } else {
-        // CSS 스케일 줌 (디지털 줌 느낌)
-        zoomRange.min = 1;
-        zoomRange.max = 3;
-        zoomRange.step = 0.05;
-        zoomRange.value = 1;
-        video.style.transformOrigin = "center center";
+      const base = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      };
 
-        zoomRange.oninput = () => {
-          const z = Number(zoomRange.value);
-          video.style.transform = `scale(${z})`;
-        };
+      const constraints = {
+        video: isMobile
+          ? { ...base, facingMode: { ideal: "environment" } } // 휴대폰: 후면 우선
+          : { ...base } // PC: 기본 카메라
+      };
+
+      try {
+        statusEl.textContent = "카메라 요청 중...";
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+          stream = null;
+        }
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        statusEl.textContent = "카메라 켜짐 ✅";
+      } catch (err) {
+        console.error("getUserMedia error", err);
+        statusEl.textContent = "카메라 오류: " + err.name + " - " + err.message;
       }
     }
 
-    // ===== 프레임 캡처 (최대 해상도) =====
+    btnStart.addEventListener("click", startCamera);
+
+    // ===== 5. 현재 프레임 캡처 =====
     async function captureFrame() {
-      if (!video.videoWidth || !video.videoHeight) {
-        await new Promise(r => setTimeout(r, 100));
+      if (!stream) {
+        statusEl.textContent = "카메라가 꺼져 있어서 캡처할 수 없습니다.";
+        return null;
       }
-      const w = video.videoWidth || 1280;
-      const h = video.videoHeight || 720;
-      canvas.width = w;
-      canvas.height = h;
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings ? track.getSettings() : {};
+      const width = settings.width || 1280;
+      const height = settings.height || 720;
+
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, w, h);
-      return canvas.toDataURL("image/jpeg", 0.9);
+      ctx.drawImage(video, 0, 0, width, height);
+
+      return canvas.toDataURL("image/png");
     }
 
-    // ===== OCR (영어+한국어) =====
+    // ===== 6. OCR (영어 + 한국어) =====
     async function runOcr(dataUrl) {
-      statusEl.textContent = "텍스트 인식 중…(eng+kor)";
-      const { data } = await Tesseract.recognize(dataUrl, OCR_LANG);
-      const rawText = (data.text || "").trim();
-      s
+      statusEl.textContent = "OCR 중...";
+      const { data } = await Tesseract.recognize(dataUrl, "eng+kor");
+      const text = (data.text || "").trim();
+      ocrEl.textContent = text;
+      return text;
+    }
+
+    // ===== 7. AI에 문제 풀이 요청 =====
+    async function askAI(text) {
+      statusEl.textContent = "AI 풀이 중...";
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text })
+      });
+
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error("solve 함수 오류: " + msg);
+      }
+      const json = await res.json(); // { answer: "2", ... } 형태라고 가정
+      return json;
+    }
+
+    // ===== 8. 캡처 + OCR + 풀이 전체 파이프라인 =====
+    async function captureOcrAndSolve(isRemote = false, requestId = null) {
+      try {
+        const dataUrl = await captureFrame();
+        if (!dataUrl) return;
+
+        const text = await runOcr(dataUrl);
+        if (!text) {
+          statusEl.textContent = "OCR 결과가 비어 있습니다.";
+          return;
+        }
+
+        const result = await askAI(text);
+
+        const answer = result.answer ?? result.choice ?? result.result ?? null;
+        answerEl.textContent = answer ? String(answer) : "(알 수 없음)";
+        statusEl.textContent = isRemote
+          ? "원격 캡처 요청 처리 완료"
+          : "로컬 캡처 처리 완료";
+
+        // Firebase에 결과 저장 → remote.html 에서 읽도록
+        const payload = {
+          requestId: requestId ?? null,
+          createdAt: Date.now(),
+          ocrText: text,
+          rawAnswer: result,
+          answer: answer ?? null
+        };
+        await set(ref(db, "p2p/latestResult"), payload);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "에러: " + err.message;
+      }
+    }
+
+    btnCapture.addEventListener("click", () =>
+      captureOcrAndSolve(false, null)
+    );
+
+    // ===== 9. Firebase 원격 캡처 명령 수신 =====
+    function setupRemoteListener() {
+      const cmdRef = ref(db, "p2p/latestCommand");
+      onValue(cmdRef, async snap => {
+        const cmd = snap.val();
+        if (!cmd) return;
+        if (cmd.type !== "capture") return;
+
+        const reqId = cmd.requestId || null;
+
+        // 같은 요청 여러 번 처리하지 않도록
+        if (lastRemoteRequestId && reqId && lastRemoteRequestId === reqId) {
+          return;
+        }
+        lastRemoteRequestId = reqId || Date.now();
+
+        if (remoteProcessing) return;
+        remoteProcessing = true;
+
+        statusEl.textContent = `원격 캡처 요청 수신 (ID: ${
+          reqId || "없음"
+        }) → 처리 중...`;
+        try {
+          await captureOcrAndSolve(true, reqId);
+        } finally {
+          remoteProcessing = false;
+        }
+      });
+    }
+
+    applyZoom();
+    setupRemoteListener();
+  </script>
+</body>
+</html>
