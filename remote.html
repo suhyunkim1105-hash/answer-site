@@ -62,12 +62,13 @@
       font-size: 15px;
     }
 
-    #previewVideo {
+    #liveImg {
       width: 100%;
-      max-height: 220px;
+      max-height: 260px;
       border-radius: 8px;
       background: #000;
       object-fit: cover;
+      display: block;
     }
     #camStatus {
       font-size: 11px;
@@ -114,11 +115,11 @@
     <pre id="s-korean"></pre>
   </div>
 
-  <!-- 현재 이 기기 카메라 미리보기 -->
+  <!-- 1번(휴대폰) 카메라 실시간 프레임 -->
   <div id="box-preview" class="box">
-    <h3>현재 카메라 미리보기 (이 기기)</h3>
-    <video id="previewVideo" autoplay playsinline></video>
-    <div id="camStatus">카메라 준비 중...</div>
+    <h3>휴대폰 카메라 (index.html) 실시간 미리보기</h3>
+    <img id="liveImg" alt="live from phone camera">
+    <div id="camStatus">휴대폰(index.html)에서 카메라 실행 중이면 여기에 화면이 뜸.</div>
   </div>
 </div>
 
@@ -152,17 +153,19 @@
   const sModelEl   = document.getElementById('s-model');
   const sKorEl     = document.getElementById('s-korean');
 
-  const previewVideo = document.getElementById('previewVideo');
-  const camStatus    = document.getElementById('camStatus');
+  const liveImg    = document.getElementById('liveImg');
+  const camStatus  = document.getElementById('camStatus');
 
   let latestState = { mode: "reading" };
   let lastSolveTs = 0;
 
+  // --------- 상태 구독 (모드 표시용) ---------
   db.ref("p2p/state").on("value", snap => {
     latestState = snap.val() || {};
     modeLabel.textContent = `모드: ${latestState.mode || "-"}`;
   });
 
+  // --------- solve 명령 감지 → AI 호출 ---------
   db.ref("p2p/command").on("value", snap => {
     const cmd = snap.val();
     if (!cmd) return;
@@ -221,13 +224,13 @@
 
   function renderByMode(mode, text) {
     if (mode === "reading" || mode === "listening") {
-      // ANSWER 전체 줄
+      // [ANSWER] 전체 줄 (단일, 복수, INSERT, SUMMARY, TABLE 다 지원)
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       let ansText = mAns ? mAns[1].trim() : "";
       if (!ansText) ansText = "?";
       rlAnswerEl.textContent = "정답: " + ansText;
 
-      // WHY 이후 전체
+      // [WHY] 이후 전체 → 해설
       const split = text.split(/\[WHY\]/i);
       const why = split[1] ? split[1].trim() : "";
       rlWhyEl.textContent = why;
@@ -281,26 +284,16 @@
     showModeBox("reading", true);
   }
 
-  // ---------------- 이 기기 카메라 미리보기 ----------------
-  async function startPreviewCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      camStatus.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
+  // --------- 1번(index.html)에서 올라오는 실시간 프레임 받기 ---------
+  db.ref("p2p/liveFrame").on("value", snap => {
+    const frame = snap.val();
+    if (!frame || !frame.dataUrl) {
+      camStatus.textContent = "휴대폰(index.html) 카메라 신호 없음.";
       return;
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false
-      });
-      previewVideo.srcObject = stream;
-      camStatus.textContent = "카메라 미리보기 중 (이 기기)";
-    } catch (e) {
-      console.warn("preview camera error", e);
-      camStatus.textContent = "카메라 접근 실패 (권한/설정 확인).";
-    }
-  }
-
-  startPreviewCamera();
+    liveImg.src = frame.dataUrl;
+    camStatus.textContent = "휴대폰(index.html) 카메라 실시간 미리보기 중.";
+  });
 </script>
 </body>
 </html>
