@@ -117,10 +117,18 @@
   <div id="modeInfo">현재 모드: reading (바꿀 때만 위 버튼 사용)</div>
 
   <div class="panel">
-    <button class="action" onclick="cmdCapture('passage')">📄 지문 캡처 (현재 화면)</button>
-    <button class="action" onclick="cmdCapture('question')">❓ 문제/질문 캡처 (현재 화면)</button>
+    <!-- 지문은 저장만 -->
+    <button class="action" onclick="cmdCapturePassage()">📄 지문 캡처 (저장만)</button>
+
+    <!-- 이 버튼 하나만 누르면: 질문 캡처 + OCR 끝나면 자동 solve -->
+    <button class="action" onclick="cmdCaptureQuestionAndSolve()">❓ 문제 캡처 + 자동 풀이</button>
+
+    <!-- STT는 기존처럼 토글 -->
     <button class="action" id="btnSTT" onclick="toggleSTT()">🎤 STT 시작</button>
-    <button class="action" onclick="cmdSolve()">🤖 풀이/평가 요청</button>
+
+    <!-- STT / 기타 상태 기반으로 직접 solve 하고 싶을 때 -->
+    <button class="action" onclick="cmdSolve()">🤖 풀이/평가 요청 (수동)</button>
+
     <button class="action" onclick="cmdClear()">🧹 전체 초기화</button>
   </div>
 </div>
@@ -174,11 +182,13 @@
     db.ref("p2p/command").set(cmd);
   }
 
-  function cmdCapture(target) {
-    const type = (target === "passage")
-      ? "capture_passage_new"
-      : "capture_question_new";
-    sendCommand(type);
+  function cmdCapturePassage() {
+    sendCommand("capture_passage_new");
+  }
+
+  // 🔵 핵심: 질문 캡처 + OCR 끝난 뒤 자동 solve
+  function cmdCaptureQuestionAndSolve() {
+    sendCommand("capture_question_new", { autoSolve: true });
   }
 
   function toggleSTT() {
@@ -194,6 +204,7 @@
   }
 
   function cmdSolve() {
+    // STT나 이미 저장된 지문/질문을 기반으로 수동 solve
     sendCommand("solve");
   }
 
