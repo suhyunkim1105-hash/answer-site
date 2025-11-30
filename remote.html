@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Result</title>
+  <title>answer-site | Auto Result</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
   <!-- Firebase -->
@@ -21,84 +21,97 @@
     }
     .wrap {
       width: 100%;
+      max-width: 700px;
       box-sizing: border-box;
     }
     h2 {
       margin: 2px 0 4px 0;
-      font-size: 18px;
+      font-size: 20px;
     }
-    #modeLabel {
+    #camStatus {
       font-size: 12px;
-      color:#555;
+      color:#444;
+      margin-bottom: 4px;
     }
     #status {
       font-size: 11px;
-      color:#555;
-      margin-top:4px;
+      color:#666;
+      margin-top: 4px;
+      margin-bottom: 4px;
+    }
+
+    #btnStart {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 15px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      background: #ffffff;
+      cursor: pointer;
+      margin: 4px 0 8px 0;
+      box-sizing: border-box;
+    }
+    #btnStart:active {
+      transform: scale(0.98);
     }
 
     .box {
-      margin-top: 10px;
-      padding: 10px;
+      margin-top: 8px;
+      padding: 8px;
       border-radius: 8px;
       border: 1px solid #ddd;
       background: #fff;
     }
+    .box h3 {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .answer-big {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: bold;
       margin-bottom: 6px;
       word-break: break-all;
     }
-    pre {
-      white-space: pre-wrap;
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.5;
-      font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
-    }
-    h3 {
-      margin: 8px 0 4px 0;
-      font-size: 15px;
-    }
 
     @media (orientation: landscape) {
       body { padding: 8px; }
-      h2 { font-size: 17px; }
-      .answer-big { font-size: 22px; }
-      pre { font-size: 13px; }
+      h2 { font-size: 19px; }
+      .answer-big { font-size: 20px; }
     }
   </style>
 </head>
 <body>
 
 <div class="wrap">
-  <h2>answer-site Result</h2>
-  <div id="modeLabel">모드: -</div>
+  <h2>answer-site Auto</h2>
+  <div id="camStatus">카메라 상태: -</div>
+
+  <!-- 마이크 시작 버튼 (브라우저 보안 때문에 1번은 눌러줘야 함) -->
+  <button id="btnStart">자동 시작 (마이크 허용)</button>
+
   <div id="status"></div>
 
-  <!-- Reading / Listening -->
-  <div id="box-rl" class="box" style="display:none;">
-    <div class="answer-big" id="rl-answer"></div>
-    <pre id="rl-why"></pre>
+  <div class="box">
+    <h3>화면 인식 (OCR 프리뷰)</h3>
+    <pre id="ocrPreview">(아직 없음)</pre>
   </div>
 
-  <!-- Writing -->
-  <div id="box-writing" class="box" style="display:none;">
-    <h3>Essay</h3>
-    <pre id="w-essay"></pre>
-    <h3>Feedback (Korean)</h3>
-    <pre id="w-feedback"></pre>
+  <div class="box">
+    <h3>음성 인식 (STT 텍스트)</h3>
+    <pre id="audioPreview">(아직 없음)</pre>
   </div>
 
-  <!-- Speaking -->
-  <div id="box-speaking" class="box" style="display:none;">
-    <h3>Evaluation</h3>
-    <pre id="s-eval"></pre>
-    <h3>Model Answer</h3>
-    <pre id="s-model"></pre>
-    <h3>Korean Tips</h3>
-    <pre id="s-korean"></pre>
+  <div class="box" id="answerBox">
+    <h3>AI 정답 / 피드백</h3>
+    <div class="answer-big" id="answerMain"></div>
+    <pre id="answerDetail"></pre>
   </div>
 </div>
 
@@ -117,51 +130,109 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const modeLabel = document.getElementById('modeLabel');
-  const statusEl  = document.getElementById('status');
+  const camStatusEl   = document.getElementById('camStatus');
+  const statusEl      = document.getElementById('status');
+  const btnStart      = document.getElementById('btnStart');
+  const ocrPreviewEl  = document.getElementById('ocrPreview');
+  const audioPreviewEl= document.getElementById('audioPreview');
+  const answerMainEl  = document.getElementById('answerMain');
+  const answerDetailEl= document.getElementById('answerDetail');
 
-  const boxRL      = document.getElementById('box-rl');
-  const boxW       = document.getElementById('box-writing');
-  const boxS       = document.getElementById('box-speaking');
-
-  const rlAnswerEl = document.getElementById('rl-answer');
-  const rlWhyEl    = document.getElementById('rl-why');
-  const wEssayEl   = document.getElementById('w-essay');
-  const wFbEl      = document.getElementById('w-feedback');
-  const sEvalEl    = document.getElementById('s-eval');
-  const sModelEl   = document.getElementById('s-model');
-  const sKorEl     = document.getElementById('s-korean');
-
-  let latestState = { mode: "reading" };
+  let latestState = {};
   let lastSolveTs = 0;
 
-  // --------- 상태 구독 (모드 표시용) ---------
-  db.ref("p2p/state").on("value", snap => {
-    latestState = snap.val() || {};
-    modeLabel.textContent = `모드: ${latestState.mode || "-"}`;
+  // ---------------- STT (WebSpeech) ----------------
+  let sttActive = false;
+  let recognition = null;
+  let audioText = "";
+
+  function setupRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다.";
+      return null;
+    }
+    const rec = new SpeechRecognition();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+
+    rec.onresult = (event) => {
+      let finalText = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const res = event.results[i];
+        // 마지막 것은 interim이라도 그냥 같이 쌓는다
+        finalText += res[0].transcript + " ";
+      }
+      audioText = finalText.trim();
+      audioPreviewEl.textContent = audioText || "(아직 없음)";
+      db.ref("p2p/state").update({
+        audioText,
+        audioUpdatedAt: Date.now()
+      });
+    };
+
+    rec.onend = () => {
+      if (sttActive) {
+        // 끊겨도 자동 재시작
+        rec.start();
+      }
+    };
+
+    rec.onerror = (e) => {
+      console.error(e);
+      statusEl.textContent = "STT 에러: " + e.error;
+    };
+
+    return rec;
+  }
+
+  btnStart.addEventListener("click", () => {
+    if (sttActive) return;
+    recognition = setupRecognition();
+    if (!recognition) return;
+    try {
+      recognition.start();
+      sttActive = true;
+      btnStart.disabled = true;
+      btnStart.textContent = "자동 모드 ON (마이크 수신 중)";
+      statusEl.textContent = "STT 시작 – 음성 텍스트를 자동으로 인식 중";
+    } catch (e) {
+      console.error(e);
+      statusEl.textContent = "STT 시작 실패: " + e.toString();
+    }
   });
 
-  // --------- solve 명령 감지 → AI 호출 ---------
+  // ---------------- 상태 구독 ----------------
+  db.ref("p2p/state").on("value", snap => {
+    latestState = snap.val() || {};
+    const blocked = !!latestState.cameraBlocked;
+    camStatusEl.textContent = blocked ? "카메라 상태: 가려짐(마지막 답 유지 중)" : "카메라 상태: 보임(새 문제 인식 가능)";
+    const t = (latestState.ocrText || "").trim();
+    ocrPreviewEl.textContent = t ? t.slice(0, 400) : "(아직 없음)";
+    const at = (latestState.audioText || "").trim();
+    if (!audioText) { // 아직 로컬 STT 텍스트 없으면 Firebase 값 보여주기
+      audioPreviewEl.textContent = at || "(아직 없음)";
+    }
+  });
+
+  // ---------------- solve 명령 구독 → 자동 풀이 ----------------
   db.ref("p2p/command").on("value", snap => {
     const cmd = snap.val();
     if (!cmd) return;
     if (!cmd.timestamp || cmd.type !== "solve") return;
     if (cmd.timestamp <= lastSolveTs) return;
-
     lastSolveTs = cmd.timestamp;
-    const mode = cmd.mode || latestState.mode || "reading";
-    doSolve(mode);
+    doSolve();
   });
 
-  async function doSolve(mode) {
+  async function doSolve() {
     statusEl.textContent = "AI 풀이/생성 중...";
-    showModeBox(mode, false);
 
     const body = {
-      mode,
-      passage: latestState.passage || "",
-      question: latestState.question || "",
-      stt: latestState.stt || ""
+      mode: "auto",
+      ocrText: latestState.ocrText || "",
+      audioText: latestState.audioText || audioText || ""
     };
 
     try {
@@ -176,58 +247,52 @@
         return;
       }
       const text = data.result || "";
-      renderByMode(mode, text);
+      renderResult(text);
+      speakSummary(text);
       statusEl.textContent = "완료";
     } catch (e) {
+      console.error(e);
       statusEl.textContent = "요청 실패: " + e.toString();
     }
   }
 
-  function showModeBox(mode, show) {
-    boxRL.style.display = "none";
-    boxW.style.display  = "none";
-    boxS.style.display  = "none";
-
-    if (!show) return;
-    if (mode === "reading" || mode === "listening") {
-      boxRL.style.display = "block";
-    } else if (mode === "writing") {
-      boxW.style.display = "block";
-    } else if (mode === "speaking") {
-      boxS.style.display = "block";
-    }
+  // --------- 모드 추정 + 결과 표시 ---------
+  function detectMode(text) {
+    const lower = text.toLowerCase();
+    if (lower.includes("[essay]")) return "writing";
+    if (lower.includes("[eval]")) return "speaking";
+    // 기본: reading/listening 스타일
+    return "rl";
   }
 
-  function renderByMode(mode, text) {
-    if (mode === "reading" || mode === "listening") {
+  function renderResult(text) {
+    const mode = detectMode(text);
+
+    if (mode === "rl") {
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
-      let ansText = mAns ? mAns[1].trim() : "";
-      if (!ansText) ansText = "?";
-      rlAnswerEl.textContent = "정답: " + ansText;
+      const ansText = mAns ? mAns[1].trim() : "";
+      answerMainEl.textContent = ansText ? ("정답: " + ansText) : "정답 정보 없음";
 
-      const split = text.split(/\[WHY\]/i);
-      const why = split[1] ? split[1].trim() : "";
-      rlWhyEl.textContent = why;
-
-      showModeBox(mode, true);
+      const parts = text.split(/\[WHY\]/i);
+      const why = parts[1] ? parts[1].trim() : text.trim();
+      answerDetailEl.textContent = why;
       return;
     }
 
     if (mode === "writing") {
-      const parts1 = text.split(/\[ESSAY\]/i);
-      let essay = "";
-      let feedback = "";
-      if (parts1.length > 1) {
-        const rest = parts1[1];
-        const parts2 = rest.split(/\[FEEDBACK\]/i);
-        essay = (parts2[0] || "").trim();
-        feedback = (parts2[1] || "").trim();
+      const p1 = text.split(/\[ESSAY\]/i);
+      let essay = "", fb = "";
+      if (p1.length > 1) {
+        const rest = p1[1];
+        const p2 = rest.split(/\[FEEDBACK\]/i);
+        essay = (p2[0] || "").trim();
+        fb = (p2[1] || "").trim();
       } else {
         essay = text.trim();
       }
-      wEssayEl.textContent = essay;
-      wFbEl.textContent = feedback;
-      showModeBox(mode, true);
+      answerMainEl.textContent = "Writing 예시 에세이";
+      answerDetailEl.textContent = (essay ? essay + "\n\n---\n\n" : "") +
+                                   (fb ? ("[피드백]\n" + fb) : "");
       return;
     }
 
@@ -245,17 +310,54 @@
       } else {
         evalPart = text.trim();
       }
-      sEvalEl.textContent  = evalPart;
-      sModelEl.textContent = modelPart;
-      sKorEl.textContent   = korPart;
-      showModeBox(mode, true);
+      answerMainEl.textContent = "Speaking 평가";
+      answerDetailEl.textContent =
+        (evalPart ? ("[평가]\n" + evalPart + "\n\n") : "") +
+        (modelPart ? ("[모범 답변]\n" + modelPart + "\n\n") : "") +
+        (korPart ? ("[한국어 팁]\n" + korPart) : "");
       return;
     }
 
-    // fallback
-    rlAnswerEl.textContent = "";
-    rlWhyEl.textContent = text;
-    showModeBox("reading", true);
+    // 혹시 모드 감지 실패하면 그냥 전체 표시
+    answerMainEl.textContent = "";
+    answerDetailEl.textContent = text;
+  }
+
+  // --------- TTS: 정답/요약 읽어주기 ---------
+  function speakSummary(text) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    synth.cancel();
+
+    const mode = detectMode(text);
+    let speakText = "";
+
+    if (mode === "rl") {
+      const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
+      if (mAns) {
+        speakText = "정답 " + mAns[1].trim() + " 입니다.";
+      }
+    } else if (mode === "speaking") {
+      const p1 = text.split(/\[EVAL\]/i);
+      if (p1.length > 1) {
+        const evalPart = p1[1].split(/\[MODEL\]/i)[0].trim();
+        speakText = evalPart.split(/[\n\.]/)[0].slice(0, 80);
+      }
+    } else if (mode === "writing") {
+      speakText = "라이팅 예시 답안과 한국어 피드백을 생성했습니다.";
+    }
+
+    if (!speakText) {
+      // fallback: 앞부분 짧게 읽기
+      speakText = text.replace(/\[[^\]]+\]/g, "").trim().slice(0, 80);
+    }
+
+    if (!speakText) return;
+
+    const u = new SpeechSynthesisUtterance(speakText);
+    // 답 안내는 한국어 위주라 ko-KR 사용
+    u.lang = "ko-KR";
+    synth.speak(u);
   }
 </script>
 </body>
