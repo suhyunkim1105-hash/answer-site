@@ -2,8 +2,9 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Camera (Auto)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>answer-site | Camera</title>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
@@ -16,18 +17,20 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 8px;
+      padding: 6px;
       background: #000;
       color: #fff;
-      font-family: system-ui, sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
     .wrap {
       width: 100%;
     }
+
+    /* 상단: 카메라 영역 (가로/세로 모두 대응) */
     #videoContainer {
       position: relative;
       width: 100%;
-      max-height: calc(100vh - 90px);
+      max-height: calc(100vh - 120px); /* 아래 컨트롤 포함해서 한 화면에 들어오게 */
       overflow: hidden;
       background: #000;
       border-radius: 8px;
@@ -37,39 +40,78 @@
       height: auto;
       transform-origin: center center;
     }
-    /* 화면 전체 테두리 – "카메라 활성" 느낌용 */
     #overlayFrame {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      border: 2px solid rgba(0, 255, 0, 0.5);
+      border: 2px solid rgba(0, 255, 0, 0.4);
       border-radius: 6px;
       pointer-events: none;
     }
 
-    #bottomPanel {
-      margin-top: 8px;
-      font-size: 12px;
+    /* 하단 컨트롤: 모드 버튼 + 상태 + 배율 + 수동 인식 */
+    #controls {
+      margin-top: 6px;
+      font-size: 11px;
     }
-    #status {
+
+    #modeRow {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .mode-btn {
+      flex: 1 1 0;
+      padding: 4px 0;
+      border-radius: 999px;
+      border: 1px solid #666;
+      background: #111;
+      color: #ddd;
+      font-size: 11px;
+      text-align: center;
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      background: #4f46e5;
+      border-color: #4f46e5;
+      color: #fff;
+    }
+
+    #statusLine {
       margin-bottom: 4px;
       color: #c4f1ff;
-      white-space: pre-wrap;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+
     .row {
       display: flex;
       align-items: center;
       gap: 6px;
-      margin-bottom: 6px;
     }
     .label {
       font-size: 11px;
       color: #aaa;
+      white-space: nowrap;
     }
     #zoomRange {
-      width: 100%;
+      flex: 1 1 auto;
+    }
+    #btnOCRNow {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 6px;
+      border: 1px solid #666;
+      background: #111;
+      color: #f5f5f5;
+      cursor: pointer;
+    }
+    #btnOCRNow:active {
+      transform: scale(0.97);
     }
   </style>
 </head>
@@ -80,16 +122,21 @@
     <div id="overlayFrame"></div>
   </div>
 
-  <div id="bottomPanel">
-    <div id="status">카메라 준비 중...</div>
+  <div id="controls">
+    <!-- 모드 선택: 정답 형식을 모델에 힌트로 줌 -->
+    <div id="modeRow">
+      <button class="mode-btn active" data-mode="reading">Reading</button>
+      <button class="mode-btn" data-mode="listening">Listening</button>
+      <button class="mode-btn" data-mode="writing">Writing</button>
+      <button class="mode-btn" data-mode="speaking">Speaking</button>
+    </div>
+
+    <div id="statusLine">카메라 준비 중...</div>
 
     <div class="row">
       <span class="label">배율</span>
       <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
-    </div>
-    <div class="row">
-      <span class="label">OCR 언어</span>
-      <span id="currentLang">eng+kor (고정)</span>
+      <button id="btnOCRNow">지금 인식</button>
     </div>
   </div>
 </div>
@@ -110,27 +157,52 @@
   const db = firebase.database();
 
   const video      = document.getElementById('video');
-  const statusEl   = document.getElementById('status');
+  const statusLine = document.getElementById('statusLine');
   const zoomRange  = document.getElementById('zoomRange');
+  const btnOCRNow  = document.getElementById('btnOCRNow');
 
   const OCR_LANG = "eng+kor";
 
+  let currentMode = "reading";     // reading / listening / writing / speaking
   let ocrRunning = false;
   let lastSolvedSnippet = "";
   let lastBlocked = null;
   let lastOcrTime = 0;
 
-  // 밝기 + 움직임 감지용 작은 캔버스
+  // 밝기 + 움직임 감지용 썸네일 캔버스
   const BW = 64, BH = 36;
   const bCanvas = document.createElement('canvas');
   const bCtx = bCanvas.getContext('2d');
   bCanvas.width = BW;
   bCanvas.height = BH;
-  let prevThumb = null;       // 이전 프레임 thumbnail (grayscale)
-  let lastStableTime = 0;     // 최근에 "안 움직임" 상태가 시작된 시각
+  let prevThumb = null;
+  let lastStableTime = 0;
 
-  // 고해상도 스틸 프레임용 ImageCapture (되면 쓰고, 안 되면 video 프레임)
+  // 고해상도 스틸 프레임용 ImageCapture
   let imageCapture = null;
+
+  // ---------- 모드 선택 ----------
+  const modeButtons = document.querySelectorAll('.mode-btn');
+  function setMode(mode) {
+    currentMode = mode;
+    modeButtons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+    // Firebase에 힌트 저장 (remote.html & solve.js에서 사용)
+    db.ref("p2p/state").update({
+      modeHint: mode,
+      modeUpdatedAt: Date.now()
+    });
+    statusLine.textContent = `카메라 ON – 모드: ${mode} (화면 안정되면 자동 인식)`;
+  }
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-mode');
+      setMode(mode);
+    });
+  });
+  // 초기값
+  setMode("reading");
 
   // ---------- 카메라 세팅 ----------
   async function startCamera() {
@@ -155,18 +227,24 @@
         }
       }
 
-      statusEl.textContent = "카메라 ON – 화면 안정되면 자동으로 문제 인식";
-
+      statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
       startAutoLoop();
     } catch (e) {
       console.error(e);
-      statusEl.textContent = "카메라 접근 실패: " + e.toString();
+      statusLine.textContent = "카메라 접근 실패: " + e.toString();
     }
   }
 
   zoomRange.addEventListener("input", () => {
     const scale = parseFloat(zoomRange.value);
     video.style.transform = `scale(${scale})`;
+  });
+
+  // 수동 인식 버튼
+  btnOCRNow.addEventListener("click", () => {
+    if (ocrRunning) return;
+    lastOcrTime = Date.now();
+    doOCROnce(true); // true = 수동 호출
   });
 
   // ---------- 프레임 분석: 밝기 + 움직임 ----------
@@ -195,23 +273,21 @@
       }
     }
 
-    const avgBright = sumBright / len;            // 0~255
-    const diffAvg   = prevThumb ? (diffSum / len) : 0;  // 0~255
+    const avgBright = sumBright / len;
+    const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    const blocked = avgBright < 25;  // 너무 어두우면 가려졌다고 간주
+    const blocked = avgBright < 25;  // 너무 어두우면 가려짐으로 판단
 
     const now = Date.now();
     let stable = false;
 
-    // diffAvg가 작으면 "화면 거의 안 움직임"
-    if (diffAvg < 8) { // 이 값이 클수록 더 빡세게 잡음
+    if (diffAvg < 8) {
       if (!lastStableTime) {
         lastStableTime = now;
-      } else if (now - lastStableTime > 1000) { // 1초 이상 거의 안 움직였으면
+      } else if (now - lastStableTime > 1000) { // 1초 이상 거의 안 움직인 상태
         stable = true;
       }
     } else {
-      // 많이 움직였으면 다시 리셋
       lastStableTime = 0;
     }
 
@@ -220,15 +296,10 @@
     return { blocked, stable };
   }
 
-  // ---------- 자동 루프: 가려짐 + 움직임 + OCR 스케줄 ----------
+  // ---------- 자동 루프 ----------
   function startAutoLoop() {
     function loop() {
       const now = Date.now();
-
-      if (!video.videoWidth && !imageCapture) {
-        requestAnimationFrame(loop);
-        return;
-      }
 
       const { blocked, stable } = analyzeFrame();
 
@@ -238,15 +309,15 @@
           cameraBlocked: blocked,
           cameraUpdatedAt: Date.now()
         });
-        statusEl.textContent = blocked
+        statusLine.textContent = blocked
           ? "카메라가 가려짐 – 마지막 답 유지 중"
-          : "카메라 ON – 화면 안정되면 자동으로 문제 인식";
+          : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
       }
 
-      // 화면이 안 가려져 있고, 충분히 안정(stable)되고, 이전 OCR에서 어느 정도 시간 경과했을 때만 OCR
+      // 자동 OCR: 화면이 안 가려지고, 충분히 안정되었고, 일정 시간 간격 이후
       if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
-        doOCROnce();
+        doOCROnce(false);
       }
 
       requestAnimationFrame(loop);
@@ -254,11 +325,15 @@
     requestAnimationFrame(loop);
   }
 
-  // ---------- OCR: 가운데 영역만 + 품질 필터 + 자동 solve ----------
-  async function doOCROnce() {
+  // ---------- OCR (중앙 75% 영역 + 품질 필터 + solve 트리거) ----------
+  async function doOCROnce(manual) {
+    if (ocrRunning) return;
     ocrRunning = true;
+
     try {
-      statusEl.textContent = "OCR 진행 중...";
+      statusLine.textContent = manual
+        ? "수동 OCR 진행 중..."
+        : "자동 OCR 진행 중...";
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -272,7 +347,7 @@
             ctx.drawImage(bitmap, x, y, w, h, 0, 0, w, h);
           });
         } catch (e) {
-          console.warn("grabFrame 실패, video 프레임 fallback:", e);
+          console.warn("grabFrame 실패, video 프레임으로 fallback:", e);
           fillCanvasFromVideoCenter(canvas, ctx);
         }
       } else {
@@ -282,34 +357,37 @@
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
           if (m.status === "recognizing text") {
-            statusEl.textContent = `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
+            statusLine.textContent =
+              (manual ? "[수동] " : "[자동] ") +
+              `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         }
       });
 
       const rawText = result.data.text || "";
-      const text = rawText.replace(/\s+\n/g, "\n").trim(); // 약간 정리
+      const text = rawText.replace(/\s+\n/g, "\n").trim();
       const conf = result.data.confidence || 0;
 
-      // 너무 짧거나, 평균 신뢰도가 너무 낮으면 "노이즈"로 보고 무시
+      // 너무 짧거나, 평균 신뢰도 낮으면 버림 (너무 엉망인 경우 방지)
       if (!text || text.length < 30 || conf < 35) {
-        statusEl.textContent =
-          `OCR 완료 (텍스트/신뢰도 낮음 → 무시: 길이=${text.length}, conf=${conf.toFixed(1)}%)`;
+        statusLine.textContent =
+          `OCR 완료 (노이즈로 판단, 무시: 길이=${text.length}, conf=${conf.toFixed(1)}%)`;
         ocrRunning = false;
         return;
       }
 
-      statusEl.textContent = `OCR 완료 | 평균 신뢰도: ${conf.toFixed(1)}%`;
+      statusLine.textContent =
+        `OCR 완료 | conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
 
       await db.ref("p2p/state").update({
         ocrText: text,
         ocrConfidence: conf,
         cameraBlocked: false,
+        modeHint: currentMode,
         ocrUpdatedAt: Date.now()
       });
 
       const snippet = text.slice(0, 400);
-      // 이전과 텍스트가 다를 때만 새 문제로 보고 solve 요청
       if (snippet !== lastSolvedSnippet) {
         lastSolvedSnippet = snippet;
         await db.ref("p2p/command").set({
@@ -319,15 +397,15 @@
       }
     } catch (e) {
       console.error(e);
-      statusEl.textContent = "OCR 에러: " + e.toString();
+      statusLine.textContent = "OCR 에러: " + e.toString();
     } finally {
       ocrRunning = false;
     }
   }
 
-  // 가운데 70~75% 영역 잘라서 쓰기
+  // 중앙 75% 영역 잘라서 캔버스에 그리기
   function cropCenterToCanvas(fullW, fullH, drawCallback) {
-    const scale = 0.75; // 중앙 75%
+    const scale = 0.75;
     const w = Math.floor(fullW * scale);
     const h = Math.floor(fullH * scale);
     const x = Math.floor((fullW - w) / 2);
@@ -345,7 +423,6 @@
     }
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
-
     cropCenterToCanvas(fullW, fullH, (sx, sy, sw, sh) => {
       canvas.width = sw;
       canvas.height = sh;
