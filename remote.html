@@ -25,8 +25,13 @@
       box-sizing: border-box;
     }
     h2 {
-      margin: 2px 0 4px 0;
+      margin: 2px 0 2px 0;
       font-size: 20px;
+    }
+    #modeInfo {
+      font-size: 12px;
+      color:#444;
+      margin-bottom: 2px;
     }
     #camStatus {
       font-size: 12px;
@@ -91,9 +96,10 @@
 
 <div class="wrap">
   <h2>answer-site Auto</h2>
+  <div id="modeInfo">현재 모드: -</div>
   <div id="camStatus">카메라 상태: -</div>
 
-  <!-- ✅ 정답/피드백 박스를 맨 위로 올림 -->
+  <!-- 정답/피드백 박스를 최상단 -->
   <div class="box" id="answerBox">
     <h3>AI 정답 / 피드백</h3>
     <div class="answer-big" id="answerMain">아직 정답 없음</div>
@@ -105,7 +111,7 @@
 
   <div id="status"></div>
 
-  <!-- 🔎 OCR / STT 프리뷰는 아래로 내림 -->
+  <!-- 프리뷰 영역 -->
   <div class="box">
     <h3>화면 인식 (OCR 프리뷰)</h3>
     <pre id="ocrPreview">(아직 없음)</pre>
@@ -118,7 +124,6 @@
 </div>
 
 <script>
-  // ---------------- Firebase ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -132,6 +137,7 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
+  const modeInfoEl     = document.getElementById('modeInfo');
   const camStatusEl    = document.getElementById('camStatus');
   const statusEl       = document.getElementById('status');
   const btnStart       = document.getElementById('btnStart');
@@ -143,7 +149,7 @@
   let latestState = {};
   let lastSolveTs = 0;
 
-  // ---------------- STT (WebSpeech) ----------------
+  // STT
   let sttActive = false;
   let recognition = null;
   let audioText = "";
@@ -156,15 +162,11 @@
       return null;
     }
     const rec = new SpeechRecognition();
-
-    // TOEFL 답변 기준이라 영어로 설정 (필요하면 en-US / en-GB 조정 가능)
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
 
     rec.onresult = (event) => {
-      // ✅ 표준 패턴: 최종 결과는 finalTranscript에 쌓고,
-      //    아직 말하는 중인 건 interim에만 잠깐 표시
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const res = event.results[i];
@@ -184,7 +186,6 @@
     };
 
     rec.onend = () => {
-      // 끊겨도 sttActive면 다시 시작 (Chrome가 가끔 자동 종료함)
       if (sttActive) {
         try {
           rec.start();
@@ -223,10 +224,13 @@
     }
   });
 
-  // ---------------- 상태 구독 ----------------
+  // 상태 구독
   db.ref("p2p/state").on("value", snap => {
     latestState = snap.val() || {};
     const blocked = !!latestState.cameraBlocked;
+    const modeHint = latestState.modeHint || "auto";
+
+    modeInfoEl.textContent = `현재 모드: ${modeHint}`;
     camStatusEl.textContent = blocked
       ? "카메라 상태: 가려짐(마지막 답 유지 중)"
       : "카메라 상태: 보임(새 문제 인식 가능)";
@@ -235,13 +239,12 @@
     ocrPreviewEl.textContent = t ? t.slice(0, 400) : "(아직 없음)";
 
     const at = (latestState.audioText || "").trim();
-    // 로컬 STT 텍스트가 비어 있으면 서버 값 보여주기
     if (!audioText) {
       audioPreviewEl.textContent = at || "(아직 없음)";
     }
   });
 
-  // ---------------- solve 명령 구독 → 자동 풀이 ----------------
+  // solve 명령 구독
   db.ref("p2p/command").on("value", snap => {
     const cmd = snap.val();
     if (!cmd) return;
@@ -254,8 +257,9 @@
   async function doSolve() {
     statusEl.textContent = "AI 풀이/생성 중...";
 
+    const modeToSend = (latestState.modeHint || "auto");
     const body = {
-      mode: "auto",
+      mode: modeToSend,
       ocrText: latestState.ocrText || "",
       audioText: latestState.audioText || audioText || ""
     };
@@ -281,22 +285,20 @@
     }
   }
 
-  // --------- 모드 추정 + 결과 표시 ---------
-  function detectMode(text) {
+  // 모드 추정 + 결과 렌더링
+  function detectModeFromText(text) {
     const lower = text.toLowerCase();
     if (lower.includes("[essay]")) return "writing";
     if (lower.includes("[eval]")) return "speaking";
-    // 기본: reading/listening 스타일
-    return "rl";
+    return "rl"; // reading/listening 스타일
   }
 
   function renderResult(text) {
-    const mode = detectMode(text);
+    const mode = detectModeFromText(text);
 
     if (mode === "rl") {
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       const ansText = mAns ? mAns[1].trim() : "";
-      // ✅ 답을 제일 먼저, 크게
       answerMainEl.textContent = ansText ? ("정답: " + ansText) : "정답 정보 없음";
 
       const parts = text.split(/\[WHY\]/i);
@@ -345,18 +347,17 @@
       return;
     }
 
-    // 모드 감지 실패 → 전체 표시
     answerMainEl.textContent = "";
     answerDetailEl.textContent = text;
   }
 
-  // --------- TTS: 정답/요약 읽어주기 ---------
+  // TTS
   function speakSummary(text) {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     const synth = window.speechSynthesis;
     synth.cancel();
 
-    const mode = detectMode(text);
+    const mode = detectModeFromText(text);
     let speakText = "";
 
     if (mode === "rl") {
