@@ -1,155 +1,235 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>answer-site | Remote</title>
+  <meta charset="UTF-8">
+  <title>answer-site | Remote Controller</title>
 
-<!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
-<style>
-body { font-family: sans-serif; padding: 20px; }
-textarea { width: 100%; height: 120px; margin-top: 10px; }
-button { padding: 10px 15px; margin: 5px; }
-#resultBox { white-space: pre-wrap; margin-top: 20px; background: #eee; padding: 15px; }
-</style>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background:#f5f5f5; }
+    h2 { margin-top:0; }
+    textarea { width: 100%; min-height: 100px; margin-top: 6px; padding:8px; box-sizing:border-box; }
+    button { padding: 8px 12px; margin: 4px 4px 4px 0; cursor:pointer; }
+    #result { white-space: pre-wrap; background:#fff; padding:12px; margin-top:10px; border-radius:6px; border:1px solid #ddd; }
+    .section { background:#fff; padding:12px; margin-bottom:12px; border-radius:6px; border:1px solid #ddd; }
+    label { font-weight:bold; }
+    #status { font-size:12px; color:#666; margin-left:8px; }
+  </style>
 </head>
 <body>
 
 <h2>answer-site Remote</h2>
 
-<h3>Mode</h3>
-<select id="modeSel">
-  <option value="reading">Reading</option>
-  <option value="writing">Writing</option>
-  <option value="listening">Listening</option>
-  <option value="speaking">Speaking</option>
-</select>
+<div class="section">
+  <label for="mode">Mode</label>
+  <select id="mode">
+    <option value="reading">Reading</option>
+    <option value="writing">Writing</option>
+    <option value="listening">Listening</option>
+    <option value="speaking">Speaking</option>
+  </select>
+  <span id="status"></span>
+</div>
 
-<hr>
+<div class="section">
+  <h3>Reading / 공통 OCR</h3>
+  <button onclick="sendCapture('passage')">📸 지문 캡처</button>
+  <button onclick="sendCapture('question', true)">📸 문제 캡처 + 바로 풀이</button>
 
-<h3>Reading</h3>
-<button onclick="sendCapture('passage')">📸 지문 캡처</button>
-<button onclick="sendCapture('question')">📸 문제 캡처 + 풀이</button>
+  <div style="margin-top:8px;">
+    <label>Passage (지문 OCR 결과)</label>
+    <textarea id="passage"></textarea>
+  </div>
+  <div style="margin-top:8px;">
+    <label>Question & Options (문제 + 보기 OCR / 수동 입력)</label>
+    <textarea id="question"></textarea>
+  </div>
+</div>
 
-<textarea id="passageBox" placeholder="지문 OCR 결과"></textarea>
-<textarea id="questionBox" placeholder="문제 OCR 결과"></textarea>
+<div class="section">
+  <h3>Writing / Listening / Speaking – STT</h3>
+  <button onclick="startSTT()">🎤 STT 시작</button>
+  <button onclick="stopSTT()">⏹ STT 종료</button>
+  <div style="font-size:12px;color:#666;margin-top:4px;">
+    * Writing: 문제를 읽어서 말하기<br>
+    * Listening: 리스닝 스크립트를 들으면서 마이크로 그대로 따라 말하기<br>
+    * Speaking: 내 답변을 말하기
+  </div>
+  <textarea id="stt" placeholder="실시간 음성 인식 결과"></textarea>
+</div>
 
-<hr>
-
-<h3>Writing / Listening / Speaking – STT</h3>
-<button onclick="startSTT()">🎤 STT 시작</button>
-<button onclick="stopSTT()">⏹ STT 종료</button>
-<textarea id="sttBox" placeholder="여기에 실시간 음성 인식 결과(STT)가 표시됨"></textarea>
-
-<hr>
-
-<button onclick="requestSolve()">🤖 AI 풀이/생성 요청</button>
-
-<div id="resultBox"></div>
+<div class="section">
+  <h3>AI 풀이 / 생성</h3>
+  <button onclick="requestSolve()">🤖 AI 풀이/생성 요청</button>
+  <button onclick="clearAll()">🧹 초기화</button>
+  <div id="result"></div>
+</div>
 
 <script>
-// ---------------- Firebase Init ----------------
-const firebaseConfig = {
-  apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-  authDomain: "answer-site-p2p.firebaseapp.com",
-  databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "answer-site-p2p",
-  storageBucket: "answer-site-p2p.firebasestorage.app",
-  messagingSenderId: "364227113735",
-  appId: "1:364227113735:web:b18355cf0b16454663cba2",
-  measurementId: "G-C8MRHK5ZGS"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+  // ---------------- Firebase Init ----------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+    authDomain: "answer-site-p2p.firebaseapp.com",
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "answer-site-p2p",
+    storageBucket: "answer-site-p2p.firebasestorage.app",
+    messagingSenderId: "364227113735",
+    appId: "1:364227113735:web:b18355cf0b16454663cba2",
+    measurementId: "G-C8MRHK5ZGS"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
 
-// ---------------- OCR Command ----------------
-function sendCapture(target) {
-  db.ref("p2p/latestCommand").set({
-    action: "capture",
-    target,
-    timestamp: Date.now(),
-  });
-}
+  const modeSel   = document.getElementById('mode');
+  const passageEl = document.getElementById('passage');
+  const questionEl= document.getElementById('question');
+  const sttEl     = document.getElementById('stt');
+  const resultEl  = document.getElementById('result');
+  const statusEl  = document.getElementById('status');
 
-// ---------------- Receive OCR Result ----------------
-db.ref("p2p/latestResult").on("value", snap => {
-  const val = snap.val();
-  if (!val) return;
+  let autoSolveOnNextQuestion = false;
+  let lastResultTs = 0;
 
-  if (val.target === "passage") {
-    document.getElementById("passageBox").value = val.text;
-  }
-  if (val.target === "question") {
-    document.getElementById("questionBox").value = val.text;
-  }
-});
-
-// ---------------- STT ----------------
-let recognition;
-let recognizing = false;
-let finalText = "";
-
-function startSTT() {
-  if (!('webkitSpeechRecognition' in window)) {
-    alert("브라우저가 STT(WebSpeech API)를 지원하지 않습니다.");
-    return;
+  // ---------------- Send Capture Command ----------------
+  function sendCapture(target, withAutoSolve = false) {
+    autoSolveOnNextQuestion = !!withAutoSolve;
+    const cmd = {
+      action: "capture",
+      target,
+      timestamp: Date.now()
+    };
+    db.ref("p2p/latestCommand").set(cmd);
+    statusEl.textContent = `📡 ${target} 캡처 명령 보냄`;
   }
 
-  recognition = new webkitSpeechRecognition();
-  recognition.lang = "en-US";
-  recognition.continuous = true;
-  recognition.interimResults = true;
+  // ---------------- Listen Result from Phone ----------------
+  db.ref("p2p/latestResult").on("value", snap => {
+    const val = snap.val();
+    if (!val) return;
+    if (!val.timestamp || val.timestamp <= lastResultTs) return;
+    lastResultTs = val.timestamp;
 
-  recognition.onresult = e => {
-    let temp = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      temp += e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalText += e.results[i][0].transcript + "\n";
+    if (val.target === "passage") {
+      passageEl.value = val.text || "";
+      statusEl.textContent = "✅ 지문 OCR 수신";
+    } else if (val.target === "question") {
+      questionEl.value = val.text || "";
+      statusEl.textContent = "✅ 문제 OCR 수신";
+      if (autoSolveOnNextQuestion && modeSel.value === "reading") {
+        autoSolveOnNextQuestion = false;
+        requestSolve();
+      }
     }
-    document.getElementById("sttBox").value = finalText + "\n" + temp;
-  };
-
-  recognition.start();
-  recognizing = true;
-}
-
-function stopSTT() {
-  if (recognition && recognizing) {
-    recognition.stop();
-    recognizing = false;
-  }
-}
-
-// ---------------- Solve Request ----------------
-async function requestSolve() {
-  const mode = document.getElementById("modeSel").value;
-
-  const body = {
-    mode,
-    passage: document.getElementById("passageBox").value,
-    question: document.getElementById("questionBox").value,
-    stt: document.getElementById("sttBox").value
-  };
-
-  const res = await fetch("/.netlify/functions/solve", {
-    method: "POST",
-    headers: { "Content-Type": "application/json"},
-    body: JSON.stringify(body)
   });
 
-  const out = await res.json();
-  document.getElementById("resultBox").innerText = out.result;
+  // ---------------- STT (WebSpeech) ----------------
+  let recognition = null;
+  let sttFinal = "";
+  let sttRunning = false;
 
-  // Optional TTS
-  if (out.tts) {
-    const u = new SpeechSynthesisUtterance(out.tts);
-    speechSynthesis.speak(u);
+  function ensureSTT() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      alert("이 브라우저는 WebSpeech STT를 지원하지 않습니다. (크롬 권장)");
+      return null;
+    }
+    const rec = new SpeechRec();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+    return rec;
   }
-}
-</script>
 
+  function startSTT() {
+    if (sttRunning) return;
+    recognition = ensureSTT();
+    if (!recognition) return;
+
+    sttFinal = "";
+    sttEl.value = "";
+
+    recognition.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          sttFinal += txt + "\n";
+        } else {
+          interim += txt;
+        }
+      }
+      const trimmed = (sttFinal + "\n" + interim).trim();
+      // 너무 길어지면 뒷부분만 유지 (4000자 제한)
+      sttEl.value = trimmed.length > 4000 ? trimmed.slice(-4000) : trimmed;
+    };
+
+    recognition.onstart = () => {
+      sttRunning = true;
+      statusEl.textContent = "🎤 STT 진행 중...";
+    };
+    recognition.onend = () => {
+      sttRunning = false;
+      statusEl.textContent = "⏹ STT 정지";
+    };
+
+    recognition.start();
+  }
+
+  function stopSTT() {
+    if (recognition && sttRunning) {
+      recognition.stop();
+    }
+  }
+
+  // ---------------- AI Solve Request ----------------
+  async function requestSolve() {
+    const body = {
+      mode: modeSel.value,
+      passage: passageEl.value,
+      question: questionEl.value,
+      stt: sttEl.value
+    };
+
+    statusEl.textContent = "⏱ AI 호출 중...";
+    resultEl.textContent = "";
+
+    try {
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = "ERROR: " + data.error;
+        statusEl.textContent = "❌ 에러 발생";
+        return;
+      }
+
+      resultEl.textContent = data.result || "";
+      statusEl.textContent = "✅ AI 응답 수신";
+
+      if (data.tts) {
+        const u = new SpeechSynthesisUtterance(data.tts);
+        speechSynthesis.speak(u);
+      }
+    } catch (e) {
+      resultEl.textContent = "요청 실패: " + e.toString();
+      statusEl.textContent = "❌ 요청 실패";
+    }
+  }
+
+  function clearAll() {
+    passageEl.value = "";
+    questionEl.value = "";
+    sttEl.value = "";
+    resultEl.textContent = "";
+    statusEl.textContent = "";
+  }
+</script>
 </body>
 </html>
-
