@@ -1,118 +1,148 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>answer-site | Camera OCR</title>
+  <meta charset="UTF-8">
+  <title>answer-site | Camera OCR (HD)</title>
 
-<!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
-<!-- Tesseract OCR -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+  <!-- Tesseract OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
 
-<style>
-body { margin: 0; background: #000; }
-#video { width: 100vw; height: 100vh; object-fit: cover; background:black; }
-#errorMsg {
-  color: red; padding: 20px; font-size: 18px;
-  background: #000; position: absolute; top: 0; left: 0;
-}
-</style>
+  <style>
+    body { margin: 0; background: #000; overflow: hidden; }
+    #video {
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      background: #000;
+    }
+    #msg {
+      position: absolute;
+      top: 0; left: 0;
+      color: #ff6666;
+      background: rgba(0,0,0,0.6);
+      padding: 8px 12px;
+      font-size: 14px;
+      z-index: 10;
+      white-space: pre-wrap;
+    }
+  </style>
 </head>
 <body>
 
-<div id="errorMsg"></div>
+<div id="msg"></div>
 <video id="video" autoplay playsinline></video>
 
 <script>
-// ---------------------- Firebase ----------------------
-const firebaseConfig = {
-  apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-  authDomain: "answer-site-p2p.firebaseapp.com",
-  databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "answer-site-p2p",
-  storageBucket: "answer-site-p2p.firebasestorage.app",
-  messagingSenderId: "364227113735",
-  appId: "1:364227113735:web:b18355cf0b16454663cba2",
-  measurementId: "G-C8MRHK5ZGS"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+  // ---------------------- Firebase ----------------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+    authDomain: "answer-site-p2p.firebaseapp.com",
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "answer-site-p2p",
+    storageBucket: "answer-site-p2p.firebasestorage.app",
+    messagingSenderId: "364227113735",
+    appId: "1:364227113735:web:b18355cf0b16454663cba2",
+    measurementId: "G-C8MRHK5ZGS"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
 
-const video = document.getElementById("video");
-const errBox = document.getElementById("errorMsg");
+  const video = document.getElementById('video');
+  const msg  = document.getElementById('msg');
 
-// ---------------------- CAMERA INIT (FIXED) ----------------------
-async function startCamera() {
-  try {
-    // 1) Try rear camera
-    const rear = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: "environment" } },
-      audio: false
+  // ---------------------- Camera Init (HD + Fallback) ----------------------
+  async function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      msg.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
+      return;
+    }
+
+    const tries = [
+      { audio: false, video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      { audio: false, video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: false, video: true }
+    ];
+
+    for (const c of tries) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(c);
+        video.srcObject = stream;
+        msg.textContent = "";
+        return;
+      } catch (e) {
+        console.warn("camera attempt failed", c, e);
+      }
+    }
+    msg.textContent = "카메라를 시작할 수 없습니다. 권한/보안앱 설정을 확인하세요.";
+  }
+
+  startCamera();
+
+  async function waitVideoReady() {
+    if (video.videoWidth && video.videoHeight) return;
+    await new Promise(resolve => {
+      const t = setTimeout(resolve, 3000);
+      video.addEventListener('loadedmetadata', () => {
+        clearTimeout(t);
+        resolve();
+      }, { once: true });
     });
-    video.srcObject = rear;
-    return;
-  } catch (e1) {
-    console.warn("Rear camera failed → trying front camera", e1);
   }
 
-  try {
-    // 2) fallback: try front camera
-    const front = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" },
-      audio: false
+  // ---------------------- OCR ----------------------
+  async function captureAndOcr(cmd) {
+    await waitVideoReady();
+
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) {
+      msg.textContent = "카메라가 아직 준비되지 않았습니다.";
+      return;
+    }
+
+    // 중앙 80% 영역만 캡처
+    const cropW = w * 0.8;
+    const cropH = h * 0.8;
+    const cropX = (w - cropW) / 2;
+    const cropY = (h - cropH) / 2;
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = cropW;
+    canvas.height = cropH;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+    msg.textContent = "OCR 중...";
+    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng+kor');
+    const text = (data.text || "").trim();
+    msg.textContent = "";
+
+    db.ref("p2p/latestResult").set({
+      target: cmd.target,
+      text,
+      timestamp: cmd.timestamp || Date.now()
     });
-    video.srcObject = front;
-    return;
-  } catch (e2) {
-    console.warn("Front camera failed too", e2);
-    errBox.innerText = 
-      "카메라를 불러올 수 없습니다.\n브라우저 권한 / 세이프 브라우징 / 보안 앱 설정을 확인하세요.";
-  }
-}
-
-// Start camera
-startCamera();
-
-
-// ---------------------- OCR ----------------------
-async function captureAndOcr(cmd) {
-  const canvas = document.createElement("canvas");
-  const w = video.videoWidth;
-  const h = video.videoHeight;
-
-  if (!w || !h) {
-    errBox.innerText = "카메라가 아직 초기화되지 않았습니다.";
-    return;
   }
 
-  const cropW = w * 0.7;
-  const cropH = h * 0.7;
-  const cropX = (w - cropW) / 2;
-  const cropY = (h - cropH) / 2;
+  // ---------------------- Firebase Command Listener ----------------------
+  let lastHandledTs = 0;
 
-  canvas.width = cropW;
-  canvas.height = cropH;
-  canvas.getContext("2d").drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  db.ref("p2p/latestCommand").on("value", snap => {
+    const cmd = snap.val();
+    if (!cmd) return;
+    if (!cmd.timestamp || cmd.timestamp <= lastHandledTs) return;
+    lastHandledTs = cmd.timestamp;
 
-  const result = await Tesseract.recognize(canvas.toDataURL("image/png"), "eng+kor");
-  const text = result.data.text.trim();
-
-  db.ref("p2p/latestResult").set({
-    target: cmd.target,
-    text,
-    timestamp: Date.now()
+    if (cmd.action === "capture") {
+      captureAndOcr(cmd);
+    }
   });
-}
-
-// ---------------------- COMMAND LISTENER ----------------------
-db.ref("p2p/latestCommand").on("value", snap => {
-  const cmd = snap.val();
-  if (!cmd) return;
-  if (cmd.action === "capture") captureAndOcr(cmd);
-});
 </script>
+
 </body>
 </html>
-
