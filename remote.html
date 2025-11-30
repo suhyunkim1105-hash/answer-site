@@ -93,11 +93,19 @@
   <h2>answer-site Auto</h2>
   <div id="camStatus">카메라 상태: -</div>
 
-  <!-- 마이크 시작 버튼 (브라우저 보안 때문에 1번은 눌러줘야 함) -->
+  <!-- ✅ 정답/피드백 박스를 맨 위로 올림 -->
+  <div class="box" id="answerBox">
+    <h3>AI 정답 / 피드백</h3>
+    <div class="answer-big" id="answerMain">아직 정답 없음</div>
+    <pre id="answerDetail"></pre>
+  </div>
+
+  <!-- STT 시작 버튼 -->
   <button id="btnStart">자동 시작 (마이크 허용)</button>
 
   <div id="status"></div>
 
+  <!-- 🔎 OCR / STT 프리뷰는 아래로 내림 -->
   <div class="box">
     <h3>화면 인식 (OCR 프리뷰)</h3>
     <pre id="ocrPreview">(아직 없음)</pre>
@@ -106,12 +114,6 @@
   <div class="box">
     <h3>음성 인식 (STT 텍스트)</h3>
     <pre id="audioPreview">(아직 없음)</pre>
-  </div>
-
-  <div class="box" id="answerBox">
-    <h3>AI 정답 / 피드백</h3>
-    <div class="answer-big" id="answerMain"></div>
-    <pre id="answerDetail"></pre>
   </div>
 </div>
 
@@ -130,13 +132,13 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const camStatusEl   = document.getElementById('camStatus');
-  const statusEl      = document.getElementById('status');
-  const btnStart      = document.getElementById('btnStart');
-  const ocrPreviewEl  = document.getElementById('ocrPreview');
-  const audioPreviewEl= document.getElementById('audioPreview');
-  const answerMainEl  = document.getElementById('answerMain');
-  const answerDetailEl= document.getElementById('answerDetail');
+  const camStatusEl    = document.getElementById('camStatus');
+  const statusEl       = document.getElementById('status');
+  const btnStart       = document.getElementById('btnStart');
+  const ocrPreviewEl   = document.getElementById('ocrPreview');
+  const audioPreviewEl = document.getElementById('audioPreview');
+  const answerMainEl   = document.getElementById('answerMain');
+  const answerDetailEl = document.getElementById('answerDetail');
 
   let latestState = {};
   let lastSolveTs = 0;
@@ -145,26 +147,35 @@
   let sttActive = false;
   let recognition = null;
   let audioText = "";
+  let finalTranscript = "";
 
   function setupRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다.";
+      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다. (Chrome 데스크톱 권장)";
       return null;
     }
     const rec = new SpeechRecognition();
+
+    // TOEFL 답변 기준이라 영어로 설정 (필요하면 en-US / en-GB 조정 가능)
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
 
     rec.onresult = (event) => {
-      let finalText = "";
-      for (let i = 0; i < event.results.length; i++) {
+      // ✅ 표준 패턴: 최종 결과는 finalTranscript에 쌓고,
+      //    아직 말하는 중인 건 interim에만 잠깐 표시
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
         const res = event.results[i];
-        // 마지막 것은 interim이라도 그냥 같이 쌓는다
-        finalText += res[0].transcript + " ";
+        const transcript = res[0].transcript;
+        if (res.isFinal) {
+          finalTranscript += transcript + " ";
+        } else {
+          interim += transcript + " ";
+        }
       }
-      audioText = finalText.trim();
+      audioText = (finalTranscript + " " + interim).trim();
       audioPreviewEl.textContent = audioText || "(아직 없음)";
       db.ref("p2p/state").update({
         audioText,
@@ -173,14 +184,19 @@
     };
 
     rec.onend = () => {
+      // 끊겨도 sttActive면 다시 시작 (Chrome가 가끔 자동 종료함)
       if (sttActive) {
-        // 끊겨도 자동 재시작
-        rec.start();
+        try {
+          rec.start();
+        } catch (e) {
+          console.error("STT 재시작 실패:", e);
+          statusEl.textContent = "STT 재시작 실패: " + e.toString();
+        }
       }
     };
 
     rec.onerror = (e) => {
-      console.error(e);
+      console.error("STT error:", e);
       statusEl.textContent = "STT 에러: " + e.error;
     };
 
@@ -192,11 +208,15 @@
     recognition = setupRecognition();
     if (!recognition) return;
     try {
+      finalTranscript = "";
+      audioText = "";
+      audioPreviewEl.textContent = "(아직 없음)";
+
       recognition.start();
       sttActive = true;
       btnStart.disabled = true;
       btnStart.textContent = "자동 모드 ON (마이크 수신 중)";
-      statusEl.textContent = "STT 시작 – 음성 텍스트를 자동으로 인식 중";
+      statusEl.textContent = "STT 시작 – 영어 음성을 자동으로 인식 중 (Chrome 데스크톱 권장)";
     } catch (e) {
       console.error(e);
       statusEl.textContent = "STT 시작 실패: " + e.toString();
@@ -207,11 +227,16 @@
   db.ref("p2p/state").on("value", snap => {
     latestState = snap.val() || {};
     const blocked = !!latestState.cameraBlocked;
-    camStatusEl.textContent = blocked ? "카메라 상태: 가려짐(마지막 답 유지 중)" : "카메라 상태: 보임(새 문제 인식 가능)";
+    camStatusEl.textContent = blocked
+      ? "카메라 상태: 가려짐(마지막 답 유지 중)"
+      : "카메라 상태: 보임(새 문제 인식 가능)";
+
     const t = (latestState.ocrText || "").trim();
     ocrPreviewEl.textContent = t ? t.slice(0, 400) : "(아직 없음)";
+
     const at = (latestState.audioText || "").trim();
-    if (!audioText) { // 아직 로컬 STT 텍스트 없으면 Firebase 값 보여주기
+    // 로컬 STT 텍스트가 비어 있으면 서버 값 보여주기
+    if (!audioText) {
       audioPreviewEl.textContent = at || "(아직 없음)";
     }
   });
@@ -271,6 +296,7 @@
     if (mode === "rl") {
       const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
       const ansText = mAns ? mAns[1].trim() : "";
+      // ✅ 답을 제일 먼저, 크게
       answerMainEl.textContent = ansText ? ("정답: " + ansText) : "정답 정보 없음";
 
       const parts = text.split(/\[WHY\]/i);
@@ -291,8 +317,9 @@
         essay = text.trim();
       }
       answerMainEl.textContent = "Writing 예시 에세이";
-      answerDetailEl.textContent = (essay ? essay + "\n\n---\n\n" : "") +
-                                   (fb ? ("[피드백]\n" + fb) : "");
+      answerDetailEl.textContent =
+        (essay ? essay + "\n\n---\n\n" : "") +
+        (fb ? ("[피드백]\n" + fb) : "");
       return;
     }
 
@@ -318,7 +345,7 @@
       return;
     }
 
-    // 혹시 모드 감지 실패하면 그냥 전체 표시
+    // 모드 감지 실패 → 전체 표시
     answerMainEl.textContent = "";
     answerDetailEl.textContent = text;
   }
@@ -348,18 +375,16 @@
     }
 
     if (!speakText) {
-      // fallback: 앞부분 짧게 읽기
       speakText = text.replace(/\[[^\]]+\]/g, "").trim().slice(0, 80);
     }
-
     if (!speakText) return;
 
     const u = new SpeechSynthesisUtterance(speakText);
-    // 답 안내는 한국어 위주라 ko-KR 사용
     u.lang = "ko-KR";
     synth.speak(u);
   }
 </script>
 </body>
 </html>
+
 
