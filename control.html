@@ -22,7 +22,7 @@
       width: 100%;
       max-width: 420px;
     }
-    h2 { margin: 4px 0 12px 0; }
+    h2 { margin: 4px 0 12px 0; font-size: 22px; }
 
     .top {
       display: flex;
@@ -32,7 +32,7 @@
       margin-bottom: 12px;
     }
     .mode-btn {
-      padding: 8px 12px;
+      padding: 8px 10px;
       border-radius: 6px;
       border: 1px solid #999;
       background: #fff;
@@ -54,32 +54,36 @@
 
     #status {
       font-size: 12px;
-      margin-left: auto;
+      margin-top: 4px;
       color: #555;
-      flex: 1;
-      text-align: right;
-      min-width: 120px;
     }
 
     .panel {
-      margin-top: 8px;
+      margin-top: 10px;
       padding: 10px;
       border-radius: 8px;
       border: 1px solid #ddd;
       background: #fff;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
     }
 
     button.action {
-      padding: 10px 12px;
-      font-size: 15px;
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 16px;
       cursor: pointer;
       border-radius: 6px;
       border: 1px solid #ccc;
       background: #fff;
       text-align: left;
+    }
+
+    @media (max-width: 480px) {
+      h2 { font-size: 20px; }
+      button.action { font-size: 17px; padding: 12px 16px; }
+      .mode-btn { font-size: 13px; padding: 6px 8px; }
     }
   </style>
 </head>
@@ -98,18 +102,16 @@
       <option value="eng">OCR: ENG</option>
       <option value="eng+kor" selected>OCR: ENG+KOR</option>
     </select>
-
-    <div id="status"></div>
   </div>
 
+  <div id="status"></div>
+
   <div class="panel">
-    <button class="action" onclick="cmdCapture('passage','new')">📄 지문 새로 캡처</button>
-    <button class="action" onclick="cmdCapture('passage','append')">📄 지문 추가 캡처</button>
-    <button class="action" onclick="cmdCapture('question','new')">❓ 문제/질문 새로 캡처</button>
-    <button class="action" onclick="cmdCapture('question','append')">❓ 문제/질문 추가 캡처</button>
-    <button class="action" onclick="cmdSTTStart()">🎤 STT 시작</button>
-    <button class="action" onclick="cmdSTTStop()">⏹ STT 정지</button>
+    <button class="action" onclick="cmdCapture('passage')">📄 지문 캡처 (현재 화면)</button>
+    <button class="action" onclick="cmdCapture('question')">❓ 문제/질문 캡처 (현재 화면)</button>
+    <button class="action" id="btnSTT" onclick="toggleSTT()">🎤 STT 시작</button>
     <button class="action" onclick="cmdSolve()">🤖 풀이/평가 요청</button>
+    <button class="action" onclick="cmdClear()">🧹 전체 초기화</button>
   </div>
 </div>
 
@@ -118,7 +120,7 @@
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
-    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1-firebasedatabase.app".replace("firebasedatabase","firebasedatabase"), // 그대로 유지
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
     projectId: "answer-site-p2p",
     storageBucket: "answer-site-p2p.firebasestorage.app",
     messagingSenderId: "364227113735",
@@ -130,9 +132,12 @@
 
   const statusEl = document.getElementById('status');
   const ocrLangEl = document.getElementById('ocrLang');
+  const btnSTT = document.getElementById('btnSTT');
 
   let currentMode = "reading";
+  let sttOn = false;
 
+  // 모드 버튼
   document.querySelectorAll(".mode-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const mode = btn.getAttribute("data-mode");
@@ -157,27 +162,36 @@
     db.ref("p2p/command").set(cmd);
   }
 
-  function cmdCapture(target, how) {
+  function cmdCapture(target) {
     const type = (target === "passage")
-      ? (how === "new" ? "capture_passage_new" : "capture_passage_append")
-      : (how === "new" ? "capture_question_new" : "capture_question_append");
+      ? "capture_passage_new"
+      : "capture_question_new";
     sendCommand(type);
-    statusEl.textContent = `${currentMode}: ${target} ${how} 캡처`;
+    statusEl.textContent = `${currentMode}: ${target === "passage" ? "지문" : "문제/질문"} 캡처`;
   }
 
-  function cmdSTTStart() {
-    sendCommand("stt_start");
-    statusEl.textContent = `${currentMode}: STT 시작`;
-  }
-
-  function cmdSTTStop() {
-    sendCommand("stt_stop");
-    statusEl.textContent = `${currentMode}: STT 정지`;
+  function toggleSTT() {
+    if (!sttOn) {
+      sendCommand("stt_start");
+      sttOn = true;
+      btnSTT.textContent = "⏹ STT 정지";
+      statusEl.textContent = `${currentMode}: STT 시작`;
+    } else {
+      sendCommand("stt_stop");
+      sttOn = false;
+      btnSTT.textContent = "🎤 STT 시작";
+      statusEl.textContent = `${currentMode}: STT 정지`;
+    }
   }
 
   function cmdSolve() {
     sendCommand("solve");
     statusEl.textContent = `${currentMode}: 풀이/평가 요청`;
+  }
+
+  function cmdClear() {
+    sendCommand("clear_state");
+    statusEl.textContent = `${currentMode}: 상태 초기화`;
   }
 </script>
 </body>
