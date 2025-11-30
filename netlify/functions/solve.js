@@ -1,4 +1,4 @@
-// /.netlify/functions/solve.js
+b// /.netlify/functions/solve.js
 
 export async function handler(event, context) {
   try {
@@ -62,7 +62,7 @@ ${passage}
 ${question}
 
 Rules:
-- Choose the correct option among 1~5 ONLY if you are at least 80% confident.
+- Choose the correct option among 1~5 ONLY if you are at least 70% confident.
 - If the answer CANNOT be safely determined from the passage and question, do NOT guess.
 - In that case, output "[ANSWER] ?" and explain why it is unclear.
 
@@ -88,7 +88,7 @@ ${question}
 Rules:
 - Use the transcript and any on-screen text together.
 - Consider that STT may contain small recognition errors.
-- Only choose an option 1~5 if you are at least 80% confident.
+- Only choose an option 1~5 if you are at least 70% confident.
 - If the answer cannot be safely determined, output "[ANSWER] ?".
 - Never randomly guess.
 
@@ -169,7 +169,6 @@ Output Format (STRICT):
 `;
   }
 
-  // fallback
   return "Invalid mode. Use reading / listening / writing / speaking.";
 }
 
