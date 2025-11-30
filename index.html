@@ -37,7 +37,7 @@
       height: auto;
       transform-origin: center center;
     }
-    /* 화면 전체 테두리 – 그냥 "카메라 활성" 표시용 */
+    /* 화면 전체 테두리 – "카메라 활성" 표시용 */
     #overlayFrame {
       position: absolute;
       top: 0;
@@ -85,7 +85,8 @@
 
     <div class="row">
       <span class="label">배율</span>
-      <input id="zoomRange" type="range" min="1" max="2.2" step="0.05" value="1">
+      <!-- 최대 배율 3으로 약간 상향 -->
+      <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
     </div>
     <div class="row">
       <span class="label">OCR 언어</span>
@@ -109,9 +110,9 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const video    = document.getElementById('video');
-  const statusEl = document.getElementById('status');
-  const zoomRange = document.getElementById('zoomRange');
+  const video      = document.getElementById('video');
+  const statusEl   = document.getElementById('status');
+  const zoomRange  = document.getElementById('zoomRange');
 
   const OCR_LANG = "eng+kor";
 
@@ -127,18 +128,34 @@
   bCanvas.width = BW;
   bCanvas.height = BH;
 
+  // 고해상도 캡처용 ImageCapture (지원하는 브라우저에서만)
+  let imageCapture = null;
+
   // ---------- 카메라 세팅 ----------
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width:  { ideal: 1920 },
-          height: { ideal: 1080 }
+          // 해상도 요구 조건을 조금 더 빡세게
+          width:  { min: 1280, ideal: 1920, max: 2560 },
+          height: { min: 720,  ideal: 1080, max: 1440 }
         },
         audio: false
       });
       video.srcObject = stream;
+
+      // ImageCapture 지원되면 고해상도 스틸 프레임 사용
+      const track = stream.getVideoTracks()[0];
+      if ('ImageCapture' in window && track) {
+        try {
+          imageCapture = new ImageCapture(track);
+        } catch (e) {
+          console.warn("ImageCapture 생성 실패, video 프레임으로 fallback:", e);
+          imageCapture = null;
+        }
+      }
+
       statusEl.textContent = "카메라 ON – 화면 자동 인식 중...";
       startAutoLoop();
     } catch (e) {
@@ -173,7 +190,7 @@
   // ---------- 자동 루프: 가려짐 체크 + OCR 스케줄 ----------
   function startAutoLoop() {
     function loop() {
-      if (!video.videoWidth) {
+      if (!video.videoWidth && !imageCapture) {
         requestAnimationFrame(loop);
         return;
       }
@@ -203,19 +220,30 @@
 
   // ---------- 전체 프레임 OCR + 자동 solve 트리거 ----------
   async function doOCROnce() {
-    if (!video.videoWidth) return;
     ocrRunning = true;
     try {
       statusEl.textContent = "OCR 진행 중...";
 
-      const fullW = video.videoWidth;
-      const fullH = video.videoHeight;
-
+      // 캔버스 준비
       const canvas = document.createElement('canvas');
-      canvas.width = fullW;
-      canvas.height = fullH;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, fullW, fullH);
+
+      if (imageCapture) {
+        // 고해상도 스틸 프레임 사용
+        try {
+          const bitmap = await imageCapture.grabFrame();
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          ctx.drawImage(bitmap, 0, 0);
+        } catch (e) {
+          console.warn("grabFrame 실패, video 프레임으로 fallback:", e);
+          // fallback: 아래 video 프레임 사용
+          fillCanvasFromVideo(canvas, ctx);
+        }
+      } else {
+        // ImageCapture 미지원 → video 프레임 사용
+        fillCanvasFromVideo(canvas, ctx);
+      }
 
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
@@ -252,8 +280,6 @@
           type: "solve",
           timestamp: Date.now()
         });
-      } else {
-        // 같은 화면이라고 판단 → 새 solve 트리거 안 함
       }
     } catch (e) {
       console.error(e);
@@ -261,6 +287,22 @@
     } finally {
       ocrRunning = false;
     }
+  }
+
+  function fillCanvasFromVideo(canvas, ctx) {
+    if (!video.videoWidth || !video.videoHeight) {
+      // video 정보가 아직 없으면 그냥 작은 캔버스로 빈 처리
+      canvas.width = 640;
+      canvas.height = 360;
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const fullW = video.videoWidth;
+    const fullH = video.videoHeight;
+    canvas.width = fullW;
+    canvas.height = fullH;
+    ctx.drawImage(video, 0, 0, fullW, fullH);
   }
 
   startCamera();
