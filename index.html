@@ -2,14 +2,14 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Camera OCR</title>
+  <title>answer-site | Capture & STT</title>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
   <!-- Tesseract OCR -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
 
   <style>
     body { margin: 0; background: #000; overflow: hidden; }
@@ -22,10 +22,10 @@
     #msg {
       position: absolute;
       top: 0; left: 0;
-      color: #ff6666;
+      color: #ffcccc;
       background: rgba(0,0,0,0.6);
       padding: 6px 10px;
-      font-size: 13px;
+      font-size: 12px;
       z-index: 10;
       white-space: pre-wrap;
     }
@@ -54,7 +54,12 @@
   const video = document.getElementById('video');
   const msg   = document.getElementById('msg');
 
-  // ---------------------- Camera Init (HD + Fallback) ----------------------
+  // 로컬 캐시 (지문/문제/음성 텍스트)
+  let passageCache  = "";
+  let questionCache = "";
+  let sttCache      = "";
+
+  // ---------------------- Camera Init ----------------------
   async function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       msg.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
@@ -72,15 +77,14 @@
       try {
         const stream = await navigator.mediaDevices.getUserMedia(c);
         video.srcObject = stream;
-        msg.textContent = "";
+        msg.textContent = "카메라 준비됨";
         return;
       } catch (e) {
         console.warn("camera attempt failed", c, e);
       }
     }
-    msg.textContent = "카메라를 시작할 수 없습니다.\n권한 / 보안앱 설정을 확인하세요.";
+    msg.textContent = "카메라 시작 실패. 권한/보안앱 설정 확인.";
   }
-
   startCamera();
 
   async function waitVideoReady() {
@@ -95,23 +99,21 @@
   }
 
   // ---------------------- OCR ----------------------
-  async function captureAndOcr(cmd) {
+  async function captureAndOcr(target, isAppend, lang, mode) {
     await waitVideoReady();
 
     const w = video.videoWidth;
     const h = video.videoHeight;
     if (!w || !h) {
-      msg.textContent = "카메라가 아직 준비되지 않았습니다.";
+      msg.textContent = "카메라 준비 안 됨";
       return;
     }
 
-    // 중앙 80% 영역만 사용
     const cropW = w * 0.8;
     const cropH = h * 0.8;
     const cropX = (w - cropW) / 2;
     const cropY = (h - cropH) / 2;
 
-    // 최대 폭 1280으로 다운스케일 (속도 개선)
     const maxWidth = 1280;
     let outW = cropW;
     let outH = cropH;
@@ -127,39 +129,134 @@
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
 
-    const lang = (cmd && cmd.lang === "eng") ? "eng" : "eng+kor";
+    const tLang = (lang === "eng") ? "eng" : "eng+kor";
+    msg.textContent = `OCR 중 (${tLang})...`;
 
-    msg.textContent = "OCR 중...";
-    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), lang);
+    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), tLang);
     const text = (data.text || "").trim();
     const confidence = (typeof data.confidence === "number")
       ? Math.round(data.confidence)
       : null;
 
-    msg.textContent = confidence ? `OCR ${confidence}%` : "";
+    msg.textContent = confidence ? `OCR 완료 (${confidence}%)` : "OCR 완료";
 
-    db.ref("p2p/latestResult").set({
-      target: cmd.target,
-      text,
-      confidence,
-      timestamp: cmd.timestamp || Date.now()
-    });
+    const now = Date.now();
+
+    if (target === "passage") {
+      passageCache = isAppend && passageCache ? (passageCache + "\n" + text) : text;
+      db.ref("p2p/state").update({
+        mode,
+        passage: passageCache,
+        passageConf: confidence,
+        updatedAt: now
+      });
+    } else if (target === "question") {
+      questionCache = isAppend && questionCache ? (questionCache + "\n" + text) : text;
+      db.ref("p2p/state").update({
+        mode,
+        question: questionCache,
+        questionConf: confidence,
+        updatedAt: now
+      });
+    }
   }
 
-  // ---------------------- Command Listener (중복방지) ----------------------
-  let lastHandledTs = 0;
+  // ---------------------- STT (WebSpeech on phone) ----------------------
+  let recognition = null;
+  let sttRunning  = false;
 
-  db.ref("p2p/latestCommand").on("value", snap => {
+  function startSTT(mode) {
+    if (sttRunning) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      msg.textContent = "STT 미지원 브라우저 (Chrome 권장)";
+      return;
+    }
+
+    recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    sttCache = "";
+    db.ref("p2p/state").update({
+      mode,
+      stt: "",
+      sttUpdatedAt: Date.now()
+    });
+
+    recognition.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const txt = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          sttCache += txt + "\n";
+        } else {
+          interim += txt;
+        }
+      }
+      let full = (sttCache + "\n" + interim).trim();
+      if (full.length > 4000) full = full.slice(-4000);
+      sttCache = full;
+      db.ref("p2p/state").update({
+        mode,
+        stt: sttCache,
+        sttUpdatedAt: Date.now()
+      });
+      msg.textContent = "STT 수신 중...";
+    };
+
+    recognition.onstart = () => {
+      sttRunning = true;
+      msg.textContent = "STT 시작 (마이크)";
+    };
+    recognition.onend = () => {
+      sttRunning = false;
+      msg.textContent = "STT 종료";
+    };
+
+    recognition.start();
+  }
+
+  function stopSTT() {
+    if (recognition && sttRunning) {
+      recognition.stop();
+    }
+  }
+
+  // ---------------------- Command Listener ----------------------
+  let lastCmdTs = 0;
+
+  function handleCommand(cmd) {
+    const { type, mode, lang } = cmd;
+    if (type === "capture_passage_new") {
+      captureAndOcr("passage", false, lang, mode);
+    } else if (type === "capture_passage_append") {
+      captureAndOcr("passage", true, lang, mode);
+    } else if (type === "capture_question_new") {
+      captureAndOcr("question", false, lang, mode);
+    } else if (type === "capture_question_append") {
+      captureAndOcr("question", true, lang, mode);
+    } else if (type === "stt_start") {
+      startSTT(mode);
+    } else if (type === "stt_stop") {
+      stopSTT();
+    } else if (type === "clear_state") {
+      passageCache = "";
+      questionCache = "";
+      sttCache = "";
+      db.ref("p2p/state").set({ mode, passage: "", question: "", stt: "", updatedAt: Date.now() });
+      msg.textContent = "상태 초기화";
+    }
+  }
+
+  db.ref("p2p/command").on("value", snap => {
     const cmd = snap.val();
     if (!cmd) return;
-    if (!cmd.timestamp || cmd.timestamp <= lastHandledTs) return;
-    lastHandledTs = cmd.timestamp;
-
-    if (cmd.action === "capture") {
-      captureAndOcr(cmd);
-    }
+    if (!cmd.timestamp || cmd.timestamp <= lastCmdTs) return;
+    lastCmdTs = cmd.timestamp;
+    handleCommand(cmd);
   });
 </script>
-
 </body>
 </html>
