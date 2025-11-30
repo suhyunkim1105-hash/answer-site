@@ -30,7 +30,7 @@
     #videoContainer {
       position: relative;
       width: 100%;
-      max-height: calc(100vh - 120px); /* 아래 컨트롤 포함해서 한 화면에 들어오게 */
+      max-height: calc(100vh - 120px);
       overflow: hidden;
       background: #000;
       border-radius: 8px;
@@ -123,7 +123,7 @@
   </div>
 
   <div id="controls">
-    <!-- 모드 선택: 정답 형식을 모델에 힌트로 줌 -->
+    <!-- 모드 선택 -->
     <div id="modeRow">
       <button class="mode-btn active" data-mode="reading">Reading</button>
       <button class="mode-btn" data-mode="listening">Listening</button>
@@ -161,9 +161,10 @@
   const zoomRange  = document.getElementById('zoomRange');
   const btnOCRNow  = document.getElementById('btnOCRNow');
 
-  const OCR_LANG = "eng+kor";
+  // 🔤 영어만 인식 (가로/세로 상관 없이)
+  const OCR_LANG = "eng";
 
-  let currentMode = "reading";     // reading / listening / writing / speaking
+  let currentMode = "reading";
   let ocrRunning = false;
   let lastSolvedSnippet = "";
   let lastBlocked = null;
@@ -188,7 +189,6 @@
     modeButtons.forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
-    // Firebase에 힌트 저장 (remote.html & solve.js에서 사용)
     db.ref("p2p/state").update({
       modeHint: mode,
       modeUpdatedAt: Date.now()
@@ -201,10 +201,9 @@
       setMode(mode);
     });
   });
-  // 초기값
   setMode("reading");
 
-  // ---------- 카메라 세팅 ----------
+  // ---------- 카메라 ----------
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -222,7 +221,7 @@
         try {
           imageCapture = new ImageCapture(track);
         } catch (e) {
-          console.warn("ImageCapture 생성 실패, video 프레임으로 fallback:", e);
+          console.warn("ImageCapture 생성 실패, video 프레임 fallback:", e);
           imageCapture = null;
         }
       }
@@ -240,14 +239,13 @@
     video.style.transform = `scale(${scale})`;
   });
 
-  // 수동 인식 버튼
   btnOCRNow.addEventListener("click", () => {
     if (ocrRunning) return;
     lastOcrTime = Date.now();
-    doOCROnce(true); // true = 수동 호출
+    doOCROnce(true);
   });
 
-  // ---------- 프레임 분석: 밝기 + 움직임 ----------
+  // ---------- 밝기 + 움직임 분석 ----------
   function analyzeFrame() {
     if (!video.videoWidth || !video.videoHeight) {
       return { blocked: false, stable: false };
@@ -276,15 +274,14 @@
     const avgBright = sumBright / len;
     const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    const blocked = avgBright < 25;  // 너무 어두우면 가려짐으로 판단
+    const blocked = avgBright < 25;
 
     const now = Date.now();
     let stable = false;
-
     if (diffAvg < 8) {
       if (!lastStableTime) {
         lastStableTime = now;
-      } else if (now - lastStableTime > 1000) { // 1초 이상 거의 안 움직인 상태
+      } else if (now - lastStableTime > 1000) {
         stable = true;
       }
     } else {
@@ -314,7 +311,6 @@
           : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
       }
 
-      // 자동 OCR: 화면이 안 가려지고, 충분히 안정되었고, 일정 시간 간격 이후
       if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce(false);
@@ -325,7 +321,7 @@
     requestAnimationFrame(loop);
   }
 
-  // ---------- OCR (중앙 75% 영역 + 품질 필터 + solve 트리거) ----------
+  // ---------- OCR (중앙 90% 영역, 필터 느슨하게) ----------
   async function doOCROnce(manual) {
     if (ocrRunning) return;
     ocrRunning = true;
@@ -347,7 +343,7 @@
             ctx.drawImage(bitmap, x, y, w, h, 0, 0, w, h);
           });
         } catch (e) {
-          console.warn("grabFrame 실패, video 프레임으로 fallback:", e);
+          console.warn("grabFrame 실패, video 프레임 fallback:", e);
           fillCanvasFromVideoCenter(canvas, ctx);
         }
       } else {
@@ -368,16 +364,17 @@
       const text = rawText.replace(/\s+\n/g, "\n").trim();
       const conf = result.data.confidence || 0;
 
-      // 너무 짧거나, 평균 신뢰도 낮으면 버림 (너무 엉망인 경우 방지)
-      if (!text || text.length < 30 || conf < 35) {
+      // 아주 짧은 경우만 버리고, conf는 거의 안 막음
+      const effectiveLen = text.replace(/\s/g, "").length;
+      if (!text || effectiveLen < 10) {
         statusLine.textContent =
-          `OCR 완료 (노이즈로 판단, 무시: 길이=${text.length}, conf=${conf.toFixed(1)}%)`;
+          `OCR 완료 (텍스트 너무 짧아서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
         ocrRunning = false;
         return;
       }
 
       statusLine.textContent =
-        `OCR 완료 | conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
+        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
 
       await db.ref("p2p/state").update({
         ocrText: text,
@@ -403,9 +400,9 @@
     }
   }
 
-  // 중앙 75% 영역 잘라서 캔버스에 그리기
+  // 중앙 90%만 크롭 (가로/세로 상관 없음)
   function cropCenterToCanvas(fullW, fullH, drawCallback) {
-    const scale = 0.75;
+    const scale = 0.9;  // 중앙 90% 자름 → 글자 크게
     const w = Math.floor(fullW * scale);
     const h = Math.floor(fullH * scale);
     const x = Math.floor((fullW - w) / 2);
@@ -434,4 +431,3 @@
 </script>
 </body>
 </html>
-
