@@ -9,7 +9,7 @@
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
   <!-- Tesseract OCR -->
-  <script src="https://cdn.jsdelivr/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
 
   <style>
     body { margin: 0; background: #000; overflow: hidden; }
@@ -54,7 +54,7 @@
   const video = document.getElementById('video');
   const msg   = document.getElementById('msg');
 
-  // 로컬 캐시 (지문/문제/음성 텍스트)
+  // 로컬 캐시
   let passageCache  = "";
   let questionCache = "";
   let sttCache      = "";
@@ -68,8 +68,8 @@
 
     const tries = [
       { audio: false, video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      { audio: false, video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
       { audio: false, video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
-      { audio: false, video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } },
       { audio: false, video: true }
     ];
 
@@ -98,7 +98,7 @@
     });
   }
 
-  // ---------------------- OCR ----------------------
+  // ---------------------- OCR (다운스케일 없음) ----------------------
   async function captureAndOcr(target, isAppend, lang, mode) {
     await waitVideoReady();
 
@@ -109,25 +109,17 @@
       return;
     }
 
+    // 중앙 80% 영역
     const cropW = w * 0.8;
     const cropH = h * 0.8;
     const cropX = (w - cropW) / 2;
     const cropY = (h - cropH) / 2;
 
-    const maxWidth = 1280;
-    let outW = cropW;
-    let outH = cropH;
-    if (cropW > maxWidth) {
-      const scale = maxWidth / cropW;
-      outW = maxWidth;
-      outH = Math.round(cropH * scale);
-    }
-
     const canvas = document.createElement('canvas');
-    canvas.width  = outW;
-    canvas.height = outH;
+    canvas.width  = cropW;
+    canvas.height = cropH;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
     const tLang = (lang === "eng") ? "eng" : "eng+kor";
     msg.textContent = `OCR 중 (${tLang})...`;
@@ -161,7 +153,7 @@
     }
   }
 
-  // ---------------------- STT (WebSpeech on phone) ----------------------
+  // ---------------------- STT ----------------------
   let recognition = null;
   let sttRunning  = false;
 
