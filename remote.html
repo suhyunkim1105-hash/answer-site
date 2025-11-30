@@ -1,258 +1,150 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>answer-site 원격 컨트롤러</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    body {
-      margin: 0;
-      padding: 16px;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #050505;
-      color: #fff;
-    }
-    h1 {
-      font-size: 24px;
-      margin-bottom: 4px;
-    }
-    small {
-      color: #999;
-    }
-    .card {
-      max-width: 900px;
-      margin: 8px auto;
-      padding: 12px 16px;
-      border-radius: 16px;
-      background: #111;
-    }
-    #answerBox {
-      font-size: 20px;
-      font-weight: 700;
-    }
-    #answerValue {
-      color: #4dd0ff;
-    }
-    button {
-      border: none;
-      border-radius: 999px;
-      padding: 10px 14px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      background: #333;
-      color: #fff;
-      margin: 4px;
-    }
-    button:active {
-      transform: scale(0.97);
-    }
-    .mode-btn.active {
-      background: #4dd0ff;
-      color: #000;
-    }
-    #status {
-      font-size: 13px;
-      color: #ccc;
-    }
-    pre {
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 13px;
-      line-height: 1.4;
-      max-height: 220px;
-      overflow-y: auto;
-      margin: 6px 0 0;
-    }
-    .label {
-      font-size: 13px;
-      color: #aaa;
-      margin-bottom: 4px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>answer-site | Remote</title>
+
+<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+
+<style>
+body { font-family: sans-serif; padding: 20px; }
+textarea { width: 100%; height: 120px; margin-top: 10px; }
+button { padding: 10px 15px; margin: 5px; }
+#resultBox { white-space: pre-wrap; margin-top: 20px; background: #eee; padding: 15px; }
+</style>
 </head>
 <body>
-  <div class="card">
-    <h1>answer-site 원격 컨트롤러</h1>
-    <small>※ 실제 시험에서 사용하면 안 됨. 연습·연구용 전용.</small>
-  </div>
 
-  <div class="card" id="answerBox">
-    정답: <span id="answerValue">-</span>
-  </div>
+<h2>answer-site Remote</h2>
 
-  <div class="card">
-    <div class="label">영역 선택</div>
-    <div>
-      <button class="mode-btn active" data-mode="reading">Reading</button>
-      <button class="mode-btn" data-mode="writing">Writing</button>
-      <button class="mode-btn" data-mode="listening">Listening</button>
-      <button class="mode-btn" data-mode="speaking">Speaking</button>
-    </div>
+<h3>Mode</h3>
+<select id="modeSel">
+  <option value="reading">Reading</option>
+  <option value="writing">Writing</option>
+  <option value="listening">Listening</option>
+  <option value="speaking">Speaking</option>
+</select>
 
-    <div class="label" style="margin-top:8px;">원격 조작</div>
-    <div>
-      <button id="btnPassage">현재 화면을 지문으로 OCR (저장만)</button>
-      <button id="btnQuestion">현재 화면 캡처 + 풀이 요청</button>
-    </div>
+<hr>
 
-    <div id="status" style="margin-top:8px;">대기 중...</div>
-  </div>
+<h3>Reading</h3>
+<button onclick="sendCapture('passage')">지문 캡처</button>
+<button onclick="sendCapture('question')">문제 캡처 + 풀이</button>
 
-  <div class="card">
-    <div class="label">저장된 지문 (Reading/Writing에서 사용)</div>
-    <pre id="passageText"></pre>
-  </div>
+<textarea id="passageBox" placeholder="지문 OCR 결과"></textarea>
+<textarea id="questionBox" placeholder="문제 OCR 결과"></textarea>
 
-  <div class="card">
-    <div class="label">마지막 OCR 텍스트 (문항/프롬프트)</div>
-    <pre id="questionText"></pre>
-  </div>
+<hr>
 
-  <div class="card">
-    <div class="label">AI 상세 답변 / 에세이 / 피드백</div>
-    <pre id="detailText"></pre>
-  </div>
+<h3>Writing / Listening / Speaking – STT</h3>
+<button onclick="startSTT()">🎤 STT 시작</button>
+<button onclick="stopSTT()">⏹ STT 종료</button>
+<textarea id="sttBox" placeholder="STT 인식 결과"></textarea>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
-    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
+<hr>
 
-    // ===== Firebase 설정 (같은 프로젝트) =====
-    const firebaseConfig = {
-      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-      authDomain: "answer-site-p2p.firebaseapp.com",
-      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-      projectId: "answer-site-p2p",
-      storageBucket: "answer-site-p2p.firebasestorage.app",
-      messagingSenderId: "364227113735",
-      appId: "1:364227113735:web:b18355cf0b16454663cba2",
-      measurementId: "G-C8MRHK5ZGS"
-    };
+<button onclick="requestSolve()">AI 풀이/생성 요청</button>
 
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
+<div id="resultBox"></div>
 
-    const modeButtons = document.querySelectorAll(".mode-btn");
-    const btnPassage = document.getElementById("btnPassage");
-    const btnQuestion = document.getElementById("btnQuestion");
-    const statusEl = document.getElementById("status");
-    const passageEl = document.getElementById("passageText");
-    const questionEl = document.getElementById("questionText");
-    const detailEl = document.getElementById("detailText");
-    const answerEl = document.getElementById("answerValue");
+<script>
+// ---------------- Firebase Init ----------------
+const firebaseConfig = {
+  apiKey: "YOUR_KEY",
+  authDomain: "YOUR_DOMAIN",
+  databaseURL: "YOUR_DB_URL",
+  projectId: "YOUR_PID",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
-    let currentMode = "reading";
-    let passageText = "";
-    let lastResultRequestId = null;
+// ---------------- OCR Command ----------------
+function sendCapture(target) {
+  db.ref("p2p/latestCommand").set({
+    action: "capture",
+    target,
+    timestamp: Date.now(),
+  });
+}
 
-    // ===== 모드 선택 =====
-    modeButtons.forEach(btn => {
-      btn.addEventListener("click", () => {
-        modeButtons.forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        currentMode = btn.dataset.mode || "reading";
-        statusEl.textContent = `모드 변경: ${currentMode.toUpperCase()}`;
-      });
-    });
+// ---------------- Receive OCR Result ----------------
+db.ref("p2p/latestResult").on("value", snap => {
+  const val = snap.val();
+  if (!val) return;
 
-    // ===== 휴대폰에 캡처 명령 보내기 =====
-    async function sendCapture(target) {
-      const requestId = Date.now();
+  if (val.target === "passage") {
+    document.getElementById("passageBox").value = val.text;
+  }
+  if (val.target === "question") {
+    document.getElementById("questionBox").value = val.text;
+  }
+});
 
-      statusEl.textContent =
-        target === "passage"
-          ? "휴대폰에 지문 캡처 요청 전송..."
-          : "휴대폰에 문항 캡처 요청 전송...";
+// ---------------- STT (WebSpeech API) ----------------
+let recognition;
+let recognizing = false;
+let sttFinal = "";
 
-      await set(ref(db, "p2p/latestCommand"), {
-        requestId,
-        target,
-        mode: currentMode,
-        createdAt: Date.now()
-      });
+function startSTT() {
+  if (!('webkitSpeechRecognition' in window)) {
+    alert("WebSpeech API 지원 안됨.");
+    return;
+  }
+
+  recognition = new webkitSpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  recognition.onresult = e => {
+    let text = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      text += e.results[i][0].transcript;
+      if (e.results[i].isFinal) sttFinal += e.results[i][0].transcript + "\n";
     }
+    document.getElementById("sttBox").value = sttFinal + "\n" + text;
+  };
 
-    btnPassage.addEventListener("click", () => sendCapture("passage"));
-    btnQuestion.addEventListener("click", () => sendCapture("question"));
+  recognition.start();
+  recognizing = true;
+}
 
-    // ===== 휴대폰에서 올라오는 OCR 결과 수신 =====
-    const resultRef = ref(db, "p2p/latestResult");
-    onValue(resultRef, async snap => {
-      const result = snap.val();
-      if (!result) return;
-      if (!result.requestId) return;
-      if (result.requestId === lastResultRequestId) return;
-      lastResultRequestId = result.requestId;
+function stopSTT() {
+  if (recognition && recognizing) {
+    recognition.stop();
+    recognizing = false;
+  }
+}
 
-      const target = result.target || "question";
-      const text = result.ocrText || "";
+// ---------------- Solve Request ----------------
+async function requestSolve() {
+  const mode = document.getElementById("modeSel").value;
 
-      if (target === "passage") {
-        passageText = text;
-        passageEl.textContent = text || "(지문 없음)";
-        statusEl.textContent = "지문 OCR 수신 완료.";
-        return;
-      }
+  const body = {
+    mode,
+    passage: document.getElementById("passageBox").value,
+    question: document.getElementById("questionBox").value,
+    stt: document.getElementById("sttBox").value
+  };
 
-      // target === question
-      questionEl.textContent = text || "(문항 텍스트 없음)";
-      statusEl.textContent = "문항 OCR 수신 → AI 풀이 중...";
+  const res = await fetch("/.netlify/functions/solve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
 
-      try {
-        const data = await solveWithAI(currentMode, passageText, text);
-        renderAIResult(currentMode, data);
-        statusEl.textContent = "AI 풀이 완료.";
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "AI 호출 오류: " + err.message;
-      }
-    });
+  const out = await res.json();
+  document.getElementById("resultBox").innerText = out.result;
 
-    // ===== Netlify Functions 호출 =====
-    async function solveWithAI(mode, passage, question) {
-      const res = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          passage: passage || "",
-          question: question || ""
-        })
-      });
+  // Optional TTS (정답/총평 읽기)
+  if (out.tts) {
+    const u = new SpeechSynthesisUtterance(out.tts);
+    speechSynthesis.speak(u);
+  }
+}
+</script>
 
-      if (!res.ok) {
-        const msg = await res.text();
-        throw new Error("solve 함수 오류: " + msg);
-      }
-      return await res.json();
-    }
-
-    // ===== 영역별 UI 반영 =====
-    function renderAIResult(mode, data) {
-      const answer = data.answer || null;
-      const raw = data.raw || "";
-
-      if (answer) {
-        answerEl.textContent = answer;
-      } else {
-        answerEl.textContent =
-          mode === "writing" || mode === "speaking"
-            ? "서술형"
-            : "-";
-      }
-
-      if (mode === "writing") {
-        detailEl.textContent = raw || "(에세이 없음)";
-      } else if (mode === "speaking") {
-        detailEl.textContent = raw || "(답변/피드백 없음)";
-      } else if (mode === "listening") {
-        detailEl.textContent = raw || "(리스닝 설명 없음)";
-      } else {
-        // reading 혹은 기타
-        detailEl.textContent = raw || "(설명 없음)";
-      }
-    }
-  </script>
 </body>
 </html>
+
