@@ -1,338 +1,164 @@
-// /.netlify/functions/solve.js
+// netlify/functions/solve.js
 
-export async function handler(event, context) {
+exports.handler = async (event, context) => {
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ error: "POST only" })
+    };
+  }
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const model  = process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini";
+
+  if (!apiKey) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Missing OPENROUTER_API_KEY" })
+    };
+  }
+
+  let payload;
   try {
-    const payload  = JSON.parse(event.body || "{}");
-    const mode     = (payload.mode || "reading").toLowerCase();
-    const passage  = (payload.passage || "").trim();
-    const question = (payload.question || "").trim();
-    const stt      = (payload.stt || "").trim();
+    payload = JSON.parse(event.body || "{}");
+  } catch (e) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Invalid JSON body" })
+    };
+  }
 
-    // Netlify 환경변수 OPENROUTER_MODEL 없으면 gpt-5 기본 사용
-    const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5";
+  // 새 구조: auto 모드
+  const mode     = payload.mode || "auto";
+  const ocrText  =
+    (payload.ocrText || "") +
+    (payload.passage || "") +
+    (payload.question || "");
+  const audioText =
+    payload.audioText ||
+    payload.stt ||
+    "";
 
-    const prompt = buildPrompt(mode, passage, question, stt);
+  const trimmedOCR   = (ocrText || "").trim();
+  const trimmedAudio = (audioText || "").trim();
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  if (!trimmedOCR && !trimmedAudio) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ result: "[ANSWER] 없음\n[WHY] 화면/OCR/음성 텍스트가 거의 없습니다." })
+    };
+  }
+
+  const systemPrompt = `
+너는 TOEFL 연습용 AI 튜터다.
+입력으로 "화면에서 OCR한 텍스트(screen_ocr)"와 "음성 STT 텍스트(audio_text)"를 받는다.
+실제 시험이 아니라 연습용 문제 풀이 도구다.
+
+1단계: 상황 분류
+- 아래 중 가장 자연스러운 하나를 골라라.
+  A. Reading 문제 (지문/문제/보기 텍스트가 화면에 있음)
+  B. Listening 문제 (audio_text가 강의/대화 내용, 화면에는 문제/보기)
+  C. Writing 문제 (에세이 쓰기 프롬프트/조건)
+  D. Speaking 답변 평가 (audio_text가 수험생 답변, screen_ocr에는 질문이 있을 수 있음)
+  E. 그 외/애매 (정보가 너무 부족하거나, 어떤 섹션인지 애매함)
+
+2단계: 형식에 맞게만 출력
+- A 또는 B (Reading/Listening 스타일)인 경우:
+  1) 가능하면 한 개의 핵심 문항만 골라 풀이.
+  2) 보기(선지)가 있으면 1~4, 1~5, A~D 등 실제 문제 형식에 맞춰 정답을 써라.
+  3) 출력 형식은 반드시 아래만 사용:
+     [ANSWER] 정답을 한 줄로. 예: 3 / C / (B, D) / 1-3-2-4
+     [WHY] 한국어로 근거와 다른 보기가 오답인 이유를 간단히 설명.
+
+  - 드래그 앤 드롭/표 완성/요약 문제일 때는
+    [ANSWER] 행/열, 문장 번호 등 사람이 이해할 수 있는 텍스트로 요약해서 적어라.
+  - 문제가 불완전하거나 정답을 확신할 수 없으면
+    [ANSWER] 없음
+    [WHY] 왜 확실히 말할 수 없는지 한국어로 설명.
+
+- C (Writing)인 경우:
+  반드시 아래 형식으로만 출력:
+  [ESSAY]
+  (TOEFL Integrated 또는 Independent 스타일의 영어 에세이 250~320단어 정도)
+  [FEEDBACK]
+  (한국어로 구조/내용/문법에 대한 피드백과 개선 포인트를 간단히 정리)
+
+- D (Speaking)인 경우:
+  audio_text를 수험생 답변이라고 보고 평가하라.
+  반드시 아래 형식으로만 출력:
+  [EVAL]
+  (한국어로 대략적인 점수 느낌, 강점/약점, 내용/구조/발음 피드백)
+  [MODEL]
+  (해당 질문에 대한 45~60초 분량의 영어 모범 답변)
+  [KOREAN]
+  (한국어로 구체적인 개선 팁)
+
+- E (애매)인 경우:
+  화면/음성 내용을 보고 가장 가까운 유형 하나를 골라서 위 형식 중 하나를 사용하되,
+  정답을 지어내지 말고 "없음"이라고 표시할 수 있다.
+
+3단계: 기타 규칙
+- 추가적인 머릿말, 인사말, 설명 문장, 마크다운은 절대 넣지 말 것.
+- 오직 지정한 태그([ANSWER], [WHY], [ESSAY], [FEEDBACK], [EVAL], [MODEL], [KOREAN])와 그 내용만 출력한다.
+`.trim();
+
+  const userPrompt = `
+[screen_ocr]
+${trimmedOCR || "(비어있음)"}
+
+[audio_text]
+${trimmedAudio || "(비어있음)"}
+
+위 정보를 바탕으로, 어떤 TOEFL 섹션(A~E)인지 스스로 판단한 뒤
+해당 섹션에 맞는 형식으로만 답변하라.
+`.trim();
+
+  try {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json"
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        // 선택: OpenRouter 정책상 origin 정보 주기
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app/",
+        "X-Title": "answer-site"
       },
       body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.2,
-        max_tokens: 900,
+        model,
         messages: [
-          {
-            role: "system",
-            content: "Follow the exact output format requested. For reading/listening, you MUST adapt the answer format to the TOEFL item type (single choice, multiple choice, sentence insertion, summary, table). Prefer giving a concrete answer when there is even weak evidence (~20% confidence). Only use [ANSWER] ? when there is truly no basis at all."
-          },
-          { role: "user", content: prompt }
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
         ]
       })
-    }).then(r => r.json());
+    });
 
-    const out = response?.choices?.[0]?.message?.content || "AI 응답 오류";
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error("OpenRouter error:", resp.status, text);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "OpenRouter request failed", detail: text })
+      };
+    }
+
+    const data = await resp.json();
+    const resultText =
+      data.choices &&
+      data.choices[0] &&
+      data.choices[0].message &&
+      data.choices[0].message.content
+        ? data.choices[0].message.content
+        : "";
 
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        result: out,
-        tts: extractTTS(mode, out)
-      })
+      body: JSON.stringify({ result: resultText })
     };
-  } catch (err) {
+  } catch (e) {
+    console.error(e);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.toString() })
+      body: JSON.stringify({ error: "Exception calling OpenRouter", detail: e.toString() })
     };
   }
-}
-
-// ---------------- PROMPT BUILDER ----------------
-
-function buildPrompt(mode, passage, question, stt) {
-  // ---------- READING ----------
-  if (mode === "reading") {
-    return `
-You are a TOEFL iBT Reading answer engine for the modern (internet-based) test.
-
-You will receive:
-
-<Reading Passage>
-${passage}
-
-<Question & options text (this may include question stem, 4 answer options, and instructions such as "Select TWO answers", "Complete the summary", "Complete the table", sentence insertion boxes, etc.)>
-${question}
-
-Your job:
-1) Infer what type of TOEFL Reading item this is:
-   - Single-answer 4-option multiple choice (ordinary radio button, one correct answer)
-   - Multiple-answer 4-option multiple choice (e.g., "Select 2 answers", "Choose TWO answers")
-   - Sentence insertion (choose where a given sentence fits among several [■] boxes in the passage)
-   - Summary (3 blanks + 6 options, drag sentences into summary)
-   - Table / classification (drag each statement into columns/rows/categories)
-
-2) Give the answer in a format that matches the item type, using ONLY one [ANSWER] block and one [WHY] block as described below.
-
-General confidence rule:
-- If you can eliminate at least one option or see ANY weak preference, you must choose the best option(s) (≈ 20%+ confidence).
-- Only output "[ANSWER] ?" when there is absolutely no evidence favoring any option over the others.
-
-FORMATS BY ITEM TYPE
-=====================
-
-(1) Single-answer 4-option multiple choice
-- Assume options are in order from top to bottom and can be mapped to numbers 1,2,3,4.
-- Output:
-
-[ANSWER] N
-[WHY]
-(한국어로 2~5줄: 왜 그 번호가 정답인지 설명 + 다른 보기들이 왜 덜 적합한지 간단히 언급)
-
-Where N is 1–4.
-
-(2) Multiple-answer 4-option multiple choice (e.g., "Select TWO answers")
-- Again assume options are in order 1–4.
-- Choose the required number of answers (usually 2).
-- Output:
-
-[ANSWER] 2,4
-[WHY]
-(한국어로 2~5줄: 왜 이 번호들이 둘 다 정답인지, 어떤 점에서 다른 보기와 구별되는지 설명)
-
-(3) Sentence insertion
-- The question usually says something like "Where would the following sentence best fit in the passage?"
-- There are several possible positions in the passage (e.g., boxes or markers).
-- Assume the candidate positions are numbered from top to bottom as 1,2,3,... in reading order.
-- Output:
-
-[ANSWER] INSERT-3
-[WHY]
-INSERT: 3
-(한국어로 2~5줄: 왜 3번 위치에 넣는 것이 자연스러운지, 앞뒤 문맥과 논리 흐름을 근거로 설명)
-
-(4) Summary (Complete the summary: 3 blanks, 6 options)
-- Assume the options for the summary are listed from top to bottom and can be numbered 1..6.
-- Choose exactly three numbers which best represent the main ideas.
-- Output:
-
-[ANSWER] SUMMARY-2,4,6
-[WHY]
-SUMMARY: 2,4,6
-(한국어로 2~5줄: 왜 이 세 문장이 지문의 핵심 요지를 가장 잘 대표하는지, 다른 후보들은 왜 덜 중요한지 설명)
-
-(5) Table / classification (Complete the table, categorize statements)
-- There may be 2 or 3 categories (columns) with titles, and several statements below to drag into each category.
-- Assume statements are numbered 1..N in their order of appearance, and you infer reasonable category names from the text.
-- Output:
-
-[ANSWER]
-TABLE:
-Category1: 1,3
-Category2: 2,4
-(필요시 Category3도 같은 형식으로)
-
-[WHY]
-TABLE: Category1 -> 1,3 / Category2 -> 2,4
-(한국어로 2~5줄: 각 번호 문장이 왜 그 범주에 속하는지 간단하게 정리)
-
-Fallback:
-- Only if you truly cannot classify the item type or cannot prefer any option at all, use:
-
-[ANSWER] ?
-[WHY]
-(한국어로: 정보 부족으로 판단 불가임을 설명)
-
-Strictly follow these tag names and structure:
-- EXACTLY ONE [ANSWER] block and ONE [WHY] block.
-- Do not introduce additional tags other than [ANSWER] and [WHY].
-- Put all Korean explanation only under [WHY].
-`;
-  }
-
-  // ---------- LISTENING ----------
-  if (mode === "listening") {
-    return `
-You are a TOEFL iBT Listening answer engine for the modern (internet-based) test.
-
-You will receive:
-
-<Listening transcript from audio STT (may contain minor recognition errors)>
-${stt}
-
-<On-screen question text and instructions (may include "Select 2 answers", "Complete the chart", etc.)>
-${passage}
-
-<Options text (1~4, possibly with multiple correct answers or classification)>
-${question}
-
-Your job:
-1) Infer the item type:
-   - Single-answer 4-option multiple choice
-   - Multiple-answer 4-option multiple choice ("Select TWO answers")
-   - Table/chart matching (classify statements into categories or steps)
-2) Give the answer in a format that matches the item type, using one [ANSWER] block and one [WHY] block.
-
-General confidence rule:
-- Consider that the transcript may have small errors, but you should still choose answers when there is ANY reasonable evidence (≈ 20%+ confidence).
-- Only use "[ANSWER] ?" when there is truly no way to prefer any option.
-
-FORMATS
-=======
-
-(1) Single-answer 4-option multiple choice
-- Map options from top to bottom to 1–4.
-- Output:
-
-[ANSWER] 3
-[WHY]
-(한국어 2~5줄: 리스닝 내용과 연결하여 왜 3번이 정답인지 설명)
-
-(2) Multiple-answer 4-option multiple choice
-- If instructions say "Select 2 answers" or similar, choose 2 numbers.
-- Output:
-
-[ANSWER] 1,4
-[WHY]
-(한국어 2~5줄: 두 번호 모두 정답인 이유, 다른 보기와 어떻게 다른지 설명)
-
-(3) Table / chart matching
-- If the question is clearly asking to match statements to categories or steps:
-- Assume statements are numbered 1..N in order.
-- Infer reasonable category names from the text.
-- Output:
-
-[ANSWER]
-TABLE:
-Category1: 1,3
-Category2: 2,4
-
-[WHY]
-TABLE: Category1 -> 1,3 / Category2 -> 2,4
-(한국어 2~5줄: 각 번호가 왜 그 범주/단계에 들어가는지 요약)
-
-Fallback:
-- Only if you cannot prefer any option(s) at all:
-
-[ANSWER] ?
-[WHY]
-(한국어로: 정보 부족으로 판단 불가임을 설명)
-
-Strict:
-- EXACTLY ONE [ANSWER] block and ONE [WHY] block.
-- Do not use other tags.
-`;
-  }
-
-  // ---------- WRITING ----------
-  if (mode === "writing") {
-    return `
-You are a TOEFL iBT Writing essay generator for the current test (Integrated + Academic Discussion style).
-
-Inputs (some may be empty):
-<Reading passage or notes (for integrated tasks)>
-${passage}
-
-<On-screen writing prompt text (topic, question, or instructions)>
-${question}
-
-<Spoken prompt from audio STT (if any)>
-${stt}
-
-Use whatever information is available above to understand the writing task.
-
-Task:
-1) Write a TOEFL-style essay based on the given information.
-   - Length: STRICTLY 250~320 words.
-   - Clear structure with introduction, 2 body paragraphs, and conclusion.
-   - Good task achievement, organization, development, vocabulary, and grammar.
-2) After the essay, provide Korean feedback (3~5 lines) commenting on:
-   - 구조 (introduction/body/conclusion)
-   - 내용 및 아이디어
-   - 문법/표현의 강점과 개선점
-
-Output Format (STRICT):
-[ESSAY]
-(essay here, 250~320 words)
-
-[FEEDBACK]
-(한국어 피드백 3~5줄)
-`;
-  }
-
-  // ---------- SPEAKING ----------
-  if (mode === "speaking") {
-    return `
-You are a TOEFL iBT Speaking evaluator for the current 4-task format.
-
-Inputs:
-<Question text from screen/OCR (may indicate independent or integrated task)>
-${question}
-
-<Extra passage or notes (for integrated tasks, may be empty)>
-${passage}
-
-<My spoken answer (STT transcription; may contain small errors)>
-${stt}
-
-Assume:
-- This is a TOEFL iBT Speaking response with about 45 seconds of speaking.
-- A natural model answer should be about 90–120 words (do NOT exceed 130 words).
-
-Task:
-1) Evaluate the student's answer in English using TOEFL Speaking criteria:
-   - Delivery (pronunciation, intonation, pacing)
-   - Language use (grammar, vocabulary)
-   - Topic development (organization, coherence, detail)
-2) Mention specific strengths and weaknesses and give an approximate level (e.g., High, Mid, Low).
-3) Provide a 45–60 second model answer in English (about 90–120 words).
-4) Finally, give a short Korean summary and improvement tips (3–5 lines).
-
-Output Format (STRICT):
-[EVAL]
-(English evaluation: delivery, language use, topic development, approximate level)
-
-[MODEL]
-(45–60 second model answer in English, about 90–120 words)
-
-[KOREAN]
-(한국어 요약 및 개선 팁 3~5줄)
-`;
-  }
-
-  // fallback
-  return "Invalid mode. Use reading / listening / writing / speaking.";
-}
-
-// ---------------- SHORT TTS EXTRACTOR ----------------
-
-function extractTTS(mode, text) {
-  // Reading/Listening: 단일정답/복수정답 숫자만 있으면 TTS, 나머지는 null
-  if (mode === "reading" || mode === "listening") {
-    const m = text && text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
-    if (!m) return null;
-    const raw = m[1].trim(); // 예: "2", "2,4", "SUMMARY-2,4,6" 등
-
-    // 단일 숫자만 있을 때
-    const single = raw.match(/^\s*([1-5])\s*$/);
-    if (single) {
-      return `The correct answer is number ${single[1]}.`;
-    }
-
-    // 쉼표로 구분된 복수 숫자일 때
-    const multi = raw.match(/^\s*([1-5])\s*,\s*([1-5])\s*$/);
-    if (multi) {
-      return `The correct answers are numbers ${multi[1]} and ${multi[2]}.`;
-    }
-
-    // 그 외(INSERT, SUMMARY, TABLE 등)는 TTS 생략
-    return null;
-  }
-
-  if (mode === "speaking") {
-    return "Here is your speaking evaluation summary.";
-  }
-  return null;
-}
+};
