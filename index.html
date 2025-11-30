@@ -1,253 +1,83 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>answer-site 카메라</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <style>
-    body {
-      margin: 0;
-      padding: 16px;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #000;
-      color: #fff;
-    }
-    h1 {
-      font-size: 24px;
-      margin-bottom: 12px;
-    }
-    #video-container {
-      width: 100%;
-      max-width: 800px;
-      aspect-ratio: 16 / 9;
-      margin: 0 auto 12px;
-      background: #111;
-      border-radius: 16px;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      transform-origin: center center;
-    }
-    button {
-      width: 100%;
-      max-width: 800px;
-      display: block;
-      margin: 8px auto;
-      padding: 14px 12px;
-      border-radius: 999px;
-      border: none;
-      font-size: 16px;
-      font-weight: 600;
-      background: #333;
-      color: #fff;
-      cursor: pointer;
-    }
-    button:active {
-      transform: scale(0.98);
-    }
-    .row {
-      max-width: 800px;
-      margin: 4px auto 0;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .row label {
-      width: 40px;
-      text-align: right;
-      font-size: 14px;
-    }
-    .row input[type="range"] {
-      flex: 1;
-    }
-    #status {
-      max-width: 800px;
-      margin: 10px auto 0;
-      padding: 10px 14px;
-      border-radius: 999px;
-      background: #111;
-      font-size: 13px;
-      color: #ccc;
-      min-height: 18px;
-    }
-    canvas {
-      display: none;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>answer-site | Camera OCR</title>
+<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+
+<style>
+body { margin: 0; background: #000; }
+#video { width: 100vw; height: 100vh; object-fit: cover; }
+</style>
 </head>
 <body>
-  <h1>answer-site 카메라</h1>
 
-  <div id="video-container">
-    <video id="camera" autoplay playsinline></video>
-  </div>
+<video id="video" autoplay></video>
 
-  <button id="btnStart">카메라 켜기</button>
+<script>
+// ---------------------- Firebase ----------------------
+const firebaseConfig = {
+  apiKey: "YOUR_KEY",
+  authDomain: "YOUR_DOMAIN",
+  databaseURL: "YOUR_DB_URL",
+  projectId: "YOUR_PID",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
 
-  <div class="row">
-    <label for="zoom">줌</label>
-    <input id="zoom" type="range" min="1" max="2.5" step="0.1" value="1" />
-  </div>
+// ---------------------- Camera Init ----------------------
+const video = document.getElementById("video");
 
-  <div id="status"></div>
+navigator.mediaDevices.getUserMedia({
+  video: { facingMode: "environment" }
+}).then(stream => {
+  video.srcObject = stream;
+});
 
-  <canvas id="canvas"></canvas>
+// ---------------------- OCR Function ----------------------
+async function captureAndOcr(command) {
+  const canvas = document.createElement("canvas");
+  const w = video.videoWidth;
+  const h = video.videoHeight;
 
-  <!-- Tesseract (영어+한국어 OCR) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  // 중앙부 70% 크롭
+  const cropW = w * 0.7;
+  const cropH = h * 0.7;
+  const cropX = (w - cropW) / 2;
+  const cropY = (h - cropH) / 2;
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
-    import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
+  canvas.width = cropW;
+  canvas.height = cropH;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-    // ===== Firebase 설정 (네 프로젝트 값) =====
-    const firebaseConfig = {
-      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-      authDomain: "answer-site-p2p.firebaseapp.com",
-      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-      projectId: "answer-site-p2p",
-      storageBucket: "answer-site-p2p.firebasestorage.app",
-      messagingSenderId: "364227113735",
-      appId: "1:364227113735:web:b18355cf0b16454663cba2",
-      measurementId: "G-C8MRHK5ZGS"
-    };
+  const dataUrl = canvas.toDataURL("image/png");
+  const result = await Tesseract.recognize(dataUrl, "eng+kor", {
+    logger: m => console.log(m)
+  });
 
-    const app = initializeApp(firebaseConfig);
-    const db = getDatabase(app);
+  const text = result.data.text.trim();
 
-    const video = document.getElementById("camera");
-    const canvas = document.getElementById("canvas");
-    const zoomInput = document.getElementById("zoom");
-    const statusEl = document.getElementById("status");
-    const btnStart = document.getElementById("btnStart");
+  db.ref("p2p/latestResult").set({
+    target: command.target,
+    text,
+    timestamp: Date.now()
+  });
+}
 
-    let stream = null;
-    let lastRemoteRequestId = null;
-    let remoteProcessing = false;
+// ---------------------- Listen for Commands ----------------------
+db.ref("p2p/latestCommand").on("value", snap => {
+  const cmd = snap.val();
+  if (!cmd) return;
 
-    // ===== 줌 (CSS 스케일) =====
-    function applyZoom() {
-      const s = parseFloat(zoomInput.value) || 1;
-      video.style.transform = `scale(${s})`;
-    }
-    zoomInput.addEventListener("input", applyZoom);
+  if (cmd.action === "capture") {
+    captureAndOcr(cmd);
+  }
+});
+</script>
 
-    // ===== 카메라 켜기 =====
-    async function startCamera() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        statusEl.textContent = "이 브라우저에서는 카메라를 사용할 수 없습니다.";
-        return;
-      }
-
-      const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
-
-      const base = {
-        width: { ideal: 960 },
-        height: { ideal: 540 }
-      };
-
-      const constraints = {
-        video: isMobile
-          ? { ...base, facingMode: { ideal: "environment" } }
-          : { ...base }
-      };
-
-      try {
-        statusEl.textContent = "카메라 요청 중...";
-        if (stream) {
-          stream.getTracks().forEach(t => t.stop());
-          stream = null;
-        }
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        video.srcObject = stream;
-        statusEl.textContent = "카메라 켜짐 ✅";
-      } catch (err) {
-        console.error("getUserMedia error", err);
-        statusEl.textContent = "카메라 오류: " + err.name + " - " + err.message;
-      }
-    }
-
-    btnStart.addEventListener("click", startCamera);
-
-    // ===== 현재 프레임 캡처 =====
-    async function captureFrame() {
-      if (!stream) {
-        statusEl.textContent = "카메라가 꺼져 있어서 캡처할 수 없습니다.";
-        return null;
-      }
-      const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings ? track.getSettings() : {};
-      const width = settings.width || 960;
-      const height = settings.height || 540;
-
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, width, height);
-
-      return canvas.toDataURL("image/png");
-    }
-
-    // ===== OCR (영어+한국어) =====
-    async function runOcr(dataUrl) {
-      statusEl.textContent = "OCR 중...";
-      const { data } = await Tesseract.recognize(dataUrl, "eng+kor");
-      const text = (data.text || "").trim();
-      return text;
-    }
-
-    // ===== Firebase 원격 캡처 명령 수신 =====
-    function setupRemoteListener() {
-      const cmdRef = ref(db, "p2p/latestCommand");
-
-      onValue(cmdRef, async snap => {
-        const cmd = snap.val();
-        if (!cmd) return;
-
-        const reqId = cmd.requestId;
-        if (!reqId) return;
-
-        if (lastRemoteRequestId === reqId) return;
-        lastRemoteRequestId = reqId;
-
-        if (remoteProcessing) return;
-        remoteProcessing = true;
-
-        const target = cmd.target || "question";
-        statusEl.textContent = `원격 캡처 요청 수신 (${target}) → 처리 중...`;
-
-        try {
-          const dataUrl = await captureFrame();
-          if (!dataUrl) return;
-
-          const text = await runOcr(dataUrl);
-
-          await set(ref(db, "p2p/latestResult"), {
-            requestId: reqId,
-            target,
-            mode: cmd.mode || "reading",
-            createdAt: Date.now(),
-            ocrText: text
-          });
-
-          statusEl.textContent = `원격 캡처 완료 (${target})`;
-        } catch (err) {
-          console.error(err);
-          statusEl.textContent = "원격 캡처 에러: " + err.message;
-        } finally {
-          remoteProcessing = false;
-        }
-      });
-    }
-
-    applyZoom();
-    setupRemoteListener();
-  </script>
 </body>
 </html>
+
