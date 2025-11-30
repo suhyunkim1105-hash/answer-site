@@ -3,117 +3,122 @@
 <head>
   <meta charset="UTF-8" />
   <title>answer-site 원격 컨트롤러</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 10px;
+      padding: 16px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #050505;
-      color: #f5f5f5;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #fff;
     }
-    .wrap {
+    h1 {
+      font-size: 24px;
+      margin-bottom: 4px;
+    }
+    small {
+      color: #999;
+    }
+    .card {
       max-width: 900px;
-      margin: 0 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+      margin: 8px auto;
+      padding: 12px 16px;
+      border-radius: 16px;
+      background: #111;
     }
-    #answer {
-      font-size: 2.4rem;
+    #answerBox {
+      font-size: 20px;
       font-weight: 700;
     }
-    .btn-row {
-      display: flex;
-      gap: 8px;
+    #answerValue {
+      color: #4dd0ff;
     }
     button {
-      flex: 1;
-      padding: 8px 10px;
-      border-radius: 999px;
       border: none;
-      background: #2b2b2b;
-      color: #fff;
-      font-size: 0.9rem;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
-      white-space: nowrap;
+      background: #333;
+      color: #fff;
+      margin: 4px;
     }
-    button:active { opacity: 0.85; }
-
-    .section-btns button {
-      flex: 1;
-      font-size: 0.8rem;
+    button:active {
+      transform: scale(0.97);
     }
-    .section-btns button.active {
-      background: #0073ff;
+    .mode-btn.active {
+      background: #4dd0ff;
+      color: #000;
     }
-
     #status {
-      font-size: 0.8rem;
-      color: #c0c0c0;
-      white-space: pre-line;
-      min-height: 1.4em;
+      font-size: 13px;
+      color: #ccc;
     }
-
-    .box-title {
-      font-size: 0.8rem;
-      color: #b0b0b0;
-      margin-top: 4px;
-      margin-bottom: 2px;
-    }
-    .box {
-      font-size: 0.8rem;
-      background: #141414;
-      border-radius: 8px;
-      padding: 6px;
+    pre {
       white-space: pre-wrap;
-      max-height: 5em;
-      overflow: auto;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.4;
+      max-height: 220px;
+      overflow-y: auto;
+      margin: 6px 0 0;
     }
-
-    #image {
-      margin-top: 6px;
-      max-width: 100%;
-      border-radius: 10px;
-      background: #000;
+    .label {
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 4px;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div id="answer">정답: -</div>
+  <div class="card">
+    <h1>answer-site 원격 컨트롤러</h1>
+    <small>※ 실제 시험에서 사용하면 안 됨. 연습·연구용 전용.</small>
+  </div>
 
-    <div class="btn-row">
-      <button id="captureQuestionBtn">📸 휴대폰에 문제 캡처 + 풀이</button>
+  <div class="card" id="answerBox">
+    정답: <span id="answerValue">-</span>
+  </div>
+
+  <div class="card">
+    <div class="label">영역 선택</div>
+    <div>
+      <button class="mode-btn active" data-mode="reading">Reading</button>
+      <button class="mode-btn" data-mode="writing">Writing</button>
+      <button class="mode-btn" data-mode="listening">Listening</button>
+      <button class="mode-btn" data-mode="speaking">Speaking</button>
     </div>
 
-    <div class="btn-row section-btns">
-      <button data-section="reading"   class="active">Reading</button>
-      <button data-section="listening">Listening</button>
-      <button data-section="speaking">Speaking</button>
-      <button data-section="writing">Writing</button>
+    <div class="label" style="margin-top:8px;">원격 조작</div>
+    <div>
+      <button id="btnPassage">현재 화면을 지문으로 OCR (저장만)</button>
+      <button id="btnQuestion">현재 화면 캡처 + 풀이 요청</button>
     </div>
 
-    <div class="btn-row">
-      <button id="capturePassageBtn">📌 현재 화면을 지문으로 OCR (한 번)</button>
-    </div>
+    <div id="status" style="margin-top:8px;">대기 중...</div>
+  </div>
 
-    <div id="status">준비됨</div>
+  <div class="card">
+    <div class="label">저장된 지문 (Reading/Writing에서 사용)</div>
+    <pre id="passageText"></pre>
+  </div>
 
-    <div class="box-title">지문 요약</div>
-    <div id="passageBox" class="box">(지문 없음)</div>
+  <div class="card">
+    <div class="label">마지막 OCR 텍스트 (문항/프롬프트)</div>
+    <pre id="questionText"></pre>
+  </div>
 
-    <div class="box-title">문제 OCR 텍스트</div>
-    <div id="questionBox" class="box">(문제 없음)</div>
-
-    <img id="image" alt="캡처 이미지" />
+  <div class="card">
+    <div class="label">AI 상세 답변 / 에세이 / 피드백</div>
+    <pre id="detailText"></pre>
   </div>
 
   <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
-    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-database.js";
 
+    // ===== Firebase 설정 (같은 프로젝트) =====
     const firebaseConfig = {
       apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
       authDomain: "answer-site-p2p.firebaseapp.com",
@@ -125,102 +130,129 @@
       measurementId: "G-C8MRHK5ZGS"
     };
 
-    const ROOM_ID = "room1";
-
     const app = initializeApp(firebaseConfig);
-    const db  = getDatabase(app);
-    const commandRef = ref(db, `rooms/${ROOM_ID}/command`);
-    const resultRef  = ref(db, `rooms/${ROOM_ID}/result`);
+    const db = getDatabase(app);
 
-    const captureQuestionBtn = document.getElementById("captureQuestionBtn");
-    const capturePassageBtn = document.getElementById("capturePassageBtn");
+    const modeButtons = document.querySelectorAll(".mode-btn");
+    const btnPassage = document.getElementById("btnPassage");
+    const btnQuestion = document.getElementById("btnQuestion");
     const statusEl = document.getElementById("status");
-    const answerEl = document.getElementById("answer");
-    const passageBox = document.getElementById("passageBox");
-    const questionBox = document.getElementById("questionBox");
-    const imageEl = document.getElementById("image");
-    const sectionButtons = Array.from(document.querySelectorAll(".section-btns button"));
+    const passageEl = document.getElementById("passageText");
+    const questionEl = document.getElementById("questionText");
+    const detailEl = document.getElementById("detailText");
+    const answerEl = document.getElementById("answerValue");
 
-    let selectedSection = "reading";
-    let lastResultTime = 0;
+    let currentMode = "reading";
+    let passageText = "";
+    let lastResultRequestId = null;
 
-    // ===== 영역 버튼 선택 =====
-    sectionButtons.forEach(btn => {
+    // ===== 모드 선택 =====
+    modeButtons.forEach(btn => {
       btn.addEventListener("click", () => {
-        sectionButtons.forEach(b => b.classList.remove("active"));
+        modeButtons.forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
-        selectedSection = btn.dataset.section || "reading";
+        currentMode = btn.dataset.mode || "reading";
+        statusEl.textContent = `모드 변경: ${currentMode.toUpperCase()}`;
       });
     });
 
-    // ===== 원격 명령 보내기 =====
-    async function sendCommand(mode) {
-      const reqId = Date.now().toString();
-      const section = selectedSection;
+    // ===== 휴대폰에 캡처 명령 보내기 =====
+    async function sendCapture(target) {
+      const requestId = Date.now();
 
       statusEl.textContent =
-        (mode === "passage" ? "지문 OCR 요청 전송 중…" : "문제 캡처 + 풀이 요청 전송 중…") +
-        ` (ID: ${reqId}, section: ${section})`;
+        target === "passage"
+          ? "휴대폰에 지문 캡처 요청 전송..."
+          : "휴대폰에 문항 캡처 요청 전송...";
 
-      try {
-        await set(commandRef, {
-          type: "capture",
-          mode,
-          section,
-          requestId: reqId,
-          requestedAt: Date.now()
-        });
-
-        statusEl.textContent =
-          (mode === "passage"
-            ? "지문 OCR 요청 전송 완료. 휴대폰 처리 대기 중…"
-            : "문제 캡처 + 풀이 요청 전송 완료. 휴대폰 처리 대기 중…");
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "요청 전송 오류: " + err.message;
-        alert("요청 전송 오류: " + err.message);
-      }
+      await set(ref(db, "p2p/latestCommand"), {
+        requestId,
+        target,
+        mode: currentMode,
+        createdAt: Date.now()
+      });
     }
 
-    captureQuestionBtn.addEventListener("click", () => sendCommand("question"));
-    capturePassageBtn.addEventListener("click", () => sendCommand("passage"));
+    btnPassage.addEventListener("click", () => sendCapture("passage"));
+    btnQuestion.addEventListener("click", () => sendCapture("question"));
 
-    // ===== 결과 수신 =====
-    onValue(resultRef, (snapshot) => {
-      const data = snapshot.val();
-      if (!data) return;
+    // ===== 휴대폰에서 올라오는 OCR 결과 수신 =====
+    const resultRef = ref(db, "p2p/latestResult");
+    onValue(resultRef, async snap => {
+      const result = snap.val();
+      if (!result) return;
+      if (!result.requestId) return;
+      if (result.requestId === lastResultRequestId) return;
+      lastResultRequestId = result.requestId;
 
-      const updatedAt = data.updatedAt || 0;
-      if (updatedAt <= lastResultTime) return;
-      lastResultTime = updatedAt;
+      const target = result.target || "question";
+      const text = result.ocrText || "";
 
-      const kind = data.kind || "question";
-      const section = data.section || "unknown";
-      const answer = data.answer || "";
-      const passageSnippet = data.passageSnippet || "";
-      const text = data.text || "";
-      const img = data.image || "";
+      if (target === "passage") {
+        passageText = text;
+        passageEl.textContent = text || "(지문 없음)";
+        statusEl.textContent = "지문 OCR 수신 완료.";
+        return;
+      }
 
-      if (kind === "passage") {
-        statusEl.textContent = `지문 OCR 완료 (${section})`;
-        passageBox.textContent = passageSnippet || "(지문 없음)";
-        // 정답은 그대로 두고, 문제 박스/이미지는 건드리지 않음
-      } else {
-        statusEl.textContent = `문제 풀이 결과 수신 (${section})`;
-        answerEl.textContent = answer ? `정답: ${answer}` : "정답: -";
-        questionBox.textContent = text || "(문제 없음)";
-        if (img) {
-          imageEl.src = img;
-          imageEl.style.display = "block";
-        } else {
-          imageEl.src = "";
-          imageEl.style.display = "none";
-        }
-        if (passageSnippet) {
-          passageBox.textContent = passageSnippet;
-        }
+      // target === question
+      questionEl.textContent = text || "(문항 텍스트 없음)";
+      statusEl.textContent = "문항 OCR 수신 → AI 풀이 중...";
+
+      try {
+        const data = await solveWithAI(currentMode, passageText, text);
+        renderAIResult(currentMode, data);
+        statusEl.textContent = "AI 풀이 완료.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "AI 호출 오류: " + err.message;
       }
     });
+
+    // ===== Netlify Functions 호출 =====
+    async function solveWithAI(mode, passage, question) {
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          passage: passage || "",
+          question: question || ""
+        })
+      });
+
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error("solve 함수 오류: " + msg);
+      }
+      return await res.json();
+    }
+
+    // ===== 영역별 UI 반영 =====
+    function renderAIResult(mode, data) {
+      const answer = data.answer || null;
+      const raw = data.raw || "";
+
+      if (answer) {
+        answerEl.textContent = answer;
+      } else {
+        answerEl.textContent =
+          mode === "writing" || mode === "speaking"
+            ? "서술형"
+            : "-";
+      }
+
+      if (mode === "writing") {
+        detailEl.textContent = raw || "(에세이 없음)";
+      } else if (mode === "speaking") {
+        detailEl.textContent = raw || "(답변/피드백 없음)";
+      } else if (mode === "listening") {
+        detailEl.textContent = raw || "(리스닝 설명 없음)";
+      } else {
+        // reading 혹은 기타
+        detailEl.textContent = raw || "(설명 없음)";
+      }
+    }
   </script>
 </body>
 </html>
