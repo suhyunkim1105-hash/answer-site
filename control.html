@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>answer-site | Control</title>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 12px;
+      background: #f5f5f5;
+      box-sizing: border-box;
+    }
+    h2 { margin: 4px 0 10px 0; }
+
+    .top {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .mode-btn {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: 1px solid #999;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .mode-btn.active {
+      background: #4f46e5;
+      color: #fff;
+      border-color: #4f46e5;
+    }
+
+    select {
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+
+    #status {
+      font-size: 12px;
+      margin-left: auto;
+      color: #555;
+    }
+
+    .panel {
+      display: none;
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #ddd;
+      background: #fff;
+    }
+    .panel.active { display: block; }
+
+    button.action {
+      padding: 6px 10px;
+      font-size: 13px;
+      margin: 4px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+
+<h2>answer-site Control</h2>
+
+<div class="top">
+  <button class="mode-btn active" data-mode="reading">Reading</button>
+  <button class="mode-btn" data-mode="writing">Writing</button>
+  <button class="mode-btn" data-mode="listening">Listening</button>
+  <button class="mode-btn" data-mode="speaking">Speaking</button>
+
+  <div>
+    <select id="ocrLang">
+      <option value="eng">OCR: ENG</option>
+      <option value="eng+kor" selected>OCR: ENG+KOR</option>
+    </select>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<!-- Reading -->
+<div class="panel active" id="panel-reading">
+  <button class="action" onclick="cmdCapture('passage','new')">지문 새로</button>
+  <button class="action" onclick="cmdCapture('passage','append')">지문 추가</button>
+  <button class="action" onclick="cmdCapture('question','new')">문제 새로</button>
+  <button class="action" onclick="cmdCapture('question','append')">문제 추가</button>
+  <button class="action" onclick="cmdSolve()">풀이</button>
+</div>
+
+<!-- Writing -->
+<div class="panel" id="panel-writing">
+  <button class="action" onclick="cmdCapture('passage','new')">자료 지문 새로</button>
+  <button class="action" onclick="cmdCapture('passage','append')">자료 지문 추가</button>
+  <button class="action" onclick="cmdCapture('question','new')">프롬프트 새로</button>
+  <button class="action" onclick="cmdCapture('question','append')">프롬프트 추가</button>
+  <button class="action" onclick="cmdSTTStart()">프롬프트 STT 시작</button>
+  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
+  <button class="action" onclick="cmdSolve()">에세이 생성</button>
+</div>
+
+<!-- Listening -->
+<div class="panel" id="panel-listening">
+  <button class="action" onclick="cmdSTTStart()">리스닝 STT 시작</button>
+  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
+  <button class="action" onclick="cmdCapture('question','new')">문제 새로</button>
+  <button class="action" onclick="cmdCapture('question','append')">문제 추가</button>
+  <button class="action" onclick="cmdSolve()">풀이</button>
+</div>
+
+<!-- Speaking -->
+<div class="panel" id="panel-speaking">
+  <button class="action" onclick="cmdCapture('question','new')">질문 새로</button>
+  <button class="action" onclick="cmdCapture('question','append')">질문 추가</button>
+  <button class="action" onclick="cmdSTTStart()">답변 STT 시작</button>
+  <button class="action" onclick="cmdSTTStop()">STT 정지</button>
+  <button class="action" onclick="cmdSolve()">평가</button>
+</div>
+
+<script>
+  // ---------------- Firebase ----------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+    authDomain: "answer-site-p2p.firebaseapp.com",
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "answer-site-p2p",
+    storageBucket: "answer-site-p2p.firebasestorage.app",
+    messagingSenderId: "364227113735",
+    appId: "1:364227113735:web:b18355cf0b16454663cba2",
+    measurementId: "G-C8MRHK5ZGS"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  const statusEl = document.getElementById('status');
+  const ocrLangEl = document.getElementById('ocrLang');
+
+  let currentMode = "reading";
+
+  // 모드 버튼
+  document.querySelectorAll(".mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-mode");
+      currentMode = mode;
+
+      document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+      document.getElementById(`panel-${mode}`).classList.add("active");
+
+      db.ref("p2p/state").update({ mode, updatedAt: Date.now() });
+      statusEl.textContent = `모드: ${mode}`;
+    });
+  });
+
+  function sendCommand(type, extra = {}) {
+    const cmd = {
+      type,
+      mode: currentMode,
+      lang: ocrLangEl.value,
+      timestamp: Date.now(),
+      ...extra
+    };
+    db.ref("p2p/command").set(cmd);
+  }
+
+  function cmdCapture(target, how) {
+    const type = (target === "passage")
+      ? (how === "new" ? "capture_passage_new" : "capture_passage_append")
+      : (how === "new" ? "capture_question_new" : "capture_question_append");
+    sendCommand(type);
+    statusEl.textContent = `${currentMode}: ${target} ${how} 캡처`;
+  }
+
+  function cmdSTTStart() {
+    sendCommand("stt_start");
+    statusEl.textContent = `${currentMode}: STT 시작`;
+  }
+
+  function cmdSTTStop() {
+    sendCommand("stt_stop");
+    statusEl.textContent = `${currentMode}: STT 정지`;
+  }
+
+  function cmdSolve() {
+    sendCommand("solve");
+    statusEl.textContent = `${currentMode}: 풀이/평가 요청`;
+  }
+</script>
+</body>
+</html>
