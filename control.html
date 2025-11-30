@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>answer-site | Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
@@ -12,24 +13,24 @@
     body {
       font-family: system-ui, sans-serif;
       margin: 0;
-      padding: 16px;
+      padding: 8px;
       background: #f5f5f5;
       box-sizing: border-box;
-      display: flex;
-      justify-content: center;
     }
     .wrap {
       width: 100%;
-      max-width: 460px;
     }
-    h2 { margin: 4px 0 10px 0; font-size: 22px; }
+    h2 {
+      margin: 4px 0 8px 0;
+      font-size: 20px;
+    }
 
     .top {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
       align-items: center;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .mode-btn {
       padding: 6px 8px;
@@ -38,6 +39,9 @@
       background: #fff;
       cursor: pointer;
       font-size: 13px;
+      flex: 1 1 auto;
+      text-align: center;
+      min-width: 70px;
     }
     .mode-btn.active {
       background: #4f46e5;
@@ -46,7 +50,7 @@
     }
 
     #ocrLang {
-      padding: 5px 8px;
+      padding: 4px 6px;
       font-size: 12px;
       border-radius: 4px;
       border: 1px solid #ccc;
@@ -56,34 +60,38 @@
       font-size: 12px;
       color:#555;
       margin-top: 4px;
+      margin-bottom: 6px;
     }
 
     .panel {
-      margin-top: 10px;
-      padding: 10px;
+      margin-top: 4px;
+      padding: 6px;
       border-radius: 8px;
       border: 1px solid #ddd;
       background: #fff;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      width: 100%;
+      box-sizing: border-box;
     }
 
     button.action {
       width: 100%;
       padding: 12px 16px;
-      font-size: 17px;
+      font-size: 18px;
       cursor: pointer;
       border-radius: 8px;
       border: 1px solid #ccc;
       background: #fff;
       text-align: left;
+      box-sizing: border-box;
     }
 
-    @media (max-width: 480px) {
-      h2 { font-size: 21px; }
-      .mode-btn { font-size: 12px; padding: 5px 7px; }
-      button.action { font-size: 18px; padding: 13px 18px; }
+    @media (orientation: landscape) {
+      body { padding: 6px; }
+      button.action { font-size: 18px; padding: 10px 14px; }
+      h2 { font-size: 19px; }
     }
   </style>
 </head>
@@ -104,7 +112,7 @@
     </select>
   </div>
 
-  <div id="modeInfo">현재 모드: reading (바꾸고 싶을 때만 위에서 선택)</div>
+  <div id="modeInfo">현재 모드: reading (바꾸고 싶을 때만 위 버튼 사용)</div>
 
   <div class="panel">
     <button class="action" onclick="cmdCapture('passage')">📄 지문 캡처 (현재 화면)</button>
@@ -137,7 +145,7 @@
   let currentMode = "reading";
   let sttOn = false;
 
-  // 처음 로딩할 때 기본 모드 reading으로 state에도 반영
+  // 기본 모드 reading으로 state에도 반영
   db.ref("p2p/state").update({ mode: currentMode, updatedAt: Date.now() });
 
   document.querySelectorAll(".mode-btn").forEach(btn => {
@@ -149,7 +157,7 @@
       btn.classList.add("active");
 
       db.ref("p2p/state").update({ mode, updatedAt: Date.now() });
-      modeInfo.textContent = `현재 모드: ${mode} (바꾸고 싶을 때만 위에서 선택)`;
+      modeInfo.textContent = `현재 모드: ${mode} (바꾸고 싶을 때만 위 버튼 사용)`;
     });
   });
 
