@@ -2,42 +2,121 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Capture & STT</title>
+  <title>answer-site | Control</title>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
-  <!-- Tesseract OCR -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
-
   <style>
-    body { margin: 0; background: #000; overflow: hidden; }
-    #video {
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      background: #000;
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f5f5f5;
+      box-sizing: border-box;
+      display: flex;
+      justify-content: center;
     }
-    #msg {
-      position: absolute;
-      top: 0; left: 0;
-      color: #ffcccc;
-      background: rgba(0,0,0,0.6);
-      padding: 6px 10px;
+    .wrap {
+      width: 100%;
+      max-width: 420px;
+    }
+    h2 { margin: 4px 0 12px 0; font-size: 22px; }
+
+    .top {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .mode-btn {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #999;
+      background: #fff;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .mode-btn.active {
+      background: #4f46e5;
+      color: #fff;
+      border-color: #4f46e5;
+    }
+
+    #ocrLang {
+      padding: 6px 8px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+
+    #status {
       font-size: 12px;
-      z-index: 10;
-      white-space: pre-wrap;
+      margin-top: 4px;
+      color: #555;
+    }
+
+    .panel {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    button.action {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #fff;
+      text-align: left;
+    }
+
+    @media (max-width: 480px) {
+      h2 { font-size: 20px; }
+      button.action { font-size: 17px; padding: 12px 16px; }
+      .mode-btn { font-size: 13px; padding: 6px 8px; }
     }
   </style>
 </head>
 <body>
 
-<div id="msg"></div>
-<video id="video" autoplay playsinline></video>
+<div class="wrap">
+  <h2>answer-site Control</h2>
+
+  <div class="top">
+    <button class="mode-btn active" data-mode="reading">Reading</button>
+    <button class="mode-btn" data-mode="writing">Writing</button>
+    <button class="mode-btn" data-mode="listening">Listening</button>
+    <button class="mode-btn" data-mode="speaking">Speaking</button>
+
+    <select id="ocrLang">
+      <option value="eng">OCR: ENG</option>
+      <option value="eng+kor" selected>OCR: ENG+KOR</option>
+    </select>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="panel">
+    <button class="action" onclick="cmdCapture('passage')">📄 지문 캡처 (현재 화면)</button>
+    <button class="action" onclick="cmdCapture('question')">❓ 문제/질문 캡처 (현재 화면)</button>
+    <button class="action" id="btnSTT" onclick="toggleSTT()">🎤 STT 시작</button>
+    <button class="action" onclick="cmdSolve()">🤖 풀이/평가 요청</button>
+    <button class="action" onclick="cmdClear()">🧹 전체 초기화</button>
+  </div>
+</div>
 
 <script>
-  // ---------------------- Firebase ----------------------
+  // ---------------- Firebase ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -51,204 +130,69 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const video = document.getElementById('video');
-  const msg   = document.getElementById('msg');
+  const statusEl = document.getElementById('status');
+  const ocrLangEl = document.getElementById('ocrLang');
+  const btnSTT = document.getElementById('btnSTT');
 
-  // 로컬 캐시
-  let passageCache  = "";
-  let questionCache = "";
-  let sttCache      = "";
+  let currentMode = "reading";
+  let sttOn = false;
 
-  // ---------------------- Camera Init ----------------------
-  async function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      msg.textContent = "이 브라우저는 카메라를 지원하지 않습니다.";
-      return;
-    }
+  // 모드 버튼
+  document.querySelectorAll(".mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-mode");
+      currentMode = mode;
 
-    const tries = [
-      { audio: false, video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      { audio: false, video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      { audio: false, video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
-      { audio: false, video: true }
-    ];
+      document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
 
-    for (const c of tries) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(c);
-        video.srcObject = stream;
-        msg.textContent = "카메라 준비됨";
-        return;
-      } catch (e) {
-        console.warn("camera attempt failed", c, e);
-      }
-    }
-    msg.textContent = "카메라 시작 실패. 권한/보안앱 설정 확인.";
-  }
-  startCamera();
-
-  async function waitVideoReady() {
-    if (video.videoWidth && video.videoHeight) return;
-    await new Promise(resolve => {
-      const t = setTimeout(resolve, 3000);
-      video.addEventListener('loadedmetadata', () => {
-        clearTimeout(t);
-        resolve();
-      }, { once: true });
+      db.ref("p2p/state").update({ mode, updatedAt: Date.now() });
+      statusEl.textContent = `모드: ${mode}`;
     });
-  }
-
-  // ---------------------- OCR (다운스케일 없음) ----------------------
-  async function captureAndOcr(target, isAppend, lang, mode) {
-    await waitVideoReady();
-
-    const w = video.videoWidth;
-    const h = video.videoHeight;
-    if (!w || !h) {
-      msg.textContent = "카메라 준비 안 됨";
-      return;
-    }
-
-    // 중앙 80% 영역
-    const cropW = w * 0.8;
-    const cropH = h * 0.8;
-    const cropX = (w - cropW) / 2;
-    const cropY = (h - cropH) / 2;
-
-    const canvas = document.createElement('canvas');
-    canvas.width  = cropW;
-    canvas.height = cropH;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-    const tLang = (lang === "eng") ? "eng" : "eng+kor";
-    msg.textContent = `OCR 중 (${tLang})...`;
-
-    const { data } = await Tesseract.recognize(canvas.toDataURL('image/png'), tLang);
-    const text = (data.text || "").trim();
-    const confidence = (typeof data.confidence === "number")
-      ? Math.round(data.confidence)
-      : null;
-
-    msg.textContent = confidence ? `OCR 완료 (${confidence}%)` : "OCR 완료";
-
-    const now = Date.now();
-
-    if (target === "passage") {
-      passageCache = isAppend && passageCache ? (passageCache + "\n" + text) : text;
-      db.ref("p2p/state").update({
-        mode,
-        passage: passageCache,
-        passageConf: confidence,
-        updatedAt: now
-      });
-    } else if (target === "question") {
-      questionCache = isAppend && questionCache ? (questionCache + "\n" + text) : text;
-      db.ref("p2p/state").update({
-        mode,
-        question: questionCache,
-        questionConf: confidence,
-        updatedAt: now
-      });
-    }
-  }
-
-  // ---------------------- STT ----------------------
-  let recognition = null;
-  let sttRunning  = false;
-
-  function startSTT(mode) {
-    if (sttRunning) return;
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      msg.textContent = "STT 미지원 브라우저 (Chrome 권장)";
-      return;
-    }
-
-    recognition = new SR();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    sttCache = "";
-    db.ref("p2p/state").update({
-      mode,
-      stt: "",
-      sttUpdatedAt: Date.now()
-    });
-
-    recognition.onresult = (e) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const txt = e.results[i][0].transcript;
-        if (e.results[i].isFinal) {
-          sttCache += txt + "\n";
-        } else {
-          interim += txt;
-        }
-      }
-      let full = (sttCache + "\n" + interim).trim();
-      if (full.length > 4000) full = full.slice(-4000);
-      sttCache = full;
-      db.ref("p2p/state").update({
-        mode,
-        stt: sttCache,
-        sttUpdatedAt: Date.now()
-      });
-      msg.textContent = "STT 수신 중...";
-    };
-
-    recognition.onstart = () => {
-      sttRunning = true;
-      msg.textContent = "STT 시작 (마이크)";
-    };
-    recognition.onend = () => {
-      sttRunning = false;
-      msg.textContent = "STT 종료";
-    };
-
-    recognition.start();
-  }
-
-  function stopSTT() {
-    if (recognition && sttRunning) {
-      recognition.stop();
-    }
-  }
-
-  // ---------------------- Command Listener ----------------------
-  let lastCmdTs = 0;
-
-  function handleCommand(cmd) {
-    const { type, mode, lang } = cmd;
-    if (type === "capture_passage_new") {
-      captureAndOcr("passage", false, lang, mode);
-    } else if (type === "capture_passage_append") {
-      captureAndOcr("passage", true, lang, mode);
-    } else if (type === "capture_question_new") {
-      captureAndOcr("question", false, lang, mode);
-    } else if (type === "capture_question_append") {
-      captureAndOcr("question", true, lang, mode);
-    } else if (type === "stt_start") {
-      startSTT(mode);
-    } else if (type === "stt_stop") {
-      stopSTT();
-    } else if (type === "clear_state") {
-      passageCache = "";
-      questionCache = "";
-      sttCache = "";
-      db.ref("p2p/state").set({ mode, passage: "", question: "", stt: "", updatedAt: Date.now() });
-      msg.textContent = "상태 초기화";
-    }
-  }
-
-  db.ref("p2p/command").on("value", snap => {
-    const cmd = snap.val();
-    if (!cmd) return;
-    if (!cmd.timestamp || cmd.timestamp <= lastCmdTs) return;
-    lastCmdTs = cmd.timestamp;
-    handleCommand(cmd);
   });
+
+  function sendCommand(type, extra = {}) {
+    const cmd = {
+      type,
+      mode: currentMode,
+      lang: ocrLangEl.value,
+      timestamp: Date.now(),
+      ...extra
+    };
+    db.ref("p2p/command").set(cmd);
+  }
+
+  function cmdCapture(target) {
+    const type = (target === "passage")
+      ? "capture_passage_new"
+      : "capture_question_new";
+    sendCommand(type);
+    statusEl.textContent = `${currentMode}: ${target === "passage" ? "지문" : "문제/질문"} 캡처`;
+  }
+
+  function toggleSTT() {
+    if (!sttOn) {
+      sendCommand("stt_start");
+      sttOn = true;
+      btnSTT.textContent = "⏹ STT 정지";
+      statusEl.textContent = `${currentMode}: STT 시작`;
+    } else {
+      sendCommand("stt_stop");
+      sttOn = false;
+      btnSTT.textContent = "🎤 STT 시작";
+      statusEl.textContent = `${currentMode}: STT 정지`;
+    }
+  }
+
+  function cmdSolve() {
+    sendCommand("solve");
+    statusEl.textContent = `${currentMode}: 풀이/평가 요청`;
+  }
+
+  function cmdClear() {
+    sendCommand("clear_state");
+    statusEl.textContent = `${currentMode}: 상태 초기화`;
+  }
 </script>
 </body>
 </html>
