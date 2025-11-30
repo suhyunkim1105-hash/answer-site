@@ -2,31 +2,27 @@
 
 export async function handler(event, context) {
   try {
-    const { mode, passage, question, stt } = JSON.parse(event.body);
+    const { mode, passage, question, stt } = JSON.parse(event.body || "{}");
 
     const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5";
+    const prompt = buildPrompt(mode, passage || "", question || "", stt || "");
 
-    const prompt = buildPrompt(mode, passage, question, stt);
-
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          temperature: 0.2,
-          max_tokens: 800,
-          messages: [
-            { role: "system", content: "You MUST follow the output format exactly." },
-            { role: "user", content: prompt }
-          ]
-        })
-      }
-    ).then(r => r.json());
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.2,
+        max_tokens: 800,
+        messages: [
+          { role: "system", content: "You MUST follow the output format exactly and keep it concise." },
+          { role: "user", content: prompt }
+        ]
+      })
+    }).then(r => r.json());
 
     const out = response?.choices?.[0]?.message?.content || "AI 응답 오류";
 
@@ -37,7 +33,6 @@ export async function handler(event, context) {
         tts: extractTTS(mode, out)
       })
     };
-
   } catch (err) {
     return {
       statusCode: 500,
@@ -46,10 +41,9 @@ export async function handler(event, context) {
   }
 }
 
-
 // ---------------- PROMPT BUILDER ----------------
-function buildPrompt(mode, passage, question, stt) {
 
+function buildPrompt(mode, passage, question, stt) {
   if (mode === "reading") {
     return `
 You are a TOEFL Reading answer engine.
@@ -57,8 +51,12 @@ You are a TOEFL Reading answer engine.
 <Passage>
 ${passage}
 
-<Question>
+<Question & Options>
 ${question}
+
+Task:
+1) Choose the correct option among 1~5.
+2) Provide short Korean reasoning.
 
 Output Format (STRICT):
 [ANSWER] N
@@ -70,11 +68,15 @@ Output Format (STRICT):
     return `
 You are a TOEFL Listening answer engine.
 
-<STT Script>
+<STT Script from audio>
 ${stt}
 
 <Question & Options>
 ${question}
+
+Task:
+1) Choose the correct option among 1~5.
+2) Provide short Korean reasoning.
 
 Output Format (STRICT):
 [ANSWER] N
@@ -83,7 +85,7 @@ Output Format (STRICT):
   }
 
   if (mode === "writing") {
-    const q = stt?.trim() ? stt : question;
+    const q = stt.trim() ? stt : question;
     return `
 You are a TOEFL Writing essay generator.
 
@@ -91,10 +93,10 @@ You are a TOEFL Writing essay generator.
 ${q}
 
 Task:
-1) Write a TOEFL-style essay.
-2) 250~320 words STRICTLY.
-3) Clear intro / body / conclusion.
-4) Korean feedback 3~5 lines.
+1) Write an independent TOEFL-style essay.
+2) Length: 250~320 words STRICTLY.
+3) Clear intro, 2 body paragraphs, and conclusion.
+4) After the essay, give Korean feedback (3~5 lines) about structure, content, and grammar.
 
 Output Format:
 [ESSAY]
@@ -112,33 +114,34 @@ You are a TOEFL Speaking evaluator.
 <Question>
 ${question}
 
-<My Answer (STT)>
+<My Answer (STT transcription)>
 ${stt}
 
 Task:
-1) English evaluation (Delivery / Language / Topic).
-2) Strengths & weaknesses.
-3) Estimated level.
-4) Model answer
-5) Korean summary.
+1) Give evaluation in English (Delivery / Language / Topic development).
+2) Mention strengths & weaknesses.
+3) Give an approximate level (e.g., High, Mid, Low).
+4) Provide a model answer (~45-60 seconds).
+5) Provide a short Korean summary and improvement tips.
 
 Output Format:
 [EVAL]
-(evaluation)
+(English evaluation)
 
 [MODEL]
-(model answer)
+(45~60 second model answer)
 
 [KOREAN]
-(Korean summary)
+(Korean summary and tips)
 `;
   }
 
-  return "Invalid mode.";
+  // fallback (should not happen)
+  return "Invalid mode. Use one of: reading, writing, listening, speaking.";
 }
 
+// ---------------- SHORT TTS EXTRACTOR ----------------
 
-// ---------------- SHORT TTS ----------------
 function extractTTS(mode, text) {
   if (mode === "reading" || mode === "listening") {
     const m = text.match(/\[ANSWER\]\s*([1-5])/i);
