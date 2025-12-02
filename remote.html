@@ -2,160 +2,226 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Auto Result</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>answer-site | Remote</title>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
   <style>
+    * { box-sizing: border-box; }
     body {
-      font-family: system-ui, sans-serif;
       margin: 0;
-      padding: 10px;
-      background: #f5f5f5;
-      box-sizing: border-box;
-      display: flex;
-      justify-content: center;
+      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .wrap {
-      width: 100%;
-      max-width: 700px;
-      box-sizing: border-box;
+    .app {
+      min-height: 100vh;
+      padding-bottom: 120px; /* 하단 고정 버튼 공간 */
     }
-    h2 {
-      margin: 2px 0 2px 0;
-      font-size: 20px;
+
+    /* 상단: 정답 패널 */
+    #answerPanel {
+      padding: 10px 12px 4px;
     }
-    #modeInfo {
-      font-size: 12px;
-      color:#444;
-      margin-bottom: 2px;
-    }
-    #camStatus {
-      font-size: 12px;
-      color:#444;
-      margin-bottom: 4px;
-    }
-    #status {
+    #modeLabel {
       font-size: 11px;
-      color:#666;
-      margin-top: 4px;
+      color: #aaa;
       margin-bottom: 4px;
     }
-
-    #btnStart {
-      width: 100%;
-      padding: 10px 12px;
-      font-size: 15px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      background: #ffffff;
-      cursor: pointer;
-      margin: 4px 0 8px 0;
-      box-sizing: border-box;
-    }
-    #btnStart:active {
-      transform: scale(0.98);
-    }
-
-    .box {
-      margin-top: 8px;
-      padding: 8px;
-      border-radius: 8px;
-      border: 1px solid #ddd;
-      background: #fff;
-    }
-    .box h3 {
-      margin: 0 0 4px 0;
-      font-size: 14px;
-    }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-    .answer-big {
-      font-size: 22px;
-      font-weight: bold;
-      margin-bottom: 6px;
-      word-break: break-all;
-    }
-
-    /* 모드 버튼: 답 박스 밑에 위치 */
-    .mode-row {
+    #answerMainRow {
       display: flex;
-      gap: 4px;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    #answerMain {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+    #answerConfidence {
+      font-size: 11px;
+      color: #888;
+    }
+    #answerDetail {
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: #080808;
+      border-radius: 6px;
+      max-height: 40vh;
+      overflow-y: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+
+    /* 디버그 영역 (테스트 모드에서만) */
+    #debugPanel {
+      padding: 4px 12px 70px;
+      font-size: 11px;
+      color: #b0b0b0;
+    }
+    .debug-section {
       margin-top: 6px;
+      padding: 6px 8px;
+      background: #111;
+      border-radius: 6px;
+    }
+    .debug-title {
+      font-size: 10px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+    .debug-content {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* 하단 고정 컨트롤 */
+    #bottomBar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0));
+      background: rgba(0, 0, 0, 0.95);
+      border-top: 1px solid #222;
+    }
+    #modeButtons {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
     }
     .mode-btn {
       flex: 1 1 0;
-      padding: 6px 0;
+      padding: 8px 0;
+      font-size: 11px;
       border-radius: 999px;
-      border: 1px solid #666;
-      background: #fff;
-      color: #333;
-      font-size: 12px;
+      border: 1px solid #444;
+      background: #111;
+      color: #eee;
       text-align: center;
       cursor: pointer;
     }
     .mode-btn.active {
-      background: #4f46e5;
-      border-color: #4f46e5;
+      background: #1f6feb;
+      border-color: #1f6feb;
       color: #fff;
+      font-weight: 600;
     }
 
-    @media (orientation: landscape) {
-      body { padding: 8px; }
-      h2 { font-size: 19px; }
-      .answer-big { font-size: 20px; }
-      .mode-btn { font-size: 11px; }
+    #mainButtons {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .big-btn {
+      width: 100%;
+      padding: 12px 0;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 999px;
+      border: none;
+      background: #1f6feb;
+      color: #fff;
+      cursor: pointer;
+    }
+    .big-btn.secondary {
+      background: #222;
+    }
+    .big-btn:active {
+      transform: scale(0.97);
+    }
+    .big-btn.disabled {
+      opacity: 0.4;
+      cursor: default;
+      transform: none;
+    }
+
+    #statusSmall {
+      margin-top: 2px;
+      font-size: 10px;
+      color: #888;
+      text-align: right;
+    }
+
+    /* 디버그 모드 토글 (작은 버튼, 상단 우측) */
+    #debugToggle {
+      position: fixed;
+      top: 6px;
+      right: 8px;
+      padding: 4px 6px;
+      font-size: 9px;
+      border-radius: 999px;
+      border: 1px solid #444;
+      background: #111;
+      color: #aaa;
+      cursor: pointer;
+      opacity: 0.6;
+    }
+    #debugToggle.active {
+      opacity: 1;
+      color: #fff;
+      border-color: #1f6feb;
     }
   </style>
 </head>
 <body>
-
-<div class="wrap">
-  <h2>answer-site Auto</h2>
-  <div id="modeInfo">현재 모드: reading</div>
-  <div id="camStatus">카메라 상태: -</div>
-
-  <!-- 정답/피드백 박스 -->
-  <div class="box" id="answerBox">
-    <h3>AI 정답 / 피드백</h3>
-    <div class="answer-big" id="answerMain">아직 정답 없음</div>
-    <pre id="answerDetail"></pre>
+<div class="app">
+  <div id="answerPanel">
+    <div id="modeLabel">모드: -</div>
+    <div id="answerMainRow">
+      <div id="answerMain">-</div>
+      <div id="answerConfidence"></div>
+    </div>
+    <div id="answerDetail"></div>
   </div>
 
-  <!-- 모드 선택 버튼 (답 박스 바로 아래) -->
-  <div id="modeRow" class="mode-row">
-    <button class="mode-btn active" data-mode="reading">Reading</button>
+  <div id="debugPanel" style="display:none;">
+    <div class="debug-section">
+      <div class="debug-title">STATE 요약</div>
+      <div class="debug-content" id="debugState"></div>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">OCR 텍스트 (앞부분)</div>
+      <div class="debug-content" id="debugOcr"></div>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">음성 텍스트(audioText)</div>
+      <div class="debug-content" id="debugAudio"></div>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">마지막 AI 응답(raw)</div>
+      <div class="debug-content" id="debugAiRaw"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 하단 고정 컨트롤 -->
+<div id="bottomBar">
+  <div id="modeButtons">
+    <button class="mode-btn" data-mode="reading">Reading</button>
     <button class="mode-btn" data-mode="listening">Listening</button>
     <button class="mode-btn" data-mode="writing">Writing</button>
     <button class="mode-btn" data-mode="speaking">Speaking</button>
   </div>
 
-  <!-- STT 시작 버튼 -->
-  <button id="btnStart">자동 시작 (마이크 허용)</button>
-
-  <div id="status"></div>
-
-  <!-- 프리뷰 영역 -->
-  <div class="box">
-    <h3>화면 인식 (OCR 프리뷰)</h3>
-    <pre id="ocrPreview">(아직 없음)</pre>
-  </div>
-
-  <div class="box">
-    <h3>음성 인식 (STT 텍스트)</h3>
-    <pre id="audioPreview">(아직 없음)</pre>
+  <div id="mainButtons">
+    <button id="btnSolve" class="big-btn">다시 풀기 / 지금 풀기</button>
+    <button id="btnSTT" class="big-btn secondary">음성 인식 시작 (Listening/Speaking)</button>
+    <div id="statusSmall"></div>
   </div>
 </div>
 
+<button id="debugToggle">DEBUG</button>
+
 <script>
+  // ----------- Firebase 초기화 -----------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -169,289 +235,289 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  const modeInfoEl     = document.getElementById('modeInfo');
-  const camStatusEl    = document.getElementById('camStatus');
-  const statusEl       = document.getElementById('status');
-  const btnStart       = document.getElementById('btnStart');
-  const ocrPreviewEl   = document.getElementById('ocrPreview');
-  const audioPreviewEl = document.getElementById('audioPreview');
-  const answerMainEl   = document.getElementById('answerMain');
-  const answerDetailEl = document.getElementById('answerDetail');
+  // ----------- DOM 참조 -----------
+  const modeLabel       = document.getElementById('modeLabel');
+  const answerMain      = document.getElementById('answerMain');
+  const answerConfidence= document.getElementById('answerConfidence');
+  const answerDetail    = document.getElementById('answerDetail');
 
-  const modeButtons    = document.querySelectorAll('.mode-btn');
+  const debugPanel      = document.getElementById('debugPanel');
+  const debugStateEl    = document.getElementById('debugState');
+  const debugOcrEl      = document.getElementById('debugOcr');
+  const debugAudioEl    = document.getElementById('debugAudio');
+  const debugAiRawEl    = document.getElementById('debugAiRaw');
 
+  const modeButtonsWrap = document.getElementById('modeButtons');
+  const btnSolve        = document.getElementById('btnSolve');
+  const btnSTT          = document.getElementById('btnSTT');
+  const statusSmall     = document.getElementById('statusSmall');
+  const debugToggleBtn  = document.getElementById('debugToggle');
+
+  const modeButtons = Array.from(modeButtonsWrap.querySelectorAll('.mode-btn'));
+
+  // ----------- 디버그 모드 토글 (URL + 버튼) -----------
+  const params = new URLSearchParams(location.search);
+  let debugMode = params.get('debug') === '1';
+
+  function applyDebugMode() {
+    debugPanel.style.display = debugMode ? 'block' : 'none';
+    debugToggleBtn.classList.toggle('active', debugMode);
+  }
+  applyDebugMode();
+
+  debugToggleBtn.addEventListener('click', () => {
+    debugMode = !debugMode;
+    applyDebugMode();
+  });
+
+  // ----------- 전역 상태 -----------
+  let currentMode = 'reading'; // default
   let latestState = {};
-  let lastSolveTs = 0;
+  let lastCommandTs = 0;
 
-  let currentMode = "reading";
+  let isSolving = false;
 
-  // ------------ 모드 선택 (여기서만 모드 바꿈) ------------
+  // STT
+  let recognition = null;
+  let sttRunning = false;
+  let sttTranscript = '';
+
+  // ----------- 모드 전송 (Firebase) -----------
   function setMode(mode) {
     currentMode = mode;
+    modeLabel.textContent = `모드: ${mode}`;
     modeButtons.forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
+      btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
     });
-    modeInfoEl.textContent = `현재 모드: ${mode}`;
-    db.ref("p2p/state").update({
+    db.ref('p2p/state').update({
       modeHint: mode,
       modeUpdatedAt: Date.now()
-    });
+    }).catch(console.error);
+
+    // Listening/Speaking 외에는 STT 버튼 비활성화
+    if (mode === 'listening' || mode === 'speaking') {
+      btnSTT.classList.remove('disabled');
+    } else {
+      stopSTT();
+      btnSTT.classList.add('disabled');
+    }
   }
 
   modeButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      const mode = btn.getAttribute('data-mode');
-      setMode(mode);
+      const m = btn.getAttribute('data-mode');
+      setMode(m);
     });
   });
 
-  // 초기값 reading으로 설정
-  setMode("reading");
+  // ----------- Firebase state 구독 -----------
+  db.ref('p2p/state').on('value', snap => {
+    const val = snap.val() || {};
+    latestState = val;
 
-  // STT
-  let sttActive = false;
-  let recognition = null;
-  let audioText = "";
-  let finalTranscript = "";
-
-  function setupRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      statusEl.textContent = "이 브라우저는 Web Speech API(STT)를 지원하지 않습니다. (Chrome 권장)";
-      return null;
+    if (debugMode) {
+      debugStateEl.textContent = JSON.stringify({
+        modeHint: val.modeHint,
+        cameraBlocked: val.cameraBlocked,
+        ocrConfidence: val.ocrConfidence,
+        ocrUpdatedAt: val.ocrUpdatedAt,
+        audioUpdatedAt: val.audioUpdatedAt
+      }, null, 2);
+      debugOcrEl.textContent = (val.ocrText || '').slice(0, 800);
+      debugAudioEl.textContent = val.audioText || '';
     }
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.continuous = true;
-    rec.interimResults = true;
 
-    rec.onresult = (event) => {
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const res = event.results[i];
-        const transcript = res[0].transcript;
-        if (res.isFinal) {
-          finalTranscript += transcript + " ";
-        } else {
-          interim += transcript + " ";
-        }
-      }
-      audioText = (finalTranscript + " " + interim).trim();
-      audioPreviewEl.textContent = audioText || "(아직 없음)";
-      db.ref("p2p/state").update({
-        audioText,
-        audioUpdatedAt: Date.now()
-      });
-    };
-
-    rec.onend = () => {
-      if (sttActive) {
-        try {
-          rec.start();
-        } catch (e) {
-          console.error("STT 재시작 실패:", e);
-          statusEl.textContent = "STT 재시작 실패: " + e.toString();
-        }
-      }
-    };
-
-    rec.onerror = (e) => {
-      console.error("STT error:", e);
-      statusEl.textContent = "STT 에러: " + e.error;
-    };
-
-    return rec;
-  }
-
-  btnStart.addEventListener("click", () => {
-    if (sttActive) return;
-    recognition = setupRecognition();
-    if (!recognition) return;
-    try {
-      finalTranscript = "";
-      audioText = "";
-      audioPreviewEl.textContent = "(아직 없음)";
-
-      recognition.start();
-      sttActive = true;
-      btnStart.disabled = true;
-      btnStart.textContent = "자동 모드 ON (마이크 수신 중)";
-      statusEl.textContent = "STT 시작 – 영어 음성을 자동으로 인식 중 (Chrome 권장)";
-    } catch (e) {
-      console.error(e);
-      statusEl.textContent = "STT 시작 실패: " + e.toString();
-    }
-  });
-
-  // 상태 구독
-  db.ref("p2p/state").on("value", snap => {
-    latestState = snap.val() || {};
-    const blocked = !!latestState.cameraBlocked;
-    const modeHint = latestState.modeHint;
-
-    if (modeHint && modeHint !== currentMode) {
-      currentMode = modeHint;
+    if (val.modeHint && val.modeHint !== currentMode) {
+      // 다른 디바이스에서 모드 바꿨을 수도 있으니 동기화
+      currentMode = val.modeHint;
+      modeLabel.textContent = `모드: ${currentMode}`;
       modeButtons.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === currentMode);
+        btn.classList.toggle('active', btn.getAttribute('data-mode') === currentMode);
       });
-      modeInfoEl.textContent = `현재 모드: ${currentMode}`;
     }
 
-    camStatusEl.textContent = blocked
-      ? "카메라 상태: 가려짐(마지막 답 유지 중)"
-      : "카메라 상태: 보임(새 문제 인식 가능)";
-
-    const t = (latestState.ocrText || "").trim();
-    ocrPreviewEl.textContent = t ? t.slice(0, 400) : "(아직 없음)";
-
-    const at = (latestState.audioText || "").trim();
-    if (!audioText) {
-      audioPreviewEl.textContent = at || "(아직 없음)";
+    if (val.cameraBlocked) {
+      statusSmall.textContent = '카메라가 가려져 있음 (센서폰 확인)';
+    } else {
+      statusSmall.textContent = '';
     }
   });
 
-  // solve 명령 구독
-  db.ref("p2p/command").on("value", snap => {
-    const cmd = snap.val();
-    if (!cmd) return;
-    if (!cmd.timestamp || cmd.type !== "solve") return;
-    if (cmd.timestamp <= lastSolveTs) return;
-    lastSolveTs = cmd.timestamp;
-    doSolve();
+  // ----------- Firebase command 구독 (자동 solve) -----------
+  db.ref('p2p/command').on('value', snap => {
+    const val = snap.val();
+    if (!val || val.type !== 'solve') return;
+    const ts = val.timestamp || 0;
+    if (ts <= lastCommandTs) return;
+    lastCommandTs = ts;
+
+    // index에서 solve 요청이 왔을 때 자동 호출
+    callSolve('firebase');
   });
 
-  async function doSolve() {
-    statusEl.textContent = "AI 풀이/생성 중...";
+  // ----------- solve 함수 호출 -----------
+  async function callSolve(source) {
+    if (isSolving) return;
+    const ocrText = latestState.ocrText || '';
+    const audioText = latestState.audioText || '';
 
-    const modeToSend = currentMode || latestState.modeHint || "auto";
-    const body = {
-      mode: modeToSend,
-      ocrText: latestState.ocrText || "",
-      audioText: latestState.audioText || audioText || ""
-    };
+    // 최소 조건: OCR이 너무 짧으면 그냥 안 돌리는 게 낫다
+    const effLen = (ocrText || '').replace(/\s/g, '').length;
+    if (effLen < 10 && (currentMode === 'reading' || currentMode === 'listening')) {
+      if (debugMode) {
+        debugAiRawEl.textContent = `[SKIP] ocrText too short (len=${effLen})`;
+      }
+      return;
+    }
+
+    isSolving = true;
+    btnSolve.textContent = '풀이 중...';
+    btnSolve.classList.add('disabled');
 
     try {
-      const res = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
+      const res = await fetch('/.netlify/functions/solve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: currentMode,
+          ocrText,
+          audioText
+        })
       });
-      const data = await res.json();
-      if (data.error) {
-        statusEl.textContent = "에러: " + data.error;
-        return;
+
+      if (!res.ok) {
+        const txt = await res.text();
+        renderAnswer({
+          answer: '?',
+          confidence: 0,
+          detail: `서버 에러: ${res.status} ${txt}`
+        });
+        if (debugMode) {
+          debugAiRawEl.textContent = txt;
+        }
+      } else {
+        const data = await res.json();
+        renderAnswer(data);
+        if (debugMode) {
+          debugAiRawEl.textContent = JSON.stringify(data, null, 2);
+        }
       }
-      const text = data.result || "";
-      renderResult(text);
-      speakSummary(text);
-      statusEl.textContent = "완료";
     } catch (e) {
       console.error(e);
-      statusEl.textContent = "요청 실패: " + e.toString();
+      renderAnswer({
+        answer: '?',
+        confidence: 0,
+        detail: '요청 실패: ' + e.toString()
+      });
+    } finally {
+      isSolving = false;
+      btnSolve.textContent = '다시 풀기 / 지금 풀기';
+      btnSolve.classList.remove('disabled');
     }
   }
 
-  // 모드 추정 + 결과 렌더링
-  function detectModeFromText(text) {
-    const lower = text.toLowerCase();
-    if (lower.includes("[essay]")) return "writing";
-    if (lower.includes("[eval]")) return "speaking";
-    return "rl"; // reading/listening 스타일
+  function renderAnswer(obj) {
+    const ans = (obj && typeof obj.answer === 'string') ? obj.answer.trim() : '?';
+    let conf = Number(obj && obj.confidence);
+    if (!Number.isFinite(conf)) conf = 0;
+    if (conf < 0) conf = 0;
+    if (conf > 100) conf = 100;
+
+    // 확신도 10% 미만이면 강제로 ? 처리 (안전장치)
+    const displayAnswer = (conf < 10) ? '?' : (ans || '?');
+
+    answerMain.textContent = displayAnswer;
+
+    if (conf > 0) {
+      answerConfidence.textContent = `(~${Math.round(conf)}% 추정)`;
+    } else {
+      answerConfidence.textContent = '';
+    }
+
+    const detail = (obj && typeof obj.detail === 'string') ? obj.detail.trim() : '';
+    answerDetail.textContent = detail || '';
   }
 
-  function renderResult(text) {
-    const mode = detectModeFromText(text);
+  btnSolve.addEventListener('click', () => {
+    callSolve('manual');
+  });
 
-    if (mode === "rl") {
-      const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
-      const ansText = mAns ? mAns[1].trim() : "";
-      answerMainEl.textContent = ansText ? ("정답: " + ansText) : "정답 정보 없음";
-
-      const parts = text.split(/\[WHY\]/i);
-      const why = parts[1] ? parts[1].trim() : text.trim();
-      answerDetailEl.textContent = why;
-      return;
-    }
-
-    if (mode === "writing") {
-      const p1 = text.split(/\[ESSAY\]/i);
-      let essay = "", fb = "";
-      if (p1.length > 1) {
-        const rest = p1[1];
-        const p2 = rest.split(/\[FEEDBACK\]/i);
-        essay = (p2[0] || "").trim();
-        fb = (p2[1] || "").trim();
-      } else {
-        essay = text.trim();
-      }
-      answerMainEl.textContent = "Writing 예시 에세이";
-      answerDetailEl.textContent =
-        (essay ? essay + "\n\n---\n\n" : "") +
-        (fb ? ("[피드백]\n" + fb) : "");
-      return;
-    }
-
-    if (mode === "speaking") {
-      let evalPart = "", modelPart = "", korPart = "";
-      const p1 = text.split(/\[EVAL\]/i);
-      if (p1.length > 1) {
-        const rest1 = p1[1];
-        const p2 = rest1.split(/\[MODEL\]/i);
-        evalPart = (p2[0] || "").trim();
-        const rest2 = p2[1] || "";
-        const p3 = rest2.split(/\[KOREAN\]/i);
-        modelPart = (p3[0] || "").trim();
-        korPart   = (p3[1] || "").trim();
-      } else {
-        evalPart = text.trim();
-      }
-      answerMainEl.textContent = "Speaking 평가";
-      answerDetailEl.textContent =
-        (evalPart ? ("[평가]\n" + evalPart + "\n\n") : "") +
-        (modelPart ? ("[모범 답변]\n" + modelPart + "\n\n") : "") +
-        (korPart ? ("[한국어 팁]\n" + korPart) : "");
-      return;
-    }
-
-    answerMainEl.textContent = "";
-    answerDetailEl.textContent = text;
+  // ----------- STT (Web Speech API) -----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  if (!SR) {
+    btnSTT.textContent = '음성 인식 미지원 브라우저';
+    btnSTT.classList.add('disabled');
   }
 
-  // TTS
-  function speakSummary(text) {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    const synth = window.speechSynthesis;
-    synth.cancel();
+  function startSTT() {
+    if (!SR || sttRunning) return;
+    recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = true;
 
-    const mode = detectModeFromText(text);
-    let speakText = "";
+    sttTranscript = '';
 
-    if (mode === "rl") {
-      const mAns = text.match(/\[ANSWER\]\s*([^\n\r]+)/i);
-      if (mAns) {
-        speakText = "정답 " + mAns[1].trim() + " 입니다.";
+    recognition.onresult = (event) => {
+      let finalText = '';
+      for (let i = 0; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (res.isFinal) {
+          finalText += res[0].transcript + ' ';
+        }
       }
-    } else if (mode === "speaking") {
-      const p1 = text.split(/\[EVAL\]/i);
-      if (p1.length > 1) {
-        const evalPart = p1[1].split(/\[MODEL\]/i)[0].trim();
-        speakText = evalPart.split(/[\n\.]/)[0].slice(0, 80);
+      if (finalText) {
+        sttTranscript += finalText;
+        if (debugMode) {
+          debugAudioEl.textContent = sttTranscript;
+        }
       }
-    } else if (mode === "writing") {
-      speakText = "라이팅 예시 답안과 한국어 피드백을 생성했습니다.";
-    }
+    };
 
-    if (!speakText) {
-      speakText = text.replace(/\[[^\]]+\]/g, "").trim().slice(0, 80);
-    }
-    if (!speakText) return;
+    recognition.onend = () => {
+      sttRunning = false;
+      btnSTT.textContent = '음성 인식 시작 (Listening/Speaking)';
+      btnSTT.classList.remove('disabled');
 
-    const u = new SpeechSynthesisUtterance(speakText);
-    u.lang = "ko-KR";
-    synth.speak(u);
+      if (sttTranscript.trim()) {
+        db.ref('p2p/state').update({
+          audioText: sttTranscript.trim(),
+          audioUpdatedAt: Date.now()
+        }).catch(console.error);
+      }
+    };
+
+    recognition.onerror = (e) => {
+      console.error(e);
+      sttRunning = false;
+      btnSTT.textContent = '음성 인식 시작 (Listening/Speaking)';
+      btnSTT.classList.remove('disabled');
+    };
+
+    sttRunning = true;
+    btnSTT.textContent = '음성 인식 중... 다시 눌러 종료';
+    recognition.start();
   }
+
+  function stopSTT() {
+    if (recognition && sttRunning) {
+      recognition.stop();
+    }
+  }
+
+  btnSTT.addEventListener('click', () => {
+    if (btnSTT.classList.contains('disabled')) return;
+    if (!SR) return;
+
+    if (!sttRunning) {
+      startSTT();
+    } else {
+      stopSTT();
+    }
+  });
+
+  // 초기 모드 설정
+  setMode('reading');
 </script>
 </body>
 </html>
-
-
