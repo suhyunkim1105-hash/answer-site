@@ -276,6 +276,7 @@
   let lastCommandTs = 0;
 
   let isSolving = false;
+  let pendingSolve = false;  // ✅ 풀이 중에 새 요청이 오면 끝난 뒤 한 번 더 풀기
 
   // STT
   let recognition = null;
@@ -351,17 +352,22 @@
     if (ts <= lastCommandTs) return;
     lastCommandTs = ts;
 
-    // index에서 solve 요청이 왔을 때 자동 호출
-    callSolve('firebase');
+    // 이미 풀고 있으면 "끝난 뒤 다시 풀기"만 예약
+    if (isSolving) {
+      pendingSolve = true;
+    } else {
+      callSolve('firebase');
+    }
   });
 
   // ----------- solve 함수 호출 -----------
   async function callSolve(source) {
     if (isSolving) return;
+
     const ocrText = latestState.ocrText || '';
     const audioText = latestState.audioText || '';
 
-    // 최소 조건: OCR이 너무 짧으면 그냥 안 돌리는 게 낫다
+    // 최소 조건: OCR이 너무 짧으면 그냥 안 돌리는 게 낫다 (주로 리딩/리스닝)
     const effLen = (ocrText || '').replace(/\s/g, '').length;
     if (effLen < 10 && (currentMode === 'reading' || currentMode === 'listening')) {
       if (debugMode) {
@@ -413,6 +419,12 @@
       isSolving = false;
       btnSolve.textContent = '다시 풀기 / 지금 풀기';
       btnSolve.classList.remove('disabled');
+
+      // 풀이 중에 새 solve 요청이 들어온 적 있으면, 끝난 직후 한 번 더 실행
+      if (pendingSolve) {
+        pendingSolve = false;
+        callSolve('pending');
+      }
     }
   }
 
@@ -423,7 +435,7 @@
     if (conf < 0) conf = 0;
     if (conf > 100) conf = 100;
 
-    // 확신도 10% 미만이면 강제로 ? 처리 (안전장치)
+    // 확신도 10% 미만이면 강제로 ? 처리 (서버쪽에서도 한 번 더 막고 있음)
     const displayAnswer = (conf < 10) ? '?' : (ans || '?');
 
     answerMain.textContent = displayAnswer;
@@ -439,6 +451,11 @@
   }
 
   btnSolve.addEventListener('click', () => {
+    // 이미 풀고 있으면 "끝난 뒤 다시 풀기"만 예약
+    if (isSolving) {
+      pendingSolve = true;
+      return;
+    }
     callSolve('manual');
   });
 
@@ -521,3 +538,4 @@
 </script>
 </body>
 </html>
+
