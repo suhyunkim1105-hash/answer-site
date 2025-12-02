@@ -1,194 +1,226 @@
 // netlify/functions/solve.js
+'use strict';
+
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
+
+async function callOpenRouterChat(messages) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY 환경변수가 설정되지 않았습니다.');
+  }
+
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://beamish-alpaca-e3df59.netlify.app',
+      'X-Title': 'answer-site'
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages,
+      temperature: 0.2
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenRouter API error: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('OpenRouter 응답에 content가 없습니다.');
+  }
+  return content;
+}
+
+function buildUserPrompt(mode, ocrText, audioText) {
+  const trimmedOcr = (ocrText || '').slice(0, 6000);
+  const trimmedAudio = (audioText || '').slice(0, 6000);
+
+  let taskDesc = '';
+  if (mode === 'reading') {
+    taskDesc = `
+[MODE] READING
+
+당신의 목표:
+- TOEFL iBT 리딩 객관식 문제를 풀어라.
+- OCR_TEXT 안에 지문과 문제, 선택지가 섞여 있을 수 있다.
+- 사람에게 보여줄 "최고의 정답"만 answer 필드에 담고, 간단한 영어/한국어 혼합 설명은 detail에 담아라.
+- answer에는 보통 정답 선택지 번호나 글자를 담아라 (예: "3", "2", "B").
+`;
+  } else if (mode === 'listening') {
+    taskDesc = `
+[MODE] LISTENING
+
+당신의 목표:
+- TOEFL iBT 리스닝 객관식 문제를 풀어라.
+- AUDIO_TEXT에는 대화/강의 스크립트가, OCR_TEXT에는 문제와 선택지가 포함되어 있다.
+- answer에는 정답 선택지(번호 또는 글자)를 담고, detail에 근거 설명을 짧게 써라.
+`;
+  } else if (mode === 'writing') {
+    taskDesc = `
+[MODE] WRITING
+
+당신의 목표:
+- TOEFL iBT Writing 문제에 대해 "최고 점수"를 받을 수 있는 모범 에세이를 작성하라.
+- OCR_TEXT에는 통합형/Academic Discussion 프롬프트가 들어있다.
+- answer 필드에 영어 에세이 본문 전체를 작성하라.
+- 단어 수는 대략 200~280 단어 사이가 되도록 해라.
+- detail에는 에세이의 간단한 구조 요약(한글/영어 혼합 가능)을 짧게 써라.
+`;
+  } else if (mode === 'speaking') {
+    taskDesc = `
+[MODE] SPEAKING
+
+당신의 목표:
+- TOEFL iBT Speaking 문제에 대해 "최고 점수"를 받을 수 있는 모범 스크립트를 작성하라.
+- OCR_TEXT (그리고 필요하면 AUDIO_TEXT)를 참고하여, 말했을 때 45~60초 정도가 되는 답변을 만들어라.
+- answer 필드에 영어 스크립트 전체를 작성하라.
+- detail에는 핵심 포인트를 bullet 형식으로 짧게 요약하라.
+`;
+  } else {
+    taskDesc = `
+[MODE] AUTO
+
+당신의 목표:
+- 주어진 정보를 보고 어떤 형태의 문제인지 추론해서 가장 자연스러운 방식으로 답을 생성하라.
+- answer에 사람이 바로 보고 사용할 수 있는 "최고의 답변"을 넣고, detail에 짧은 설명을 넣어라.
+`;
+  }
+
+  return `
+${taskDesc}
+
+[입력 데이터]
+
+OCR_TEXT:
+${trimmedOcr}
+
+AUDIO_TEXT:
+${trimmedAudio}
+`.trim();
+}
+
+function parseModelJson(text) {
+  // 모델이 설명 + JSON을 섞어서 보낼 수도 있으니, 첫 번째 { ... } 블록만 추출 시도
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    throw new Error('JSON 형태를 찾지 못했습니다.');
+  }
+  const jsonStr = text.slice(firstBrace, lastBrace + 1);
+  return JSON.parse(jsonStr);
+}
 
 exports.handler = async (event, context) => {
-  if (event.httpMethod !== "POST") {
+  if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
-      body: JSON.stringify({ error: "POST only" })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Method not allowed' })
     };
   }
-
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  const model  = process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini";
-
-  if (!apiKey) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Missing OPENROUTER_API_KEY" })
-    };
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(event.body || "{}");
-  } catch (e) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Invalid JSON body" })
-    };
-  }
-
-  const modeRaw = (payload.mode || "auto").toString().toLowerCase();
-  const mode = ["reading", "listening", "writing", "speaking"].includes(modeRaw)
-    ? modeRaw
-    : "auto";
-
-  const ocrText =
-    (payload.ocrText || "") +
-    (payload.passage || "") +
-    (payload.question || "");
-  const audioText =
-    payload.audioText ||
-    payload.stt ||
-    "";
-
-  const trimmedOCR   = (ocrText || "").trim();
-  const trimmedAudio = (audioText || "").trim();
-
-  if (!trimmedOCR && !trimmedAudio) {
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        result: "[ANSWER] 없음\n[WHY] 화면/OCR/음성 텍스트가 거의 없습니다."
-      })
-    };
-  }
-
-  const systemPrompt = `
-너는 TOEFL 연습용 AI 튜터다.
-브라우저에서 보이는 화면을 OCR한 텍스트(screen_ocr)와
-수험자가 말한 음성을 STT한 텍스트(audio_text)를 기반으로 문제를 풀거나 평가한다.
-
-입력으로 mode_hint를 추가로 받는다. (실제 값: "${mode}")
-
-mode_hint 규칙:
-- "reading"   → Reading 문제로 간주하고 Reading 형식으로만 답한다.
-- "listening" → Listening 문제로 간주하고 Listening 형식으로만 답한다.
-- "writing"   → Writing 에세이 문제로 간주한다.
-- "speaking"  → Speaking 답변 평가 문제로 간주한다.
-- "auto"      → 위 네 가지 중에서 가장 자연스러운 섹션을 스스로 판단한다.
-
-중요: 화면 OCR과 STT 텍스트는 불완전하고 노이즈가 많을 수 있다.
-그러나 수험자는 "정확도가 떨어져도 일단 정답 후보를 듣고 싶어 한다".
-따라서 다음 규칙을 반드시 지켜라.
-
---------------------------------
-[Reading / Listening 모드]
-
-- 지문/문제/보기를 보고 한 개의 핵심 문항만 골라 풀어라.
-- 항상 [ANSWER] 줄에는 정답 후보를 채워라.
-  - 예: 3 / C / (B, D) / 1-3-2-4 / 첫 번째 열에 ①, ②, ⑤
-  - 확신이 낮으면 "3 (추측)" 처럼 괄호 안에 추측임을 표시해도 좋다.
-- 정말로 문제인지조차 구분이 안 될 정도로 텍스트가 부족할 때만
-  예외적으로 [ANSWER] 없음 을 사용할 수 있다.
-- 출력 형식 (정확히 지켜라):
-
-  [ANSWER] 한 줄 정답 또는 정답 후보 (필요하면 "(추측)" 등 표시)
-  [WHY] 한국어로 근거와 다른 보기들이 오답인 이유를 간단히 설명.
-        확신이 낮다면 그 사실(추측임)을 여기서도 명시하라.
-
---------------------------------
-[Writing 모드]
-
-- screen_ocr와 audio_text를 보고, TOEFL Writing(통합형/독립형)에 어울리게 에세이를 작성한다.
-- 항상 에세이와 피드백을 채워라. 정보가 부족하면 "가능한 범위에서 추측"해서 작성하되
-  자료 부족 사실을 피드백에 명시해라.
-- 출력 형식:
-
-  [ESSAY]
-  (TOEFL 스타일의 영어 에세이, 250~320 단어 정도. 단락을 나누어 작성.)
-  [FEEDBACK]
-  (한국어로 구조/내용/문법에 대한 피드백과 개선 포인트를 간단히 정리.
-   정보 부족/추측 여부도 여기서 밝혀라.)
-
---------------------------------
-[Speaking 모드]
-
-- audio_text를 수험자의 Speaking 답변이라고 보고 평가한다.
-- 출력 형식:
-
-  [EVAL]
-  (한국어로 대략적인 점수 느낌, 강점/약점, 내용/구조/발음에 대한 피드백.
-   STT가 부정확하면 그 점도 언급.)
-  [MODEL]
-  (해당 질문에 대한 45~60초 분량의 영어 모범 답변)
-  [KOREAN]
-  (한국어로 구체적인 개선 팁, 어떤 식으로 말하면 더 좋은지)
-
---------------------------------
-[Auto 모드]
-
-- mode_hint = auto 일 때만 사용한다.
-- 입력을 보고 Reading/Listening/Writing/Speaking 중 하나를 선택하고,
-  선택한 섹션의 형식으로만 출력한다.
-
---------------------------------
-공통 규칙:
-- 절대로 인사말, 마크다운, 불필요한 텍스트를 추가하지 말고,
-  아래 태그만 사용하라: [ANSWER], [WHY], [ESSAY], [FEEDBACK], [EVAL], [MODEL], [KOREAN]
-- Reading/Listening에서는 웬만하면 항상 [ANSWER]에 뭔가를 채워라.
-- 불확실하면 [ANSWER]에서 "3 (추측)"처럼 표시하고,
-  [WHY]에서 왜 확신이 낮은지 설명하라.
-`.trim();
-
-  const userPrompt = `
-[mode_hint]
-${mode}
-
-[screen_ocr]
-${trimmedOCR || "(비어있음)"}
-
-[audio_text]
-${trimmedAudio || "(비어있음)"}
-
-위 정보를 바탕으로, mode_hint 규칙에 따라 해당 섹션 형식으로만 답변하라.
-`.trim();
 
   try {
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app/",
-        "X-Title": "answer-site"
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ]
-      })
-    });
+    const body = JSON.parse(event.body || '{}');
+    const mode = (body.mode || 'reading').toLowerCase();
+    const ocrText = body.ocrText || '';
+    const audioText = body.audioText || '';
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.error("OpenRouter error:", resp.status, text);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "OpenRouter request failed", detail: text })
+    const userPrompt = buildUserPrompt(mode, ocrText, audioText);
+
+    const systemMessage = {
+      role: 'system',
+      content: `
+당신은 TOEFL iBT 문제를 대신 풀어주는 AI 조교이다.
+항상 아래 JSON 형식으로만 답해야 한다. 다른 텍스트를 JSON 밖에 쓰지 마라.
+
+JSON 스키마:
+{
+  "answer": string,    // 사람이 바로 보고 사용할 "최고의 답변" (정답 번호, 선택지, 에세이 전체, 스피킹 스크립트 등)
+  "confidence": number, // 0~1 또는 0~100 사이의 숫자. 너가 이 answer가 실제로 정답/적절한 답이라고 생각하는 확률.
+  "detail": string      // 짧은 이유 설명, 근거, 구조 요약 등
+}
+
+규칙:
+- confidence는 너의 "실제 정답일 것 같은 확률"을 나타낸다.
+  - 예: 0.82 또는 82 는 약 82% 확신.
+- 만약 너의 확신이 0.1 (10%) 미만이면, 억지로 찍지 말고:
+  - "answer": "?"
+  - "confidence": 0 또는 0.05 정도
+  - "detail"에는 왜 확신이 없는지 간단히 적어라.
+- READING/LISTENING 에서는 보통 answer에 정답 번호 또는 선택지 텍스트만 넣어라.
+- WRITING/SPEAKING 에서는 answer에 "모범 에세이/스피킹 스크립트 전체"를 넣어라.
+- detail은 너무 길게 쓰지 말고 핵심만 요약하라.
+
+반드시 위 JSON 객체 하나만 응답하라.
+      `.trim()
+    };
+
+    const userMessage = {
+      role: 'user',
+      content: userPrompt
+    };
+
+    const rawContent = await callOpenRouterChat([systemMessage, userMessage]);
+
+    let parsed;
+    try {
+      parsed = parseModelJson(rawContent);
+    } catch (e) {
+      // 파싱 실패 시 안전한 기본값
+      parsed = {
+        answer: '?',
+        confidence: 0,
+        detail: '모델 응답 파싱 실패: ' + e.toString()
       };
     }
 
-    const data = await resp.json();
-    const resultText =
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message &&
-      data.choices[0].message.content
-        ? data.choices[0].message.content
-        : "";
+    let answer = (typeof parsed.answer === 'string') ? parsed.answer.trim() : '?';
+    let conf = Number(parsed.confidence);
+    if (!Number.isFinite(conf)) conf = 0;
+
+    // 0~1 또는 0~100 양쪽 다 허용 → 0~100으로 정규화
+    if (conf <= 1) {
+      conf = conf * 100;
+    }
+    if (conf < 0) conf = 0;
+    if (conf > 100) conf = 100;
+
+    // 확신도 10% 미만이면 강제로 "?" 처리 (이중 안전장치)
+    if (conf < 10) {
+      answer = '?';
+    }
+
+    const detail = (typeof parsed.detail === 'string') ? parsed.detail : '';
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ result: resultText })
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify({
+        mode,
+        answer,
+        confidence: conf,
+        detail
+      })
     };
   } catch (e) {
-    console.error(e);
+    console.error('solve.js error:', e);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Exception calling OpenRouter", detail: e.toString() })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        answer: '?',
+        confidence: 0,
+        detail: '서버 내부 에러: ' + e.toString()
+      })
     };
   }
 };
