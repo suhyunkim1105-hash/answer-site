@@ -51,7 +51,7 @@
       pointer-events: none;
     }
 
-    /* 하단 컨트롤: 상태 + 배율 + 수동 인식 */
+    /* 하단 컨트롤: 상태 + 배율 */
     #controls {
       margin-top: 6px;
       font-size: 11px;
@@ -78,19 +78,6 @@
     #zoomRange {
       flex: 1 1 auto;
     }
-    #btnOCRNow {
-      flex: 0 0 auto;
-      padding: 4px 8px;
-      font-size: 11px;
-      border-radius: 6px;
-      border: 1px solid #666;
-      background: #111;
-      color: #f5f5f5;
-      cursor: pointer;
-    }
-    #btnOCRNow:active {
-      transform: scale(0.97);
-    }
   </style>
 </head>
 <body>
@@ -106,7 +93,6 @@
     <div class="row">
       <span class="label">배율</span>
       <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
-      <button id="btnOCRNow">지금 인식</button>
     </div>
   </div>
 </div>
@@ -129,7 +115,6 @@
   const video      = document.getElementById('video');
   const statusLine = document.getElementById('statusLine');
   const zoomRange  = document.getElementById('zoomRange');
-  const btnOCRNow  = document.getElementById('btnOCRNow');
 
   // 🔤 영어만 인식 (가로/세로 상관 없이)
   const OCR_LANG = "eng";
@@ -197,12 +182,6 @@
   zoomRange.addEventListener("input", () => {
     const scale = parseFloat(zoomRange.value);
     video.style.transform = `scale(${scale})`;
-  });
-
-  btnOCRNow.addEventListener("click", () => {
-    if (ocrRunning) return;
-    lastOcrTime = Date.now();
-    doOCROnce(true);
   });
 
   // ---------- 밝기 + 움직임 분석 ----------
