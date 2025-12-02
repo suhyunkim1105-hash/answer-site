@@ -134,10 +134,8 @@
   // 🔤 영어만 인식 (가로/세로 상관 없이)
   const OCR_LANG = "eng";
 
-  // remote.html에서 선택한 모드 읽어서 표시만 함 (여기서는 버튼 없음)
+  // remote.html에서 선택한 모드 읽어서 표시만 함
   let currentMode = "reading";
-
-  // Firebase에서 modeHint 구독해서 상태만 보여주기
   db.ref("p2p/state/modeHint").on("value", snap => {
     const m = snap.val();
     if (m) {
@@ -273,6 +271,7 @@
           : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
       }
 
+      // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
       if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce(false);
@@ -283,7 +282,61 @@
     requestAnimationFrame(loop);
   }
 
-  // ---------- OCR (중앙 90% 영역, 필터 느슨하게) ----------
+  // ---------- 고해상도 스틸 우선 캡처 ----------
+  async function captureToCanvas(canvas, ctx) {
+    // 1순위: ImageCapture.takePhoto() (Chrome + 일부 안드로이드)
+    if (imageCapture && typeof imageCapture.takePhoto === "function") {
+      try {
+        const blob = await imageCapture.takePhoto();
+        const imgBitmap = await createImageBitmap(blob);
+        drawCroppedScaled(imgBitmap, canvas, ctx);
+        return;
+      } catch (e) {
+        console.warn("takePhoto 실패, grabFrame 시도:", e);
+      }
+    }
+
+    // 2순위: grabFrame()
+    if (imageCapture && typeof imageCapture.grabFrame === "function") {
+      try {
+        const bitmap = await imageCapture.grabFrame();
+        drawCroppedScaled(bitmap, canvas, ctx);
+        return;
+      } catch (e) {
+        console.warn("grabFrame 실패, video 프레임 fallback:", e);
+      }
+    }
+
+    // 3순위: video 프레임
+    fillCanvasFromVideoCenter(canvas, ctx);
+  }
+
+  // 중앙 90% 크롭 + 가로 최대 1600px로 스케일
+  function drawCroppedScaled(source, canvas, ctx) {
+    const fullW = source.width;
+    const fullH = source.height;
+
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
+    const cropX = Math.floor((fullW - cropW) / 2);
+    const cropY = Math.floor((fullH - cropH) / 2);
+
+    const maxW = 1600;
+    const scale = Math.min(1, maxW / cropW);
+    const outW = Math.floor(cropW * scale);
+    const outH = Math.floor(cropH * scale);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(
+      source,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
+  }
+
+  // ---------- OCR (스틸 캡처 기반) ----------
   async function doOCROnce(manual) {
     if (ocrRunning) return;
     ocrRunning = true;
@@ -296,21 +349,7 @@
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
 
-      if (imageCapture) {
-        try {
-          const bitmap = await imageCapture.grabFrame();
-          cropCenterToCanvas(bitmap.width, bitmap.height, (x, y, w, h) => {
-            canvas.width = w;
-            canvas.height = h;
-            ctx.drawImage(bitmap, x, y, w, h, 0, 0, w, h);
-          });
-        } catch (e) {
-          console.warn("grabFrame 실패, video 프레임 fallback:", e);
-          fillCanvasFromVideoCenter(canvas, ctx);
-        }
-      } else {
-        fillCanvasFromVideoCenter(canvas, ctx);
-      }
+      await captureToCanvas(canvas, ctx);
 
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
@@ -360,16 +399,7 @@
     }
   }
 
-  // 중앙 90%만 크롭
-  function cropCenterToCanvas(fullW, fullH, drawCallback) {
-    const scale = 0.9;
-    const w = Math.floor(fullW * scale);
-    const h = Math.floor(fullH * scale);
-    const x = Math.floor((fullW - w) / 2);
-    const y = Math.floor((fullH - h) / 2);
-    drawCallback(x, y, w, h);
-  }
-
+  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백용)
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -380,11 +410,25 @@
     }
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
-    cropCenterToCanvas(fullW, fullH, (sx, sy, sw, sh) => {
-      canvas.width = sw;
-      canvas.height = sh;
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-    });
+
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
+    const cropX = Math.floor((fullW - cropW) / 2);
+    const cropY = Math.floor((fullH - cropH) / 2);
+
+    const maxW = 1600;
+    const scale = Math.min(1, maxW / cropW);
+    const outW = Math.floor(cropW * scale);
+    const outH = Math.floor(cropH * scale);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(
+      video,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
   }
 
   startCamera();
