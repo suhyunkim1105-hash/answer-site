@@ -1,302 +1,626 @@
-// netlify/functions/solve.js
-// Netlify Functions (Node 18+) → global fetch 사용 (node-fetch 불필요)
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>answer-site | Remote</title>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
-// ---- 공통 유틸 ----
-function clip(str, max) {
-  if (!str) return "";
-  str = String(str).replace(/\r/g, "");
-  if (str.length <= max) return str;
-  return str.slice(-max); // 뒤쪽이 선지/질문인 경우가 많아서 뒤에서 자름
-}
+  <style>
+    * { box-sizing: border-box; }
 
-function makeErrorText(mode, msg) {
-  const message = (msg || "AI 호출 중 알 수 없는 오류가 발생했습니다.").trim();
+    body {
+      margin: 0;
+      padding: 10px;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
 
-  switch (mode) {
-    case "writing":
-      return [
-        "[ESSAY]",
-        "",
-        "[FEEDBACK]",
-        "에세이를 생성하지 못했습니다.",
-        message,
-        "",
-        "[P] 0.00"
-      ].join("\n");
+    .wrap {
+      max-width: 640px;
+      margin: 0 auto;
+    }
 
-    case "speaking":
-      return [
-        "[MODEL]",
-        "",
-        "[P]",
-        "0.00",
-        "",
-        "(설명) 스피킹 답안을 생성하는 중 오류가 발생했습니다.",
-        message
-      ].join("\n");
+    .mode-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
 
-    default: // reading / listening / auto
-      return [
-        "[ANSWER] ?",
-        "[P] 0.00",
-        "[WHY]",
-        message
-      ].join("\n");
-  }
-}
+    .mode-btn {
+      flex: 1 1 0;
+      padding: 8px 4px;
+      border-radius: 999px;
+      border: 1px solid #333;
+      background: #111;
+      color: #ddd;
+      font-size: 13px;
+    }
+    .mode-btn.active {
+      background: #0b5cff;
+      border-color: #0b5cff;
+      color: #fff;
+      font-weight: 600;
+    }
 
-// ---- 프롬프트 생성 ----
-function buildPrompt({ mode, ocrText, audioText }) {
-  const baseInfo = `
-You are an AI that solves official-style TOEFL iBT questions.
+    #statusLine, #aiStatusLine {
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-OCR text may contain noise, broken lines, or HTML junk. Ignore garbage and infer the intended question.
-You must always obey the OUTPUT FORMAT for the current mode.
-If your confidence in the final answer is below 0.1, use "?" as the answer.
-Always include a probability line "[P] 0.00" between 0 and 1 (your estimate is correct).`;
+    #answerCard {
+      background: #111;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      border: 1px solid #222;
+    }
 
-  const sharedContext = `
-[OCR_TEXT]
-${ocrText || "(none)"}
+    #answerMain {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      min-height: 26px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
 
-[AUDIO_TEXT]
-${audioText || "(none)"}
-`;
+    #answerProb {
+      font-size: 11px;
+      color: #9fd1ff;
+      margin-bottom: 6px;
+      min-height: 14px;
+    }
 
-  // READING / LISTENING
-  if (mode === "reading" || mode === "listening") {
-    return `
-${baseInfo}
+    #answerDetail {
+      font-size: 12px;
+      line-height: 1.4;
+      background: #050505;
+      border-radius: 6px;
+      padding: 8px;
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
 
-MODE: ${mode.toUpperCase()}
-Task: Read the OCR_TEXT (and AUDIO_TEXT if listening). Identify the TOEFL multiple-choice question and options.
-Pick the single best answer (or most likely correct choice if the question is unclear).
+    .btn-group {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
 
-If the question asks for a letter/number choice, answer only that label (e.g. "B" or "3").
-If the question is unclear but you can guess, still choose one most probable option.
-If confidence < 0.1, set answer to "?".
+    button {
+      font-family: inherit;
+    }
 
-OUTPUT FORMAT (exactly):
-[ANSWER] <your final answer, like "B" or "3" or "?" >
-[P] <probability between 0 and 1, e.g. 0.78>
-[WHY]
-- Brief Korean explanation of why, based on the passage.
-- One line per option explaining why others are wrong, if possible.
+    .btn-primary {
+      width: 100%;
+      padding: 10px 6px;
+      border-radius: 999px;
+      border: none;
+      background: #0b5cff;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
 
-${sharedContext}
-`;
-  }
+    .btn-secondary {
+      width: 100%;
+      padding: 8px 6px;
+      border-radius: 999px;
+      border: 1px solid #333;
+      background: #111;
+      color: #eee;
+      font-size: 13px;
+    }
+    .btn-secondary:active {
+      transform: scale(0.98);
+    }
 
-  // WRITING
-  if (mode === "writing") {
-    return `
-${baseInfo}
+    #btnToggleDebug {
+      margin-top: 8px;
+      font-size: 11px;
+      padding: 6px 8px;
+      border-radius: 999px;
+      border: 1px solid #444;
+      background: #050505;
+      color: #ccc;
+    }
 
-MODE: WRITING
-Task: Use OCR_TEXT (and AUDIO_TEXT if useful) to infer the TOEFL writing prompt (integrated or discussion).
-Write a high-scoring model answer. Assume a realistic TOEFL time limit.
+    #debugPanel {
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 8px;
+      background: #050505;
+      border: 1px solid #222;
+      font-size: 11px;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    #debugPanel.hidden {
+      display: none;
+    }
 
-Length: about 150-225 English words total. Do NOT exceed ~250 words.
+    .dbg-title {
+      font-weight: 600;
+      color: #7fd6ff;
+      margin: 4px 0 2px;
+    }
 
-OUTPUT FORMAT (exactly):
-[ESSAY]
-<English essay here>
+    .dbg-pre {
+      background: #000;
+      border-radius: 4px;
+      padding: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="mode-bar">
+    <button class="mode-btn active" data-mode="reading">Reading</button>
+    <button class="mode-btn" data-mode="listening">Listening</button>
+    <button class="mode-btn" data-mode="writing">Writing</button>
+    <button class="mode-btn" data-mode="speaking">Speaking</button>
+  </div>
 
-[FEEDBACK]
-- In Korean, very short feedback on structure/content/grammar.
-- Mention 2~3 strengths and 2~3 weaknesses.
+  <div id="statusLine">섹션: reading · OCR: - · 카메라 상태: -</div>
 
-[P] <probability between 0 and 1 that this essay matches the prompt reasonably well>
+  <div id="answerCard">
+    <div id="answerMain"></div>
+    <div id="answerProb"></div>
+    <pre id="answerDetail"></pre>
+  </div>
 
-${sharedContext}
-`;
-  }
+  <div class="btn-group">
+    <button id="btnSolve" class="btn-primary">이 질문 풀기</button>
+    <button id="btnAccumulate" class="btn-secondary">지문 누적 (긴 지문용)</button>
+    <button id="btnReset" class="btn-secondary">이 세션 초기화</button>
+    <button id="btnSTT" class="btn-secondary">음성 인식 시작 (Listening/Speaking)</button>
+  </div>
 
-  // SPEAKING
-  if (mode === "speaking") {
-    return `
-${baseInfo}
+  <div id="aiStatusLine">AI 풀이 전.</div>
 
-MODE: SPEAKING
-Goal: Generate the best possible TOEFL iBT speaking answer script that the student can read out loud.
+  <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
 
-Use OCR_TEXT (and AUDIO_TEXT only if it clearly contains the speaking QUESTION, not an answer).
-Even if OCR_TEXT includes multiple-choice options (A/B/C/D), IGNORE those options.
-Do NOT solve it as a multiple-choice question. Do NOT output letters like "A", "B", "C" as the final answer.
+  <div id="debugPanel" class="hidden">
+    <div class="dbg-title">OCR 텍스트 (현재 화면)</div>
+    <pre id="dbgOcrCurrent" class="dbg-pre"></pre>
 
-Assume the student speaks rather slowly and has only 15 seconds of preparation time before speaking.
-You must respond as quickly as possible. Keep internal reasoning minimal and focus on emitting the final script.
+    <div class="dbg-title">지문 텍스트 (누적)</div>
+    <pre id="dbgOcrAccum" class="dbg-pre"></pre>
 
-Length: about 55-80 English words. NEVER exceed 90 words.
+    <div class="dbg-title">음성 텍스트 (STT)</div>
+    <pre id="dbgAudio" class="dbg-pre"></pre>
+  </div>
+</div>
 
-Pronunciation help:
-- For a few words (around 3–6) that are likely hard to pronounce (academic vocabulary, long words),
-  add Korean Hangul pronunciation in parentheses RIGHT AFTER the word.
-- Example: sociology (소시오럴러지)
-- Do NOT add pronunciation to easy words like "I", "think", "because", "very", etc.
-- Keep the script readable; do not add pronunciation for every word.
-
-OUTPUT FORMAT (exactly):
-[MODEL]
-<English speaking script only, full sentences, with some words followed by Korean pronunciation in parentheses>
-
-[P]
-<probability between 0 and 1 that this script is appropriate for the task>
-
-${sharedContext}
-`;
-  }
-
-  // AUTO / 기타
-  return `
-${baseInfo}
-
-MODE: AUTO
-When unsure of the section, assume READING-style multiple-choice.
-Use the same OUTPUT FORMAT as READING:
-[ANSWER]
-[P]
-[WHY]
-
-${sharedContext}
-`;
-}
-
-// ---- OpenRouter 호출 ----
-async function callOpenRouter(prompt, mode) {
-  if (!OPENROUTER_API_KEY) {
-    return {
-      ok: false,
-      text: makeErrorText(
-        mode,
-        "OpenRouter API key가 설정되어 있지 않습니다. Netlify 환경변수 OPENROUTER_API_KEY를 확인하세요."
-      )
-    };
-  }
-
-  const body = {
-    model: OPENROUTER_MODEL,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are an expert TOEFL iBT AI solver. Follow the requested output format strictly."
-      },
-      { role: "user", content: prompt }
-    ]
+<script>
+  // ---------------- Firebase ----------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+    authDomain: "answer-site-p2p.firebaseapp.com",
+    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "answer-site-p2p",
+    storageBucket: "answer-site-p2p.firebasestorage.app",
+    messagingSenderId: "364227113735",
+    appId: "1:364227113735:web:b18355cf0b16454663cba2",
+    measurementId: "G-C8MRHK5ZGS"
   };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
 
-  const fetchOptions = {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-      "X-Title": "answer-site-toefl-helper"
-    },
-    body: JSON.stringify(body)
-  };
+  // --------------- DOM refs -----------------
+  const modeButtons = Array.from(document.querySelectorAll(".mode-btn"));
+  const statusLine  = document.getElementById("statusLine");
+  const answerMain  = document.getElementById("answerMain");
+  const answerProb  = document.getElementById("answerProb");
+  const answerDetail= document.getElementById("answerDetail");
+  const aiStatusLine= document.getElementById("aiStatusLine");
 
-  let res;
-  let rawText = "";
+  const btnSolve      = document.getElementById("btnSolve");
+  const btnAccumulate = document.getElementById("btnAccumulate");
+  const btnReset      = document.getElementById("btnReset");
+  const btnSTT        = document.getElementById("btnSTT");
+  const btnToggleDebug= document.getElementById("btnToggleDebug");
 
-  try {
-    // 별도의 AbortController/타임아웃 사용 X
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", fetchOptions);
-    rawText = await res.text();
-  } catch (e) {
-    return {
-      ok: false,
-      text: makeErrorText(
-        mode,
-        `OpenRouter 요청 중 네트워크 오류 또는 타임아웃이 발생했습니다. (클라이언트)\n에러: ${e.toString()}`
-      )
-    };
+  const debugPanel    = document.getElementById("debugPanel");
+  const dbgOcrCurrent = document.getElementById("dbgOcrCurrent");
+  const dbgOcrAccum   = document.getElementById("dbgOcrAccum");
+  const dbgAudio      = document.getElementById("dbgAudio");
+
+  // --------------- State -----------------
+  let currentSection = "reading";
+
+  let latestOcrText   = "";
+  let latestOcrConf   = null;
+  let cameraBlocked   = false;
+
+  let questionAccumText = ""; // 긴 지문 누적용
+  let sttText           = ""; // STT 결과 전체
+
+  let solving       = false;
+  let lastCommandTs = 0;
+
+  // STT 관련
+  let recognition        = null;
+  let sttShouldRestart   = false;
+  let sttActive          = false;
+
+  // ------------- UI helpers ----------------
+  function sectionLabel(mode) {
+    switch (mode) {
+      case "reading":   return "reading";
+      case "listening": return "listening";
+      case "writing":   return "writing";
+      case "speaking":  return "speaking";
+      default:          return mode;
+    }
   }
 
-  const trimmed = rawText.trim();
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  const looksHtml =
-    ct.includes("text/html") ||
-    /^<!?html/i.test(trimmed.slice(0, 20)) ||
-    /^<head/i.test(trimmed.slice(0, 20)) ||
-    /^<body/i.test(trimmed.slice(0, 20));
-
-  if (!res.ok || looksHtml) {
-    return {
-      ok: false,
-      text: makeErrorText(
-        mode,
-        `OpenRouter 응답 오류 (status=${res.status}). Inactivity Timeout 같은 HTML 에러 페이지가 왔을 수 있습니다. 잠시 후 다시 시도하세요.`
-      )
-    };
+  function updateStatusLine() {
+    let ocrPart = "OCR: -";
+    if (latestOcrText && latestOcrText.trim().length > 0) {
+      const confStr = (typeof latestOcrConf === "number")
+        ? latestOcrConf.toFixed(1) + "%"
+        : "?";
+      ocrPart = "OCR: conf=" + confStr + " (완료)";
+    }
+    const camPart = cameraBlocked ? "카메라 상태: 가려짐" : "카메라 상태: 정상";
+    statusLine.textContent =
+      "섹션: " + sectionLabel(currentSection) + " · " + ocrPart + " · " + camPart;
   }
 
-  let json;
-  try {
-    json = JSON.parse(trimmed);
-  } catch (e) {
-    return {
-      ok: false,
-      text: makeErrorText(
-        mode,
-        "OpenRouter 응답을 JSON으로 해석할 수 없습니다.\nraw 일부:\n" +
-          trimmed.slice(0, 500)
-      )
-    };
+  function updateDebugPanel() {
+    dbgOcrCurrent.textContent = latestOcrText || "(없음)";
+    dbgOcrAccum.textContent   = questionAccumText || "(없음)";
+    dbgAudio.textContent      = sttText || "(없음)";
   }
 
-  const content =
-    json.choices &&
-    json.choices[0] &&
-    json.choices[0].message &&
-    json.choices[0].message.content;
+  function setMode(mode) {
+    currentSection = mode;
+    modeButtons.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+    updateStatusLine();
 
-  if (!content) {
-    return {
-      ok: false,
-      text: makeErrorText(
-        mode,
-        "OpenRouter 응답에 content 필드가 없습니다."
-      )
-    };
+    // index.html 쪽에 현재 모드 알려주기
+    db.ref("p2p/state").update({
+      modeHint: mode,
+      modeUpdatedAt: Date.now()
+    });
   }
 
-  return { ok: true, text: content.trim() };
-}
-
-// ---- Netlify handler ----
-exports.handler = async (event, context) => {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
-  }
-
-  let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch (e) {
-    return { statusCode: 400, body: "Invalid JSON body" };
-  }
-
-  let { mode, ocrText, audioText } = body;
-  mode = (mode || "auto").toLowerCase();
-
-  const cleanOcr = clip(ocrText || "", 2500);
-  const cleanAudio = clip(audioText || "", 1200);
-
-  const prompt = buildPrompt({
-    mode,
-    ocrText: cleanOcr,
-    audioText: cleanAudio
+  modeButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      setMode(mode);
+    });
   });
 
-  const result = await callOpenRouter(prompt, mode);
+  // --------------- Firebase listeners ---------------
+  // p2p/state 구독: OCR / 카메라 상태
+  db.ref("p2p/state").on("value", snap => {
+    const v = snap.val() || {};
+    latestOcrText = v.ocrText || "";
+    latestOcrConf = typeof v.ocrConfidence === "number" ? v.ocrConfidence : null;
+    cameraBlocked = !!v.cameraBlocked;
+    updateStatusLine();
+    updateDebugPanel();
+  });
 
-  return {
-    statusCode: 200,
-    body: result.text
-  };
-};
+  // p2p/command 구독: reading/listening 자동 풀이용
+  db.ref("p2p/command").on("value", snap => {
+    const cmd = snap.val();
+    if (!cmd || cmd.type !== "solve") return;
+
+    const ts = cmd.timestamp || 0;
+    if (ts <= lastCommandTs) return;
+    lastCommandTs = ts;
+
+    // 자동 풀이는 reading / listening 에서만
+    if (currentSection === "reading" || currentSection === "listening") {
+      solveCurrentQuestion("auto");
+    }
+  });
+
+  // --------------- STT (Web Speech API) ----------------
+  function ensureRecognizer() {
+    if (recognition) return recognition;
+
+    const SR =
+      window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    if (!SR) {
+      alert("이 브라우저에서는 Web Speech API(음성 인식)를 지원하지 않습니다.");
+      return null;
+    }
+
+    recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = true;
+
+    recognition.onresult = (event) => {
+      let finalChunk = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (res.isFinal && res[0] && res[0].transcript) {
+          finalChunk += res[0].transcript + " ";
+        }
+      }
+      if (finalChunk) {
+        sttText += (sttText ? " " : "") + finalChunk.trim();
+        updateDebugPanel();
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.warn("STT error:", event.error);
+    };
+
+    recognition.onend = () => {
+      sttActive = false;
+      if (sttShouldRestart) {
+        // 사용자가 중지 누르지 않았으면 자동 재시작 (질문 길어질 때 대비)
+        try {
+          recognition.start();
+          sttActive = true;
+        } catch (e) {
+          console.warn("STT 재시작 실패:", e);
+          sttShouldRestart = false;
+        }
+      }
+      updateSttButton();
+    };
+
+    return recognition;
+  }
+
+  function updateSttButton() {
+    btnSTT.textContent = sttActive
+      ? "음성 인식 중지"
+      : "음성 인식 시작 (Listening/Speaking)";
+  }
+
+  function startSTT() {
+    const rec = ensureRecognizer();
+    if (!rec) return;
+    if (sttActive) return;
+
+    try {
+      sttShouldRestart = true;
+      rec.start();
+      sttActive = true;
+      updateSttButton();
+    } catch (e) {
+      console.warn("STT start 실패:", e);
+    }
+  }
+
+  function stopSTT() {
+    sttShouldRestart = false;
+    if (recognition && sttActive) {
+      try {
+        recognition.stop();
+      } catch (e) {
+        console.warn("STT stop 실패:", e);
+      }
+    }
+    sttActive = false;
+    updateSttButton();
+  }
+
+  btnSTT.addEventListener("click", () => {
+    if (!sttActive) startSTT();
+    else stopSTT();
+  });
+
+  // --------------- Solve 버튼 / 누적 / 초기화 ---------------
+  btnAccumulate.addEventListener("click", () => {
+    const text = (latestOcrText || "").trim();
+    if (!text) return;
+    if (!questionAccumText.includes(text)) {
+      questionAccumText += (questionAccumText ? "\n\n" : "") + text;
+      updateDebugPanel();
+    }
+  });
+
+  btnReset.addEventListener("click", () => {
+    questionAccumText = "";
+    sttText = "";
+    stopSTT();
+    answerMain.textContent = "";
+    answerProb.textContent = "";
+    answerDetail.textContent = "";
+    aiStatusLine.textContent = "AI 풀이 전.";
+    updateDebugPanel();
+  });
+
+  btnSolve.addEventListener("click", () => {
+    solveCurrentQuestion("manual");
+  });
+
+  btnToggleDebug.addEventListener("click", () => {
+    debugPanel.classList.toggle("hidden");
+  });
+
+  // --------------- AI 호출 ---------------
+  function showErrorAnswer(mode, message) {
+    if (mode === "writing") {
+      answerMain.textContent = "모범 에세이 생성 실패";
+      answerProb.textContent = "";
+      answerDetail.textContent =
+        "[오류]\n" +
+        (message || "서버 오류로 인해 에세이를 생성하지 못했습니다.");
+    } else if (mode === "speaking") {
+      answerMain.textContent = "(스피킹 답안 생성 실패)";
+      answerProb.textContent = "";
+      answerDetail.textContent =
+        "[오류]\n" +
+        (message || "서버 오류로 인해 스크립트를 생성하지 못했습니다.");
+    } else {
+      answerMain.textContent = "?";
+      answerProb.textContent = "맞을 확률(추정): 0%";
+      answerDetail.textContent =
+        "[오류]\n" +
+        (message || "서버 오류로 인해 답을 생성하지 못했습니다.");
+    }
+    aiStatusLine.textContent = "AI 풀이 실패.";
+  }
+
+  async function solveCurrentQuestion(trigger) {
+    if (solving) return;
+    const mode = currentSection;
+
+    const effectiveOcr = (questionAccumText.trim() || latestOcrText.trim());
+    const effectiveLen = effectiveOcr.replace(/\s+/g, "").length;
+    const conf = (typeof latestOcrConf === "number") ? latestOcrConf : 0;
+
+    // OCR 품질이 너무 떨어지면 그냥 건너뜀
+    if (!effectiveOcr || effectiveLen < 10 || conf < 10) {
+      answerMain.textContent = "?";
+      answerProb.textContent = "맞을 확률(추정): 0%";
+      answerDetail.textContent =
+        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 10% 미만이라서 풀이를 건너뜁니다.\n" +
+        "화면을 더 가깝게/선명하게 찍고 다시 시도하세요.";
+      aiStatusLine.textContent = "AI 풀이 생략 (OCR 품질 부족).";
+      return;
+    }
+
+    // 스피킹/리스닝은 문제 풀 때 STT 정지
+    if (mode === "speaking" || mode === "listening") {
+      stopSTT();
+    }
+
+    solving = true;
+    aiStatusLine.textContent = "AI 풀이 중...";
+
+    try {
+      const payload = {
+        mode,
+        ocrText: effectiveOcr,
+        audioText: sttText.trim(),
+        questionAccum: questionAccumText.trim(),
+        source: trigger || "manual"
+      };
+
+      const resp = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        const msg = "서버 응답 오류 (status " + resp.status + ").";
+        showErrorAnswer(mode, msg);
+        return;
+      }
+
+      const data = await resp.json();
+      const raw = (data && data.text) ? data.text : "";
+      renderAiResult(raw, mode);
+      aiStatusLine.textContent = "AI 풀이 완료.";
+    } catch (e) {
+      const msg = "네트워크/요청 중 오류: " + (e && e.message ? e.message : e);
+      showErrorAnswer(mode, msg);
+    } finally {
+      solving = false;
+    }
+  }
+
+  // --------------- AI 결과 파싱 ---------------
+  function renderAiResult(raw, mode) {
+    const text = (raw || "").trim();
+    if (!text) {
+      showErrorAnswer(mode, "AI 응답이 비어 있습니다.");
+      return;
+    }
+
+    if (mode === "writing") {
+      const mEssay = text.match(/\[ESSAY\]([\s\S]*?)(?:\[FEEDBACK\]|\Z)/i);
+      const mFb    = text.match(/\[FEEDBACK\]([\s\S]*)$/i);
+      const essay  = mEssay ? mEssay[1].trim() : text;
+      const fb     = mFb ? mFb[1].trim() : "";
+
+      answerMain.textContent = "모범 에세이";
+      answerProb.textContent = "";
+      answerDetail.textContent =
+        essay +
+        (fb ? "\n\n[피드백]\n" + fb : "");
+      return;
+    }
+
+    if (mode === "speaking") {
+      const mAns   = text.match(/\[ANSWER\]([\s\S]*?)(?:\[WORDS\]|\[KOREAN\]|\Z)/i);
+      const mWords = text.match(/\[WORDS\]([\s\S]*?)(?:\[KOREAN\]|\Z)/i);
+      const mKor   = text.match(/\[KOREAN\]([\s\S]*)$/i);
+
+      const script = mAns ? mAns[1].trim() : text;
+      const words  = mWords ? mWords[1].trim() : "";
+      const kor    = mKor ? mKor[1].trim() : "";
+
+      answerMain.textContent = script;
+      answerProb.textContent = "";
+      let detail = "";
+      if (words) {
+        detail += "[발음 도움]\n" + words.trim() + "\n\n";
+      }
+      if (kor) {
+        detail += "[한국어 요약/팁]\n" + kor.trim();
+      }
+      answerDetail.textContent = detail || text;
+      return;
+    }
+
+    // 기본: reading / listening
+    let answer = "?";
+    let p = 0;
+    let why = "";
+
+    const mAns = text.match(/\[ANSWER\][^\S\r\n]*([^\n]+)/i);
+    if (mAns) {
+      answer = mAns[1].trim();
+    }
+
+    const mP = text.match(/\[P\][^\S\r\n]*([0-9.]+)/i);
+    if (mP) {
+      const val = parseFloat(mP[1]);
+      if (!isNaN(val)) {
+        p = Math.max(0, Math.min(1, val));
+      }
+    }
+
+    const mWhy = text.match(/\[WHY\]([\s\S]*)$/i);
+    if (mWhy) {
+      why = mWhy[1].trim();
+    }
+
+    answerMain.textContent = answer;
+    answerProb.textContent = "맞을 확률(추정): " + Math.round(p * 100) + "%";
+    answerDetail.textContent = why || text;
+  }
+
+  // 초기 상태 반영
+  updateStatusLine();
+  updateDebugPanel();
+  updateSttButton();
+</script>
+</body>
+</html>
