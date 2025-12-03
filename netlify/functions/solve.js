@@ -4,15 +4,51 @@
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
 
-// ===== 유틸 =====
+// ---- 공통 유틸 ----
 function clip(str, max) {
   if (!str) return "";
   str = String(str).replace(/\r/g, "");
   if (str.length <= max) return str;
-  // 지문 뒤쪽이 보통 문제/선지/요약이라 뒤에서 자름
-  return str.slice(-max);
+  return str.slice(-max); // 뒤쪽이 선지/질문인 경우가 많아서 뒤에서 자름
 }
 
+function makeErrorText(mode, msg) {
+  const message = (msg || "AI 호출 중 알 수 없는 오류가 발생했습니다.").trim();
+
+  switch (mode) {
+    case "writing":
+      return [
+        "[ESSAY]",
+        "",
+        "[FEEDBACK]",
+        "에세이를 생성하지 못했습니다.",
+        message,
+        "",
+        "[P] 0.00"
+      ].join("\n");
+
+    case "speaking":
+      return [
+        "[MODEL]",
+        "",
+        "[P]",
+        "0.00",
+        "",
+        "(설명) 스피킹 답안을 생성하는 중 오류가 발생했습니다.",
+        message
+      ].join("\n");
+
+    default: // reading / listening / auto
+      return [
+        "[ANSWER] ?",
+        "[P] 0.00",
+        "[WHY]",
+        message
+      ].join("\n");
+  }
+}
+
+// ---- 프롬프트 생성 ----
 function buildPrompt({ mode, ocrText, audioText }) {
   const baseInfo = `
 You are an AI that solves official-style TOEFL iBT questions.
@@ -30,7 +66,7 @@ ${ocrText || "(none)"}
 ${audioText || "(none)"}
 `;
 
-  // ---- READING / LISTENING: 객관식 ----
+  // READING / LISTENING
   if (mode === "reading" || mode === "listening") {
     return `
 ${baseInfo}
@@ -54,7 +90,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- WRITING ----
+  // WRITING
   if (mode === "writing") {
     return `
 ${baseInfo}
@@ -79,7 +115,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- SPEAKING: 답안 스크립트 ----
+  // SPEAKING
   if (mode === "speaking") {
     return `
 ${baseInfo}
@@ -109,7 +145,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- AUTO / 기타 ----
+  // AUTO / 기타
   return `
 ${baseInfo}
 
@@ -124,18 +160,17 @@ ${sharedContext}
 `;
 }
 
-// ===== OpenRouter 호출 =====
+// ---- OpenRouter 호출 ----
 async function callOpenRouter(prompt, mode) {
   if (!OPENROUTER_API_KEY) {
     return {
       ok: false,
-      text:
-        "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter API key가 설정되어 있지 않습니다."
+      text: makeErrorText(
+        mode,
+        "OpenRouter API key가 설정되어 있지 않습니다. Netlify 환경변수 OPENROUTER_API_KEY를 확인하세요."
+      )
     };
   }
-
-  // 스피킹은 12초, 나머지는 25초 타임아웃
-  const timeoutMs = mode === "speaking" ? 12000 : 25000;
 
   const body = {
     model: OPENROUTER_MODEL,
@@ -145,10 +180,7 @@ async function callOpenRouter(prompt, mode) {
         content:
           "You are an expert TOEFL iBT AI solver. Follow the requested output format strictly."
       },
-      {
-        role: "user",
-        content: prompt
-      }
+      { role: "user", content: prompt }
     ]
   };
 
@@ -163,33 +195,22 @@ async function callOpenRouter(prompt, mode) {
     body: JSON.stringify(body)
   };
 
-  let controller = null;
-  let timeoutId = null;
-  if (typeof AbortController !== "undefined") {
-    controller = new AbortController();
-    fetchOptions.signal = controller.signal;
-    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  }
-
   let res;
   let rawText = "";
 
   try {
-    res = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      fetchOptions
-    );
+    // ❗ 여기서는 별도의 AbortController/타임아웃을 쓰지 않는다.
+    // Netlify나 OpenRouter 쪽에서 타임아웃이 나면 그때의 에러만 처리.
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", fetchOptions);
     rawText = await res.text();
   } catch (e) {
-    if (timeoutId) clearTimeout(timeoutId);
     return {
       ok: false,
-      text:
-        "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter 요청 중 네트워크/타임아웃 오류가 발생했습니다.\n" +
-        `에러: ${e.toString()}`
+      text: makeErrorText(
+        mode,
+        `OpenRouter 요청 중 네트워크 오류 또는 타임아웃이 발생했습니다. (클라이언트)\n에러: ${e.toString()}`
+      )
     };
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
   }
 
   const trimmed = rawText.trim();
@@ -203,23 +224,24 @@ async function callOpenRouter(prompt, mode) {
   if (!res.ok || looksHtml) {
     return {
       ok: false,
-      text:
-        "[ANSWER] ?\n[P] 0.00\n[WHY]\n" +
-        `OpenRouter 응답 오류 (status=${res.status}). Inactivity Timeout 등 HTML 에러 페이지가 왔습니다. 잠시 후 다시 시도하세요.`
+      text: makeErrorText(
+        mode,
+        `OpenRouter 응답 오류 (status=${res.status}). Inactivity Timeout 같은 HTML 에러 페이지가 왔을 수 있습니다. 잠시 후 다시 시도하세요.`
+      )
     };
   }
 
-  // JSON 파싱
   let json;
   try {
     json = JSON.parse(trimmed);
   } catch (e) {
     return {
       ok: false,
-      text:
-        "[ANSWER] ?\n[P] 0.00\n[WHY]\n" +
-        "OpenRouter 응답을 JSON으로 해석할 수 없습니다.\n" +
-        `raw: ${trimmed.slice(0, 500)}`
+      text: makeErrorText(
+        mode,
+        "OpenRouter 응답을 JSON으로 해석할 수 없습니다.\nraw 일부:\n" +
+          trimmed.slice(0, 500)
+      )
     };
   }
 
@@ -232,15 +254,17 @@ async function callOpenRouter(prompt, mode) {
   if (!content) {
     return {
       ok: false,
-      text:
-        "[ANSWER] ?\n[P] 0.00\n[WHY]\n" +
-        "OpenRouter 응답에 content가 없습니다."
+      text: makeErrorText(
+        mode,
+        "OpenRouter 응답에 content 필드가 없습니다."
+      )
     };
   }
 
   return { ok: true, text: content.trim() };
 }
 
+// ---- Netlify handler ----
 exports.handler = async (event, context) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
@@ -267,5 +291,10 @@ exports.handler = async (event, context) => {
 
   const result = await callOpenRouter(prompt, mode);
 
-  return { statusCode: 200, body: result.text };
+  // Netlify 쪽에서는 항상 200으로 돌려주고,
+  // 내용 안에서 에러 여부를 표현 (포맷은 섹션별로 맞춰 둠)
+  return {
+    statusCode: 200,
+    body: result.text
+  };
 };
