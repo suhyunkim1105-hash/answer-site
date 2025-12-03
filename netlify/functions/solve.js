@@ -1,289 +1,257 @@
-/* netlify/functions/solve.js */
+// netlify/functions/solve.js
 
-exports.handler = async function(event, context) {
+// Netlify Node 18+ 에서는 fetch 가 기본 제공됨.
+
+exports.handler = async (event, context) => {
   try {
     if (event.httpMethod !== "POST") {
-      return {
-        statusCode: 405,
-        body: "Method Not Allowed"
-      };
+      return textResponse(200, "[ERROR] Use POST with JSON body.");
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    const modelName = process.env.OPENROUTER_MODEL || "gpt-5.1";
+    const body = safeParseJSON(event.body);
+    const modeRaw = (body.mode || "auto").toString().toLowerCase();
+    const ocrText = (body.ocrText || "").toString();
+    const audioText = (body.audioText || "").toString();
+
+    const mode = ["reading", "listening", "writing", "speaking"].includes(modeRaw)
+      ? modeRaw
+      : "auto";
+
+    // 완전 빈 입력 방지
+    if (!ocrText.trim() && !audioText.trim()) {
+      return textResponse(
+        200,
+        "[ERROR] OCR 텍스트와 음성 텍스트가 모두 비어 있습니다. 화면을 조금 더 크게/가깝게 찍거나, STT가 켜져 있는지 확인하세요."
+      );
+    }
+
+    const model = process.env.OPENROUTER_MODEL || "gpt-4.1-mini";
+    const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_TOKEN;
+
     if (!apiKey) {
-      return {
-        statusCode: 500,
-        body: "OPENROUTER_API_KEY not set"
-      };
+      return textResponse(
+        200,
+        "[ERROR] OPENROUTER_API_KEY 환경변수가 설정되어 있지 않습니다."
+      );
     }
 
-    let body;
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch (e) {
-      return {
-        statusCode: 400,
-        body: "Invalid JSON body"
-      };
-    }
+    // 모드별 프롬프트 구성
+    const messages = buildMessages({
+      mode,
+      ocrText,
+      audioText,
+    });
 
-    const section     = (body.section || "reading").toLowerCase();
-    const passageText = body.passageText || "";
-    const screenText  = body.screenText || "";
-    const audioText   = body.audioText || "";
-
-    const systemPrompt = buildSystemPrompt(section);
-    const userPrompt   = buildUserPrompt(section, passageText, screenText, audioText);
-
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + apiKey,
+        "Authorization": `Bearer ${apiKey}`,
+        // 선택: OpenRouter 권장 헤더 (없어도 동작은 함)
         "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site-toefl"
+        "X-Title": "answer-site-toefl-helper"
       },
       body: JSON.stringify({
-        model: modelName,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user",   content: userPrompt }
-        ],
+        model,
+        messages,
         temperature: 0.2,
-        max_tokens: 800
-      })
+        max_tokens: 900, // 너무 길어지지 않게 제한
+      }),
     });
 
-    if (!resp.ok) {
-      const txt = await resp.text();
-      return {
-        statusCode: 500,
-        body: "OpenRouter error: " + txt
-      };
+    if (!openRouterRes.ok) {
+      const errText = await safeReadText(openRouterRes);
+      return textResponse(
+        200,
+        `[ERROR] OpenRouter HTTP 오류 (status=${openRouterRes.status}).\n${truncate(errText, 800)}`
+      );
     }
 
-    const data = await resp.json();
+    const data = await openRouterRes.json().catch(() => null);
     const content =
-      data && data.choices && data.choices[0] && data.choices[0].message &&
-      data.choices[0].message.content
-        ? data.choices[0].message.content
-        : "";
+      data &&
+      data.choices &&
+      data.choices[0] &&
+      data.choices[0].message &&
+      data.choices[0].message.content;
 
-    return {
-      statusCode: 200,
-      body: content
-    };
-  } catch (e) {
-    return {
-      statusCode: 500,
-      body: "solve.js error: " + e.toString()
-    };
+    if (!content || typeof content !== "string") {
+      return textResponse(
+        200,
+        "[ERROR] OpenRouter에서 비어 있는 응답을 받았습니다."
+      );
+    }
+
+    // 항상 순수 텍스트로 반환 (HTML 절대 X)
+    return textResponse(200, content);
+  } catch (err) {
+    console.error("solve.js top-level error:", err);
+    return textResponse(
+      200,
+      `[ERROR] solve 함수 내부 예외: ${(err && err.message) || String(err)}`
+    );
   }
 };
 
-function buildSystemPrompt(section) {
-  const base =
-    "You are an expert TOEFL iBT AI solver. " +
-    "Always follow TOEFL format and constraints, and ALWAYS include a confidence line.\n" +
-    "If you are not at least 10% confident in the final answer, set the main answer to '?'.\n" +
-    "The [CONFIDENCE] value must be a single number between 0 and 1 (e.g. 0.27).\n";
+// ----------------- 유틸 함수들 -----------------
 
-  // ---------- READING ----------
-  if (section === "reading") {
-    return (
-      base +
-      "SECTION: READING.\n" +
-      "You receive:\n" +
-      "- passageText: possibly the whole reading passage (may be empty).\n" +
-      "- screenText: the CURRENT VISIBLE SCREEN (question + answer choices + maybe part of the passage).\n" +
-      "\n" +
-      "TOEFL reading question types you must handle:\n" +
-      "- Single-answer multiple choice (most common, 4 options, sometimes 5).\n" +
-      "- Multiple-answer questions (e.g., choose 2 answers).\n" +
-      "- Sentence insertion questions with boxes in the passage.\n" +
-      "- Summary questions (choose 3 of 6 options).\n" +
-      "- Table/Category questions (distribute options into columns/rows).\n" +
-      "\n" +
-      "INFER THE QUESTION TYPE from screenText.\n" +
-      "Use passageText as the MAIN reference if it exists, and screenText for the exact wording and options.\n" +
-      "\n" +
-      "When you output the main answer, you MUST:\n" +
-      "- Use ONLY labels that actually appear in the answer choices in screenText (numbers like 1–4/5, or letters, or BOX ids).\n" +
-      "- For sentence insertion, answer like 'BOX 2' or 'BOX 3' (one BOX only).\n" +
-      "- For multiple-answer questions, output a comma-separated list of labels with NO extra words (e.g., '2,4,5').\n" +
-      "- For summary questions (choose 3 of 6), output exactly 3 labels.\n" +
-      "- For table questions, group labels under each column.\n" +
-      "\n" +
-      "If the OCR text is clearly incomplete, badly broken, or does not contain enough information to solve the question,\n" +
-      "keep your confidence very low (<0.1) and set [ANSWER] ?.\n" +
-      "\n" +
-      "OUTPUT FORMAT (STRICT):\n" +
-      "[ANSWER] <final answer using ONLY valid labels or '?'>\n" +
-      "[CONFIDENCE] <0..1 number>\n" +
-      "[WHY]\n" +
-      "- Very short Korean explanation of why this answer is most likely correct.\n" +
-      "- Briefly mention why other choices are probably wrong (in Korean).\n"
-    );
-  }
-
-  // ---------- LISTENING ----------
-  if (section === "listening") {
-    return (
-      base +
-      "SECTION: LISTENING.\n" +
-      "You receive:\n" +
-      "- audioText: an ASR transcript (possibly noisy) of a TOEFL listening conversation/lecture.\n" +
-      "- screenText: the question and answer choices (current screen).\n" +
-      "\n" +
-      "Assume the user only heard the audio ONCE, so audioText is precious. Do NOT invent details that are clearly not in audioText.\n" +
-      "If the transcript is obviously too short, heavily corrupted, or missing key parts, keep confidence <0.1 and set [ANSWER] ?.\n" +
-      "\n" +
-      "Handle the same multiple-choice patterns as reading (single, multiple-answer, summary/table style if ever present).\n" +
-      "Use audioText as the main source of truth; use screenText to detect the question type and option labels.\n" +
-      "\n" +
-      "OUTPUT FORMAT (STRICT):\n" +
-      "[ANSWER] <choice label(s) or '?'>\n" +
-      "[CONFIDENCE] <0..1 number>\n" +
-      "[WHY]\n" +
-      "- Short Korean explanation using the key points from the listening transcript.\n"
-    );
-  }
-
-  // ---------- WRITING ----------
-  if (section === "writing") {
-    return (
-      base +
-      "SECTION: WRITING.\n" +
-      "You generate the BEST possible TOEFL writing answer in ENGLISH (not feedback on a student's answer).\n" +
-      "Inputs:\n" +
-      "- passageText: reading passage (for integrated tasks, may be empty for independent tasks).\n" +
-      "- audioText: lecture transcript (for integrated tasks, may be empty for independent tasks).\n" +
-      "- screenText: the task instructions (including whether it is integrated vs independent/discussion).\n" +
-      "\n" +
-      "Integrated Writing (reading + listening):\n" +
-      "- Summarize the main points of the lecture and explain how they relate to (usually contradict or challenge) the reading.\n" +
-      "- Do NOT add your own opinion.\n" +
-      "- Use clear structure: brief introduction, 2–3 body paragraphs grouping key points, short conclusion.\n" +
-      "- Typical target length: about 220–280 words.\n" +
-      "\n" +
-      "Independent / Academic Discussion Writing:\n" +
-      "- Respond directly to the prompt; clearly state your opinion or position.\n" +
-      "- Use 2–3 main reasons with simple but concrete examples.\n" +
-      "- Keep language natural and clear, not like a research paper.\n" +
-      "- Typical target length: about 150–220 words.\n" +
-      "\n" +
-      "GENERAL RULES:\n" +
-      "- Respect the length ranges above; do NOT produce extremely long essays.\n" +
-      "- Use vocabulary appropriate for a high-scoring TOEFL candidate (not graduate-level journal style).\n" +
-      "- Do not copy long chunks verbatim; paraphrase naturally.\n" +
-      "\n" +
-      "OUTPUT FORMAT (STRICT):\n" +
-      "[ESSAY]\n" +
-      "<your English essay>\n" +
-      "[CONFIDENCE] <0..1 number>\n"
-    );
-  }
-
-  // ---------- SPEAKING ----------
-  if (section === "speaking") {
-    return (
-      base +
-      "SECTION: SPEAKING.\n" +
-      "The user wants the BEST model answer in English for TOEFL speaking tasks (not feedback on their own answer).\n" +
-      "Inputs:\n" +
-      "- passageText: reading part (for integrated speaking tasks, may be empty).\n" +
-      "- audioText: lecture or conversation transcript (for integrated tasks, may be empty).\n" +
-      "- screenText: the speaking task instructions.\n" +
-      "\n" +
-      "STRUCTURE:\n" +
-      "- Start with 1 clear sentence that directly answers the question.\n" +
-      "- Then give 2 main reasons or points, each with a brief concrete example or detail.\n" +
-      "- End with 1 short wrap-up sentence.\n" +
-      "For integrated tasks, clearly use both the reading and listening information; do NOT add your own opinion.\n" +
-      "\n" +
-      "LENGTH (match TOEFL timing):\n" +
-      "- Task 1: about 90–110 words (~45 seconds when spoken).\n" +
-      "- Tasks 2–4: about 120–150 words (~60 seconds when spoken).\n" +
-      "\n" +
-      "VOCABULARY RULES:\n" +
-      "- Use natural, high-scoring TOEFL speaking vocabulary (around B2–C1 level).\n" +
-      "- Avoid very technical, graduate-level, or research-journal style words unless absolutely necessary.\n" +
-      "- If you use a word that would likely be difficult for a typical Korean TOEFL undergraduate student,\n" +
-      "  immediately add a Korean pronunciation hint in Hangul right after the word in parentheses.\n" +
-      "  Example: sustainable(서스테이너블), efficient(이피션트).\n" +
-      "- In the parentheses, write ONLY pronunciation (no Korean meanings), and limit these hints to at least 1 and at most 5 words.\n" +
-      "\n" +
-      "STYLE:\n" +
-      "- Sound like a natural spoken answer: use contractions (I'm, don't, it's, etc.), simple clear sentences, and logical flow.\n" +
-      "\n" +
-      "OUTPUT FORMAT (STRICT):\n" +
-      "[MODEL]\n" +
-      "<your English spoken-style answer, including pronunciation hints as needed>\n" +
-      "[CONFIDENCE] <0..1 number>\n"
-    );
-  }
-
-  // ---------- FALLBACK ----------
-  return (
-    base +
-    "Unknown section; behave like a general TOEFL helper.\n" +
-    "Still respect the [ANSWER]/[ESSAY]/[MODEL] + [CONFIDENCE] format depending on the context.\n"
-  );
+function textResponse(statusCode, body) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store"
+    },
+    body: typeof body === "string" ? body : String(body),
+  };
 }
 
-function buildUserPrompt(section, passageText, screenText, audioText) {
-  if (section === "reading") {
-    return (
-      "### passageText (may be empty, possibly whole passage)\n" +
-      passageText + "\n\n" +
-      "### screenText (current visible screen: question + choices + partial passage)\n" +
-      screenText + "\n\n" +
-      "Solve this TOEFL READING question as accurately as possible.\n" +
-      "Remember: if your confidence is below 0.1, output [ANSWER] ? and explain briefly in [WHY] why you are uncertain."
-    );
+function safeParseJSON(str) {
+  try {
+    return JSON.parse(str || "{}");
+  } catch {
+    return {};
+  }
+}
+
+async function safeReadText(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+function truncate(text, maxLen) {
+  if (!text) return "";
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + "\n...[truncated]...";
+}
+
+// ----------------- 프롬프트 구성 -----------------
+
+function buildMessages({ mode, ocrText, audioText }) {
+  const cleanOcr = ocrText.trim();
+  const cleanAudio = audioText.trim();
+
+  const combinedContextParts = [];
+  if (cleanOcr) {
+    combinedContextParts.push("=== OCR TEXT (화면에서 인식된 내용) ===\n" + cleanOcr);
+  }
+  if (cleanAudio) {
+    combinedContextParts.push("=== AUDIO/STT TEXT (음성 인식 내용) ===\n" + cleanAudio);
+  }
+  const combinedContext = combinedContextParts.join("\n\n");
+
+  const baseSystem = {
+    role: "system",
+    content:
+      "You are an expert TOEFL iBT tutor and solver. " +
+      "You see noisy OCR text from the screen and/or a rough STT transcript from the audio. " +
+      "You must infer the actual TOEFL-style question and provide the best possible answer. " +
+      "Always follow the requested output format exactly. " +
+      "Never add extra sections or headings that are not requested."
+  };
+
+  if (mode === "reading" || mode === "listening" || mode === "auto") {
+    const sectionLabel = mode === "listening" ? "LISTENING" : "READING";
+    return [
+      baseSystem,
+      {
+        role: "user",
+        content:
+          `Mode: ${sectionLabel}\n` +
+          "The following text contains a TOEFL iBT question. It may include a passage, a conversation or lecture transcript, the question sentence, and the answer choices, all mixed together and possibly noisy.\n\n" +
+          combinedContext +
+          "\n\n" +
+          "Your task:\n" +
+          "1. Infer the most likely TOEFL-style question and answer choices from this noisy text.\n" +
+          "2. Choose the single best answer (or answer set) according to the TOEFL iBT rules.\n" +
+          "3. Estimate your probability that this answer is correct.\n" +
+          "4. Explain in Korean why your answer is correct and why other options are wrong.\n\n" +
+          "Output format (STRICT):\n" +
+          "[ANSWER] <정답만 간단히 – 예: 3, 2, A, B, C and D, or a short English phrase>\n" +
+          "p=<NUMBER between 0 and 1>\n" +
+          "[WHY]\n" +
+          "- 한국어로 정답 근거\n" +
+          "- 다른 보기가 왜 오답인지 간단히\n\n" +
+          "If you are less than 10% confident overall, output a single question mark '?' in [ANSWER] and use p<=0.10.\n" +
+          "Do not add any extra sections or text outside this format."
+      }
+    ];
   }
 
-  if (section === "listening") {
-    return (
-      "### audioText (ASR transcript of the listening material)\n" +
-      audioText + "\n\n" +
-      "### screenText (question + answer choices etc.)\n" +
-      screenText + "\n\n" +
-      "Solve this TOEFL LISTENING question.\n" +
-      "If the transcript is incomplete or unclear, keep [CONFIDENCE] low and set [ANSWER] ?."
-    );
+  if (mode === "writing") {
+    return [
+      baseSystem,
+      {
+        role: "user",
+        content:
+          "Mode: WRITING (Integrated or Academic Discussion).\n" +
+          "You will see the text captured from the screen (reading passage, question prompt, instructions, etc.) and possibly an audio transcript (lecture, conversation, or additional instructions).\n\n" +
+          combinedContext +
+          "\n\n" +
+          "Assume this is a TOEFL iBT writing task (either Integrated or Academic Discussion).\n" +
+          "Your job is to write the best possible high-scoring essay in English, using the reading and listening information appropriately.\n\n" +
+          "Guidelines:\n" +
+          "- Length: about 250–320 words total.\n" +
+          "- Clear structure: introduction, 2–3 body paragraphs, and a brief conclusion.\n" +
+          "- For integrated tasks: accurately summarize how the listening supports/opposes key points from the reading.\n" +
+          "- For discussion/independent tasks: present a clear opinion, 2–3 supporting reasons, and concrete examples.\n" +
+          "- Ignore noisy characters or irrelevant scraps of text; reconstruct a clean version of the task in your head.\n\n" +
+          "After writing, estimate how strong this essay would score on TOEFL (0–1 probability that it would get a top band).\n\n" +
+          "Output format (STRICT):\n" +
+          "[ESSAY]\n" +
+          "(영어 에세이 본문)\n" +
+          "p=<NUMBER between 0 and 1>\n" +
+          "[FEEDBACK]\n" +
+          "(한국어로 에세이의 장점/단점, 개선 팁을 간단히 적어라)\n\n" +
+          "Do not add any other headings or sections."
+      }
+    ];
   }
 
-  if (section === "writing") {
-    return (
-      "### passageText (for integrated tasks, may be empty)\n" +
-      passageText + "\n\n" +
-      "### audioText (for integrated tasks, lecture transcript, may be empty)\n" +
-      audioText + "\n\n" +
-      "### screenText (question / instructions / prompt)\n" +
-      screenText + "\n\n" +
-      "Write the best possible TOEFL writing answer in English.\n" +
-      "Follow the length and structure constraints described in the system message, and output in the specified format."
-    );
+  if (mode === "speaking") {
+    // speaking 전용: 화면 텍스트가 없고 음성 질문만 있을 수 있음.
+    return [
+      baseSystem,
+      {
+        role: "user",
+        content:
+          "Mode: SPEAKING.\n" +
+          "You are helping a student practice TOEFL iBT speaking.\n" +
+          "The text below is a noisy mixture of the task instructions, the reading passage (if any), and the listening transcript (if any). " +
+          "The student is NOT providing their own answer here. Instead, you must create the best possible high-scoring model answer yourself.\n\n" +
+          combinedContext +
+          "\n\n" +
+          "Your job:\n" +
+          "1. Infer what kind of TOEFL speaking task this is (independent, campus conversation, academic integrated, etc.).\n" +
+          "2. Using the reading and/or listening information, generate a model response that would score very highly.\n" +
+          "3. Length: about what a human could say in 45–60 seconds: roughly 110–160 words in English.\n" +
+          "4. Speak naturally, clearly, and coherently. Use simple but precise vocabulary.\n" +
+          "5. Do NOT evaluate any student answer (there is none). Only create the model answer and a short evaluation as if you were the rater.\n" +
+          "6. Estimate how confident you are that your response fully answers the intended task (0–1).\n\n" +
+          "Output format (STRICT):\n" +
+          "[EVAL]\n" +
+          "(영어 한두 문장으로 이 모범 답이 어느 정도 점수일지 평가 + 아주 짧은 코멘트)\n" +
+          "p=<NUMBER between 0 and 1>\n" +
+          "[MODEL]\n" +
+          "(영어 모범 답변 – 110~160 단어 정도)\n" +
+          "[KOREAN]\n" +
+          "(한국어로 이 답변의 전략/구조를 간단히 설명하고, 학생이 따라 말할 때 주의할 점을 적어라)\n\n" +
+          "Do not add any other sections. If the task is unclear, still make your best guess and answer it; only use '?' if the task is almost completely unknowable."
+      }
+    ];
   }
 
-  if (section === "speaking") {
-    return (
-      "### passageText (may be empty)\n" +
-      passageText + "\n\n" +
-      "### audioText (lecture or conversation transcript, may be empty)\n" +
-      audioText + "\n\n" +
-      "### screenText (speaking task instructions)\n" +
-      screenText + "\n\n" +
-      "Generate the best possible TOEFL speaking answer in English, following the time/word and vocabulary constraints.\n"
-    );
-  }
-
-  return (
-    "### passageText\n" + passageText + "\n\n" +
-    "### audioText\n" + audioText + "\n\n" +
-    "### screenText\n" + screenText + "\n\n" +
-    "Solve appropriately for TOEFL, and still respect the required output format."
-  );
+  // fallback (이론상 도달 X)
+  return [
+    baseSystem,
+    {
+      role: "user",
+      content:
+        "Unknown mode. Just summarize the following text briefly in English and Korean.\n\n" +
+        combinedContext
+    }
+  ];
 }
