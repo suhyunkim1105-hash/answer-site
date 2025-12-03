@@ -1,5 +1,5 @@
 // netlify/functions/solve.js
-// Netlify Functions (Node 18+) → global fetch 사용, node-fetch 불필요
+// Netlify Functions (Node 18+) → global fetch 사용 (node-fetch 불필요)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
@@ -9,7 +9,7 @@ function clip(str, max) {
   if (!str) return "";
   str = String(str).replace(/\r/g, "");
   if (str.length <= max) return str;
-  // 지문 뒤쪽이 보통 문제/선지라서 뒤에서 자름
+  // 지문 뒤쪽이 보통 문제/선지/요약이라 뒤에서 자름
   return str.slice(-max);
 }
 
@@ -30,7 +30,7 @@ ${ocrText || "(none)"}
 ${audioText || "(none)"}
 `;
 
-  // ---- READING / LISTENING: 객관식 정답 ----
+  // ---- READING / LISTENING: 객관식 ----
   if (mode === "reading" || mode === "listening") {
     return `
 ${baseInfo}
@@ -54,7 +54,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- WRITING: 통합형/디스커션 모범 에세이 ----
+  // ---- WRITING ----
   if (mode === "writing") {
     return `
 ${baseInfo}
@@ -79,7 +79,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- SPEAKING: 읽을 스크립트만 ----
+  // ---- SPEAKING: 답안 스크립트 ----
   if (mode === "speaking") {
     return `
 ${baseInfo}
@@ -91,10 +91,11 @@ Use OCR_TEXT (and AUDIO_TEXT only if it clearly contains the speaking QUESTION, 
 Even if OCR_TEXT includes multiple-choice options (A/B/C/D), IGNORE those options.
 Do NOT solve it as a multiple-choice question. Do NOT output letters like "A", "B", "C" as the final answer.
 
-Instead, infer the situation and question, then produce a natural first-person spoken response.
+Assume the student has only 15 seconds of preparation time before speaking.
+You must respond as quickly as possible. Keep internal reasoning minimal and focus on emitting the final script.
 
-Length: 80-120 English words. This should fit in about 45 seconds at a natural speaking speed.
-NEVER exceed 130 words.
+Length: 70-100 English words. This should fit in about 40 seconds at a natural speaking speed.
+NEVER exceed 110 words.
 
 OUTPUT FORMAT (exactly):
 [MODEL]
@@ -108,7 +109,7 @@ ${sharedContext}
 `;
   }
 
-  // ---- AUTO / 기타: 리딩 스타일로 처리 ----
+  // ---- AUTO / 기타 ----
   return `
 ${baseInfo}
 
@@ -123,8 +124,8 @@ ${sharedContext}
 `;
 }
 
-// OpenRouter 호출 + HTML/타임아웃 방어
-async function callOpenRouter(prompt) {
+// ===== OpenRouter 호출 =====
+async function callOpenRouter(prompt, mode) {
   if (!OPENROUTER_API_KEY) {
     return {
       ok: false,
@@ -132,6 +133,9 @@ async function callOpenRouter(prompt) {
         "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter API key가 설정되어 있지 않습니다."
     };
   }
+
+  // 스피킹은 12초, 나머지는 25초 타임아웃
+  const timeoutMs = mode === "speaking" ? 12000 : 25000;
 
   const body = {
     model: OPENROUTER_MODEL,
@@ -159,13 +163,12 @@ async function callOpenRouter(prompt) {
     body: JSON.stringify(body)
   };
 
-  // 25초 타임아웃
   let controller = null;
   let timeoutId = null;
   if (typeof AbortController !== "undefined") {
     controller = new AbortController();
     fetchOptions.signal = controller.signal;
-    timeoutId = setTimeout(() => controller.abort(), 25000);
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   }
 
   let res;
@@ -197,7 +200,6 @@ async function callOpenRouter(prompt) {
     /^<head/i.test(trimmed.slice(0, 20)) ||
     /^<body/i.test(trimmed.slice(0, 20));
 
-  // HTTP 에러나 HTML 에러 페이지면 여기서 잘라버림
   if (!res.ok || looksHtml) {
     return {
       ok: false,
@@ -263,9 +265,7 @@ exports.handler = async (event, context) => {
     audioText: cleanAudio
   });
 
-  const result = await callOpenRouter(prompt);
+  const result = await callOpenRouter(prompt, mode);
 
-  // 프론트 쪽은 항상 "텍스트만" 받게 200으로 응답
   return { statusCode: 200, body: result.text };
 };
-
