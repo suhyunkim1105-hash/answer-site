@@ -117,7 +117,7 @@
     const lines = raw.split(/\r?\n/);
     const cleaned = lines.map(function(line) {
       return line
-        .replace(/[^A-Za-z0-9.,;:?!'"()\- \t]/g, " ")
+        .replace(/[^A-Za-z0-9.,;:?!'"()\-\t ]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
     }).filter(function(line) { return line.length > 0; });
@@ -134,15 +134,16 @@
       const b = data[i + 2];
       const gray = (r + g + b) / 3;
       let v;
-      if (gray > 210) v = 255;      // 매우 밝음 → 흰색
-      else if (gray < 40) v = 0;    // 매우 어두움 → 검정
-      else v = gray;                // 중간값 유지
+      // 너무 밝은 영역(형광펜)은 흰색, 아주 어두운 부분은 검정, 나머지는 그대로
+      if (gray > 210) v = 255;
+      else if (gray < 40) v = 0;
+      else v = gray;
       data[i] = data[i+1] = data[i+2] = v;
     }
     ctx.putImageData(imgData, 0, 0);
   }
 
-  // ---------- 카메라 시작 (S25 울트라 고해상도 우선) ----------
+  // ---------- 카메라 시작 (S25 울트라 우선) ----------
   async function startCamera() {
     try {
       const hiConstraints = {
@@ -251,7 +252,6 @@
 
   // ---------- 캡처 → 캔버스 ----------
   async function captureToCanvas(canvas, ctx) {
-    // 1순위: takePhoto
     if (imageCapture && typeof imageCapture.takePhoto === "function") {
       try {
         const blob = await imageCapture.takePhoto();
@@ -262,7 +262,6 @@
         console.warn("takePhoto 실패:", e);
       }
     }
-    // 2순위: grabFrame
     if (imageCapture && typeof imageCapture.grabFrame === "function") {
       try {
         const frame = await imageCapture.grabFrame();
@@ -272,14 +271,14 @@
         console.warn("grabFrame 실패:", e);
       }
     }
-    // 3순위: video 프레임
     fillCanvasFromVideo(canvas, ctx);
   }
 
+  // 중앙 88% 영역 + 가로 최대 2200px로 스케일
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
-    const cropScale = 0.88; // 중앙 88%만 사용
+    const cropScale = 0.88;
     const cropW = Math.floor(fullW * cropScale);
     const cropH = Math.floor(fullH * cropScale);
     const cropX = Math.floor((fullW - cropW) / 2);
@@ -349,6 +348,7 @@
       const digits  = (english.match(/[0-9]/g) || []).length;
       const words   = english.split(/\s+/).filter(function(w){ return w.length >= 3; }).length;
 
+      // 너무 허접하거나 그림·표 위주일 때는 무시 (conf<10, 글자 수 적음, 숫자 비율이 너무 높음)
       if (conf < 10 || letters < 20 || words < 3 || digits > letters * 1.5) {
         statusLine.textContent =
           "OCR 실패/무시 (" + targetKind + ") conf=" + conf.toFixed(1) +
@@ -357,7 +357,6 @@
       }
 
       if (targetKind === "passage") {
-        // 지문 텍스트에 누적
         const passageRef = db.ref("p2p/passageText");
         await passageRef.transaction(function(oldVal) {
           const base = oldVal || "";
@@ -370,7 +369,6 @@
           "지문 스캔 완료 (추가됨) | conf=" + conf.toFixed(1) +
           "%, 글자수=" + effectiveLen;
       } else {
-        // question
         await db.ref("p2p/state").update({
           ocrText: english,
           ocrConfidence: conf,
