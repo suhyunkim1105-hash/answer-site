@@ -116,10 +116,9 @@
   const statusLine = document.getElementById('statusLine');
   const zoomRange  = document.getElementById('zoomRange');
 
-  // 🔤 영어만 인식 (가로/세로 상관 없이)
+  // 🔤 영어 전용 OCR (언어 eng + 후처리로 영어만 남김)
   const OCR_LANG = "eng";
 
-  // 모드 표시용
   let currentMode = "reading";
   db.ref("p2p/state/modeHint").on("value", snap => {
     const m = snap.val();
@@ -156,6 +155,44 @@
   function updateStatusLine(extra) {
     const base = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식${zoomSupport ? ", 센서 줌 사용" : ""})`;
     statusLine.textContent = extra || base;
+  }
+
+  // ---------- 영어만 남기기 ----------
+  function extractEnglishText(raw) {
+    if (!raw) return "";
+    const lines = raw.split(/\r?\n/);
+    const cleaned = lines.map(line =>
+      line
+        // 한글/기타 스크립트 제거, 영어/숫자/기본 문장부호만 남김
+        .replace(/[^A-Za-z0-9.,;:?!'"()\- \t]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    ).filter(line => line.length > 0);
+    return cleaned.join('\n');
+  }
+
+  // ---------- 전처리: 하이라이트/형광펜 대비 보정 ----------
+  function preprocessCanvasForText(canvas, ctx) {
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const gray = (r + g + b) / 3;
+
+      // 아주 밝은 영역(배경/형광펜)은 거의 흰색, 아주 어두운 영역은 검정
+      let v;
+      if (gray > 210) {
+        v = 255;
+      } else if (gray < 40) {
+        v = 0;
+      } else {
+        v = gray;
+      }
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 
   // ---------- 카메라 ----------
@@ -204,7 +241,6 @@
         zoomMax = (typeof caps.zoom.max === 'number') ? caps.zoom.max : 3;
         zoomStep = (typeof caps.zoom.step === 'number' && caps.zoom.step > 0) ? caps.zoom.step : 0.1;
 
-        // 너무 과도한 줌은 잘라서 사용 (예: max 10 이상이면 5로 제한)
         if (zoomMax > 5) zoomMax = 5;
         if (zoomMin < 1) zoomMin = 1;
 
@@ -253,10 +289,9 @@
   zoomRange.addEventListener("input", () => {
     const val = parseFloat(zoomRange.value);
     if (zoomSupport) {
-      applyZoomToTrack(val);          // ✅ 센서 줌 (갤럭시 울트라에서 중요한 부분)
-      video.style.transform = "scale(1)"; // 센서 줌 사용 시 화면 스케일은 1로 유지
+      applyZoomToTrack(val);
+      video.style.transform = "scale(1)";
     } else {
-      // 센서 줌 미지원 기기용 폴백 (그냥 화면 확대)
       video.style.transform = `scale(${val})`;
     }
   });
@@ -340,7 +375,6 @@
 
   // ---------- 고해상도 스틸 우선 캡처 ----------
   async function captureToCanvas(canvas, ctx) {
-    // 1순위: ImageCapture.takePhoto() (Chrome + 안드로이드 플래그십에서 고해상도 스틸)
     if (imageCapture && typeof imageCapture.takePhoto === "function") {
       try {
         const blob = await imageCapture.takePhoto();
@@ -352,7 +386,6 @@
       }
     }
 
-    // 2순위: grabFrame()
     if (imageCapture && typeof imageCapture.grabFrame === "function") {
       try {
         const bitmap = await imageCapture.grabFrame();
@@ -363,22 +396,21 @@
       }
     }
 
-    // 3순위: video 프레임
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 크롭 + 스케일 (조금 더 타이트하게 85%로)
+  // 중앙 크롭 + 스케일 (조금 더 타이트하게 85%로) + 전처리
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
 
-    const scaleCrop = 0.85; // 중앙 85%만 사용해 글자를 더 키움
+    const scaleCrop = 0.85;
     const cropW = Math.floor(fullW * scaleCrop);
     const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
     const cropY = Math.floor((fullH - cropH) / 2);
 
-    const maxW = 2000; // OCR용 가로 최대 2000px까지 허용 (S25 성능 감안)
+    const maxW = 2000;
     const scale = Math.min(1, maxW / cropW);
     const outW = Math.floor(cropW * scale);
     const outH = Math.floor(cropH * scale);
@@ -390,6 +422,8 @@
       cropX, cropY, cropW, cropH,
       0, 0, outW, outH
     );
+
+    preprocessCanvasForText(canvas, ctx);
   }
 
   // ---------- OCR (스틸 캡처 기반) ----------
@@ -418,28 +452,30 @@
       });
 
       const rawText = result.data.text || "";
-      const text = rawText.replace(/\s+\n/g, "\n").trim();
+      const englishText = extractEnglishText(rawText);  // ✅ 영어만 남김
       const conf = result.data.confidence || 0;
 
-      const effectiveLen = text.replace(/\s/g, "").length;
-      if (!text || effectiveLen < 10) {
+      const effectiveLen = englishText.replace(/\s/g, "").length;
+
+      // 그림/도표, 의미 없는 화면: 영어 글자가 너무 적으면 무시
+      if (!englishText || effectiveLen < 20) {
         statusLine.textContent =
-          `OCR 완료 (텍스트 너무 짧아서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
+          `OCR 완료 (영어 텍스트 너무 적어서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
         ocrRunning = false;
         return;
       }
 
       statusLine.textContent =
-        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}${zoomSupport ? " | 센서 줌" : ""}`;
+        `OCR 완료 | 영어 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}${zoomSupport ? " | 센서 줌" : ""}`;
 
       await db.ref("p2p/state").update({
-        ocrText: text,
+        ocrText: englishText,
         ocrConfidence: conf,
         cameraBlocked: false,
         ocrUpdatedAt: Date.now()
       });
 
-      const snippet = text.slice(0, 400);
+      const snippet = englishText.slice(0, 400);
       if (snippet !== lastSolvedSnippet) {
         lastSolvedSnippet = snippet;
         await db.ref("p2p/command").set({
@@ -455,7 +491,7 @@
     }
   }
 
-  // 비디오 프레임에서 중앙 85% 캡처 (iOS 등 폴백용)
+  // 비디오 프레임에서 중앙 85% 캡처 (iOS 등 폴백용) + 전처리
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -485,9 +521,12 @@
       cropX, cropY, cropW, cropH,
       0, 0, outW, outH
     );
+
+    preprocessCanvasForText(canvas, ctx);
   }
 
   startCamera();
 </script>
 </body>
 </html>
+
