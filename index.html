@@ -29,7 +29,7 @@
     #videoContainer {
       position: relative;
       width: 100%;
-      max-height: calc(100vh - 80px);
+      max-height: calc(100vh - 120px);
       overflow: hidden;
       background: #000;
       border-radius: 8px;
@@ -41,10 +41,10 @@
     }
     #overlayFrame {
       position: absolute;
-      top: 5%;
-      left: 5%;
-      width: 90%;
-      height: 90%;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       border: 2px solid rgba(0, 255, 0, 0.4);
       border-radius: 6px;
       pointer-events: none;
@@ -54,6 +54,7 @@
       margin-top: 6px;
       font-size: 11px;
     }
+
     #statusLine {
       margin-bottom: 4px;
       color: #c4f1ff;
@@ -61,6 +62,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
     .row {
       display: flex;
       align-items: center;
@@ -74,6 +76,19 @@
     #zoomRange {
       flex: 1 1 auto;
     }
+    #btnOCRNow {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 6px;
+      border: 1px solid #666;
+      background: #111;
+      color: #f5f5f5;
+      cursor: pointer;
+    }
+    #btnOCRNow:active {
+      transform: scale(0.97);
+    }
   </style>
 </head>
 <body>
@@ -85,9 +100,11 @@
 
   <div id="controls">
     <div id="statusLine">카메라 준비 중...</div>
+
     <div class="row">
       <span class="label">배율</span>
       <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
+      <button id="btnOCRNow">지금 인식</button>
     </div>
   </div>
 </div>
@@ -110,22 +127,31 @@
   const video      = document.getElementById('video');
   const statusLine = document.getElementById('statusLine');
   const zoomRange  = document.getElementById('zoomRange');
+  const btnOCRNow  = document.getElementById('btnOCRNow');
 
-  const OCR_LANG = "eng"; // 영어만
+  // 영어만 인식
+  const OCR_LANG = "eng";
 
-  // remote.html에서 선택한 모드 표시용 (카메라 동작에는 영향 없음)
+  // remote.html에서 선택한 모드 표시만
   let currentMode = "reading";
   db.ref("p2p/state/modeHint").on("value", snap => {
     const m = snap.val();
     if (m) {
       currentMode = m;
-      statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      if (statusLine.textContent.startsWith("카메라 ON")) {
+        // 해상도 부분은 유지
+        const match = statusLine.textContent.match(/\(.*?\)/);
+        const resInfo = match ? ` ${match[0]} ` : " ";
+        statusLine.textContent =
+          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      }
     }
   });
 
   let ocrRunning = false;
-  let lastOcrTime = 0;
+  let lastSolvedSnippet = "";
   let lastBlocked = null;
+  let lastOcrTime = 0;
 
   // 밝기 + 움직임 감지용 썸네일 캔버스
   const BW = 64, BH = 36;
@@ -136,45 +162,76 @@
   let prevThumb = null;
   let lastStableTime = 0;
 
+  // 고해상도 스틸 프레임용 ImageCapture
   let imageCapture = null;
 
-  // ---------- 카메라 ----------
+  zoomRange.addEventListener("input", () => {
+    const scale = parseFloat(zoomRange.value);
+    video.style.transform = `scale(${scale})`;
+  });
+
+  btnOCRNow.addEventListener("click", () => {
+    if (ocrRunning) return;
+    lastOcrTime = Date.now();
+    doOCROnce(true);
+  });
+
+  // ---------- 카메라 시작 (S25 울트라용 튜닝) ----------
   async function startCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const constraints = {
         video: {
           facingMode: { ideal: "environment" },
-          width:  { min: 1280, ideal: 2560, max: 4096 },
-          height: { min: 720,  ideal: 1440, max: 4096 }
+          width: { ideal: 2560 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 30 },
+          advanced: [
+            { width: 2560, height: 1440 },
+            { width: 1920, height: 1080 }
+          ]
         },
         audio: false
-      });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
 
       const track = stream.getVideoTracks()[0];
-      if ('ImageCapture' in window && track) {
-        try {
-          imageCapture = new ImageCapture(track);
-        } catch (e) {
-          console.warn("ImageCapture 생성 실패, video 프레임 fallback:", e);
-          imageCapture = null;
+      if (track) {
+        // 텍스트에 유리한 디테일 모드 요청
+        if ("contentHint" in track) {
+          try {
+            track.contentHint = "detail";
+          } catch (e) {
+            console.warn("contentHint 설정 실패:", e);
+          }
+        }
+
+        // 실제 해상도 표시
+        const s = track.getSettings ? track.getSettings() : {};
+        const resInfo =
+          s.width && s.height ? ` (${s.width}x${s.height}) ` : " ";
+
+        statusLine.textContent =
+          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+
+        // 고해상도 스틸 캡처 준비
+        if ("ImageCapture" in window) {
+          try {
+            imageCapture = new ImageCapture(track);
+          } catch (e) {
+            console.warn("ImageCapture 생성 실패, video 프레임 fallback:", e);
+            imageCapture = null;
+          }
         }
       }
 
-      if (!statusLine.textContent.includes("모드:")) {
-        statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
-      }
       startAutoLoop();
     } catch (e) {
       console.error(e);
       statusLine.textContent = "카메라 접근 실패: " + e.toString();
     }
   }
-
-  zoomRange.addEventListener("input", () => {
-    const scale = parseFloat(zoomRange.value);
-    video.style.transform = `scale(${scale})`;
-  });
 
   // ---------- 밝기 + 움직임 분석 ----------
   function analyzeFrame() {
@@ -197,13 +254,15 @@
       const gray = (r + g + b) / 3;
       currThumb[p] = gray;
       sumBright += gray;
-      if (prevThumb) diffSum += Math.abs(gray - prevThumb[p]);
+      if (prevThumb) {
+        diffSum += Math.abs(gray - prevThumb[p]);
+      }
     }
 
     const avgBright = sumBright / len;
     const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    const blocked = avgBright < 25;
+    const blocked = avgBright < 25; // 아주 어두우면 가려진 것으로 간주
 
     const now = Date.now();
     let stable = false;
@@ -218,6 +277,7 @@
     }
 
     prevThumb = currThumb;
+
     return { blocked, stable };
   }
 
@@ -225,6 +285,7 @@
   function startAutoLoop() {
     function loop() {
       const now = Date.now();
+
       const { blocked, stable } = analyzeFrame();
 
       if (blocked !== lastBlocked) {
@@ -233,15 +294,16 @@
           cameraBlocked: blocked,
           cameraUpdatedAt: Date.now()
         });
+        const base = statusLine.textContent.replace(/ · 카메라 상태:.+$/, "");
         statusLine.textContent = blocked
-          ? "카메라가 가려짐 – 마지막 텍스트 유지 중"
-          : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+          ? `${base} · 카메라 상태: 가려짐`
+          : `${base} · 카메라 상태: 정상`;
       }
 
-      // 6초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
-      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 6000) {
+      // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
+      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
-        doOCROnce();
+        doOCROnce(false);
       }
 
       requestAnimationFrame(loop);
@@ -249,9 +311,9 @@
     requestAnimationFrame(loop);
   }
 
-  // ---------- 캡처 ----------
+  // ---------- 스틸 캡처 ----------
   async function captureToCanvas(canvas, ctx) {
-    // 1순위: 스틸 사진
+    // 1순위: takePhoto()
     if (imageCapture && typeof imageCapture.takePhoto === "function") {
       try {
         const blob = await imageCapture.takePhoto();
@@ -278,27 +340,32 @@
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 90% 크롭 + 가로 최대 2000px
+  // 중앙 90% 크롭 + 가로 최대 1600px
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
 
-    const cropScale = 0.9;
-    const cropW = Math.floor(fullW * cropScale);
-    const cropH = Math.floor(fullH * cropScale);
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
     const cropY = Math.floor((fullH - cropH) / 2);
 
-    const maxW = 2000;
+    const maxW = 1600;
     const scale = Math.min(1, maxW / cropW);
     const outW = Math.floor(cropW * scale);
     const outH = Math.floor(cropH * scale);
 
     canvas.width = outW;
     canvas.height = outH;
-    ctx.drawImage(source, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+    ctx.drawImage(
+      source,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
   }
 
+  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백)
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -310,39 +377,47 @@
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
 
-    const cropScale = 0.9;
-    const cropW = Math.floor(fullW * cropScale);
-    const cropH = Math.floor(fullH * cropScale);
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
     const cropY = Math.floor((fullH - cropH) / 2);
 
-    const maxW = 2000;
+    const maxW = 1600;
     const scale = Math.min(1, maxW / cropW);
     const outW = Math.floor(cropW * scale);
     const outH = Math.floor(cropH * scale);
 
     canvas.width = outW;
     canvas.height = outH;
-    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+    ctx.drawImage(
+      video,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
   }
 
-  // ---------- OCR ----------
-  async function doOCROnce() {
+  // ---------- OCR 1회 ----------
+  async function doOCROnce(manual) {
     if (ocrRunning) return;
     ocrRunning = true;
 
     try {
-      statusLine.textContent = "자동 OCR 진행 중...";
+      statusLine.textContent = manual
+        ? "수동 OCR 진행 중..."
+        : "자동 OCR 진행 중...";
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
+
       await captureToCanvas(canvas, ctx);
 
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
           if (m.status === "recognizing text") {
             statusLine.textContent =
-              `자동 OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
+              (manual ? "[수동] " : "[자동] ") +
+              `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         }
       });
@@ -350,7 +425,22 @@
       const rawText = result.data.text || "";
       const text = rawText.replace(/\s+\n/g, "\n").trim();
       const conf = result.data.confidence || 0;
+
       const effectiveLen = text.replace(/\s/g, "").length;
+      if (!text || effectiveLen < 10) {
+        statusLine.textContent =
+          `OCR 완료 (텍스트 너무 짧아서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
+        ocrRunning = false;
+        return;
+      }
+
+      // 신뢰도 10% 미만이면 그냥 버림 (AI 호출 안 함)
+      if (conf < 10) {
+        statusLine.textContent =
+          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 너무 낮아서 무시함)`;
+        ocrRunning = false;
+        return;
+      }
 
       statusLine.textContent =
         `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
@@ -361,6 +451,15 @@
         cameraBlocked: false,
         ocrUpdatedAt: Date.now()
       });
+
+      const snippet = text.slice(0, 400);
+      if (snippet !== lastSolvedSnippet) {
+        lastSolvedSnippet = snippet;
+        await db.ref("p2p/command").set({
+          type: "solve",
+          timestamp: Date.now()
+        });
+      }
     } catch (e) {
       console.error(e);
       statusLine.textContent = "OCR 에러: " + e.toString();
