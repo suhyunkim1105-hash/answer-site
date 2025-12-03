@@ -111,6 +111,11 @@
       color: #e4e4e4;
       font-size: 13px;
     }
+    #btnAccum {
+      background: #292f45;
+      color: #f0f0f0;
+      font-size: 13px;
+    }
 
     #globalStatus {
       margin-top: 6px;
@@ -176,6 +181,7 @@
 
   <div class="controls-row">
     <button id="btnSolve" class="btn">이 질문 풀기</button>
+    <button id="btnAccum" class="btn">지문 누적 (긴 지문용)</button>
     <button id="btnReset" class="btn">이 세션 초기화</button>
     <button id="btnSttToggle" class="btn">음성 인식 시작 (Listening/Speaking)</button>
   </div>
@@ -216,7 +222,6 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
   const stateRef = db.ref("p2p/state");
-  const cmdRef   = db.ref("p2p/command");
 
   // ===== DOM =====
   const btnModeReading   = document.getElementById("btnModeReading");
@@ -230,6 +235,7 @@
   const answerBodyEl  = document.getElementById("answerBody");
 
   const btnSolve     = document.getElementById("btnSolve");
+  const btnAccum     = document.getElementById("btnAccum");
   const btnReset     = document.getElementById("btnReset");
   const btnSttToggle = document.getElementById("btnSttToggle");
 
@@ -260,6 +266,7 @@
     btnModeWriting.classList.toggle("active", mode === "writing");
     btnModeSpeaking.classList.toggle("active", mode === "speaking");
 
+    // 모드 힌트는 카메라쪽으로 보내기만 한다
     stateRef.update({
       modeHint: currentMode,
       modeUpdatedAt: Date.now()
@@ -287,7 +294,7 @@
       `섹션: ${currentMode} · OCR: conf=${confStr} · 카메라 상태: ${camStr}`;
   }
 
-  // ===== Firebase state 구독 (OCR / 카메라 / 외부 STT) =====
+  // ===== Firebase state 구독 =====
   stateRef.on("value", snap => {
     const s = snap.val() || {};
     const ocrText = s.ocrText || "";
@@ -298,13 +305,6 @@
     if (ocrText && ocrText !== lastOcrText) {
       lastOcrText = ocrText;
       debugOcrCurrent.textContent = ocrText;
-
-      // 누적 지문 (통합형 라이팅/리딩/리스닝용)
-      const snippet = ocrText.slice(0, 200);
-      if (!accumulatedText.includes(snippet)) {
-        accumulatedText = (accumulatedText + "\n" + ocrText).trim();
-        debugOcrAccum.textContent = accumulatedText || "(없음)";
-      }
     }
 
     if (conf !== null) {
@@ -316,9 +316,8 @@
     }
 
     if (audioText && audioText !== sttFinalText) {
-      // 다른 기기에서 STT 쓴 경우도 반영
       sttFinalText = audioText;
-      debugSttText.textContent = sttFinalText;
+      debugSttText.textContent = sttFinalText || "(없음)";
     }
 
     updateSectionStatus();
@@ -326,7 +325,8 @@
 
   // ===== STT (Web Speech API) =====
   let recognition = null;
-  let sttRunning = false;
+  let sttActive = false;          // 사용자가 "켜둔" 상태 의도
+  let sttActuallyRunning = false; // 브라우저에서 실제 동작 중인지
 
   function initStt() {
     const SR =
@@ -344,21 +344,34 @@
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
-      sttRunning = true;
+      sttActuallyRunning = true;
       globalStatus.textContent = "음성 인식 중...";
       btnSttToggle.textContent = "음성 인식 중지";
     };
 
     recognition.onerror = (e) => {
-      sttRunning = false;
+      // 에러 나면 자동 재시작 하지 말고 끔
+      sttActive = false;
+      sttActuallyRunning = false;
       btnSttToggle.textContent = "음성 인식 시작 (Listening/Speaking)";
       globalStatus.textContent = "STT 오류: " + e.error;
     };
 
     recognition.onend = () => {
-      sttRunning = false;
-      btnSttToggle.textContent = "음성 인식 시작 (Listening/Speaking)";
-      globalStatus.textContent = "음성 인식이 중지되었습니다.";
+      sttActuallyRunning = false;
+      if (sttActive) {
+        // 사용자가 여전히 켜둔 상태라면 다시 시작 (자동 종료 방지)
+        try {
+          recognition.start();
+        } catch (e) {
+          sttActive = false;
+          btnSttToggle.textContent = "음성 인식 시작 (Listening/Speaking)";
+          globalStatus.textContent = "STT 재시작 실패: " + e.toString();
+        }
+      } else {
+        btnSttToggle.textContent = "음성 인식 시작 (Listening/Speaking)";
+        globalStatus.textContent = "음성 인식이 중지되었습니다.";
+      }
     };
 
     recognition.onresult = (event) => {
@@ -385,17 +398,40 @@
   btnSttToggle.onclick = () => {
     if (!recognition) return;
 
-    if (!sttRunning) {
-      sttFinalText = ""; // 새 세트 녹음
+    if (!sttActive) {
+      // 켜기
+      sttActive = true;
+      sttFinalText = "";
       debugSttText.textContent = "(녹음 중...)";
-      recognition.start();
+      if (!sttActuallyRunning) {
+        try {
+          recognition.start();
+        } catch (e) {
+          sttActive = false;
+          globalStatus.textContent = "STT 시작 실패: " + e.toString();
+        }
+      }
     } else {
-      recognition.stop();
+      // 끄기
+      sttActive = false;
+      if (sttActuallyRunning) {
+        recognition.stop();
+      }
     }
   };
 
+  function hardStopStt() {
+    if (!recognition) return;
+    sttActive = false;
+    if (sttActuallyRunning) {
+      recognition.stop();
+    }
+  }
+
   // ===== 세션 초기화 =====
   function resetSession() {
+    hardStopStt();
+
     accumulatedText = "";
     sttFinalText = "";
     lastOcrText = "";
@@ -423,7 +459,27 @@
 
   btnReset.onclick = resetSession;
 
-  // ===== AI 호출 & 결과 렌더링 =====
+  // ===== 지문 누적 (긴 스크롤 지문용) =====
+  btnAccum.onclick = () => {
+    if (!lastOcrText) {
+      globalStatus.textContent = "누적할 OCR 텍스트가 없습니다.";
+      return;
+    }
+    // 이미 포함된 일부 스니펫이면 중복 방지
+    const snippet = lastOcrText.slice(0, 200);
+    if (accumulatedText.includes(snippet)) {
+      globalStatus.textContent = "이미 누적된 지문과 유사하여 건너뜀.";
+      return;
+    }
+
+    accumulatedText = (accumulatedText + "\n" + lastOcrText).trim();
+    debugOcrAccum.textContent = accumulatedText || "(없음)";
+
+    globalStatus.textContent =
+      "지문 누적 완료 (Writing 통합형 긴 지문용).";
+  };
+
+  // ===== AI 응답 렌더링 =====
   function renderResult(mode, raw) {
     const txt = raw || "";
     debugAiRaw.textContent = txt;
@@ -481,7 +537,7 @@
       return;
     }
 
-    // ---- Speaking : 스크립트만 ----
+    // ---- Speaking ----
     if (mode === "speaking") {
       let model = "";
       const splitModel = txt.split(/\[MODEL\]/i);
@@ -496,7 +552,7 @@
       answerMainEl.textContent =
         model || "(모델 스크립트를 받지 못했습니다.)";
       setProb();
-      answerBodyEl.textContent = ""; // 본문은 비워둠
+      answerBodyEl.textContent = "";
       return;
     }
 
@@ -507,7 +563,25 @@
   }
 
   async function doSolve() {
-    const effectiveOcr = accumulatedText || lastOcrText || "";
+    // 문제 풀기 누르면 STT 먼저 확실히 끊는다
+    hardStopStt();
+
+    // 섹션별로 어떤 OCR을 쓸지 결정
+    let effectiveOcr = "";
+    if (currentMode === "writing") {
+      // 통합형: 누적 지문 + 현재 화면 문제
+      const passage = accumulatedText ? "[READING PASSAGE]\n" + accumulatedText : "";
+      const question = lastOcrText ? "\n\n[QUESTION]\n" + lastOcrText : "";
+      effectiveOcr = (passage + question).trim();
+    } else {
+      // 나머지: 누적이 있다면 누적+현재, 없으면 현재
+      if (accumulatedText) {
+        effectiveOcr = (accumulatedText + "\n\n" + (lastOcrText || "")).trim();
+      } else {
+        effectiveOcr = lastOcrText || "";
+      }
+    }
+
     const payload = {
       mode: currentMode,
       ocrText: effectiveOcr,
@@ -553,7 +627,7 @@
       debugPanel.style.display === "none" ? "block" : "none";
   };
 
-  // 초기 상태 문구
+  // 초기 상태
   updateSectionStatus();
 </script>
 </body>
