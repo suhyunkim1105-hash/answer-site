@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Control</title>
+  <title>answer-site | Camera</title>
   <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -10,186 +10,107 @@
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
 
+  <!-- Tesseract OCR -->
+  <script src="https://unpkg.com/tesseract.js@4/dist/tesseract.min.js"></script>
+
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 8px;
+      padding: 6px;
       background: #000;
       color: #fff;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 14px;
+    }
+    .wrap {
+      width: 100%;
     }
 
-    .top-tabs {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-    .tab-btn {
-      flex: 1;
-      padding: 8px 4px;
-      border-radius: 18px;
-      border: 0;
-      background: #222;
-      color: #eee;
-      font-size: 13px;
-    }
-    .tab-btn.active {
-      background: #1976ff;
-      color: #fff;
-      font-weight: 600;
-    }
-
-    #sectionStatus {
-      font-size: 12px;
-      margin-bottom: 6px;
-      color: #c4f1ff;
-    }
-
-    #answerBox {
+    #videoContainer {
+      position: relative;
+      width: 100%;
+      max-height: calc(100vh - 120px);
+      overflow: hidden;
+      background: #000;
       border-radius: 8px;
-      padding: 10px;
-      background: #111;
-      margin-bottom: 6px;
-      min-height: 52px;
+    }
+    #video {
+      width: 100%;
+      height: auto;
+      transform-origin: center center;
+    }
+    #overlayFrame {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border: 2px solid rgba(0, 255, 0, 0.4);
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    #controls {
+      margin-top: 6px;
+      font-size: 11px;
+    }
+
+    #statusLine {
+      margin-bottom: 4px;
+      color: #c4f1ff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      gap: 6px;
     }
-    #answerMain {
-      font-size: 22px;
-      font-weight: 700;
-      color: #fff;
-      word-break: break-all;
-    }
-    #probLine {
+    .label {
       font-size: 11px;
-      color: #9ccfff;
-      text-align: right;
-      min-width: 90px;
+      color: #aaa;
+      white-space: nowrap;
     }
-
-    #detailBox {
-      white-space: pre-wrap;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      font-size: 12px;
-      background: #050608;
-      padding: 10px;
-      border-radius: 8px;
-      max-height: 40vh;
-      overflow-y: auto;
-      margin-bottom: 8px;
+    #zoomRange {
+      flex: 1 1 auto;
     }
-
-    .btn-main {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 6px;
-      border-radius: 999px;
-      border: 0;
-      font-size: 15px;
-      font-weight: 600;
-      background: #0d6efd;
-      color: #fff;
-    }
-
-    .btn-sub {
-      width: 100%;
-      padding: 8px;
-      margin-bottom: 4px;
-      border-radius: 999px;
-      border: 0;
-      font-size: 13px;
-      background: #20232a;
-      color: #eee;
-    }
-
-    #debugToggle {
-      margin-top: 2px;
-      margin-bottom: 4px;
-      font-size: 11px;
+    #btnOCRNow {
+      flex: 0 0 auto;
       padding: 4px 8px;
-      border-radius: 999px;
-      border: 0;
-      background: #333;
-      color: #ddd;
-    }
-
-    #debugPanel {
-      display: none;
-      gap: 4px;
-      flex-direction: column;
       font-size: 11px;
-    }
-    .debug-block {
-      background: #050608;
       border-radius: 6px;
-      padding: 6px;
+      border: 1px solid #666;
+      background: #111;
+      color: #f5f5f5;
+      cursor: pointer;
     }
-    .debug-title {
-      font-size: 11px;
-      color: #7dd3fc;
-      margin-bottom: 2px;
-    }
-    .debug-pre {
-      white-space: pre-wrap;
-      max-height: 20vh;
-      overflow-y: auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-
-    #footerInfo {
-      margin-top: 4px;
-      font-size: 11px;
-      color: #666;
+    #btnOCRNow:active {
+      transform: scale(0.97);
     }
   </style>
 </head>
 <body>
-<div class="top-tabs">
-  <button id="tabReading"   class="tab-btn">Reading</button>
-  <button id="tabListening" class="tab-btn">Listening</button>
-  <button id="tabWriting"   class="tab-btn">Writing</button>
-  <button id="tabSpeaking"  class="tab-btn">Speaking</button>
-</div>
-
-<div id="sectionStatus">섹션: - · OCR: 대기 · 카메라 상태: -</div>
-
-<div id="answerBox">
-  <div id="answerMain">아직 문제를 풀지 않았습니다.</div>
-  <div id="probLine"></div>
-</div>
-
-<pre id="detailBox"></pre>
-
-<button id="btnSolve" class="btn-main">이 질문 풀기</button>
-<button id="btnAccumulate" class="btn-sub">지문 누적 (긴 지문용)</button>
-<button id="btnReset" class="btn-sub">이 세션 초기화</button>
-<button id="btnSTT" class="btn-sub">음성 인식 시작 (Listening/Speaking)</button>
-
-<button id="debugToggle">디버그 보기 토글 (OCR/음성/지문)</button>
-
-<div id="debugPanel">
-  <div class="debug-block">
-    <div class="debug-title">OCR 텍스트 (현재 화면)</div>
-    <div id="debugOcr" class="debug-pre"></div>
+<div class="wrap">
+  <div id="videoContainer">
+    <video id="video" autoplay playsinline></video>
+    <div id="overlayFrame"></div>
   </div>
-  <div class="debug-block">
-    <div class="debug-title">지문 텍스트 (누적)</div>
-    <div id="debugQuestion" class="debug-pre"></div>
-  </div>
-  <div class="debug-block">
-    <div class="debug-title">음성 텍스트 (STT)</div>
-    <div id="debugAudio" class="debug-pre"></div>
+
+  <div id="controls">
+    <div id="statusLine">카메라 준비 중...</div>
+
+    <div class="row">
+      <span class="label">배율</span>
+      <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
+      <button id="btnOCRNow">지금 인식</button>
+    </div>
   </div>
 </div>
-
-<div id="footerInfo">AI 풀이 완료.</div>
 
 <script>
-  // ------------ Firebase ------------
+  // ---------------- Firebase ----------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -203,342 +124,351 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
-  // ------------ DOM ------------
-  const tabReading   = document.getElementById("tabReading");
-  const tabListening = document.getElementById("tabListening");
-  const tabWriting   = document.getElementById("tabWriting");
-  const tabSpeaking  = document.getElementById("tabSpeaking");
+  const video      = document.getElementById('video');
+  const statusLine = document.getElementById('statusLine');
+  const zoomRange  = document.getElementById('zoomRange');
+  const btnOCRNow  = document.getElementById('btnOCRNow');
 
-  const sectionStatus = document.getElementById("sectionStatus");
-  const answerMain    = document.getElementById("answerMain");
-  const probLine      = document.getElementById("probLine");
-  const detailBox     = document.getElementById("detailBox");
+  // 영어만 인식
+  const OCR_LANG = "eng";
 
-  const btnSolve      = document.getElementById("btnSolve");
-  const btnAccumulate = document.getElementById("btnAccumulate");
-  const btnReset      = document.getElementById("btnReset");
-  const btnSTT        = document.getElementById("btnSTT");
-
-  const debugToggle   = document.getElementById("debugToggle");
-  const debugPanel    = document.getElementById("debugPanel");
-  const debugOcr      = document.getElementById("debugOcr");
-  const debugQuestion = document.getElementById("debugQuestion");
-  const debugAudio    = document.getElementById("debugAudio");
-
-  const footerInfo    = document.getElementById("footerInfo");
-
-  const modeMapKo = {
-    reading:   "reading",
-    listening: "listening",
-    writing:   "writing",
-    speaking:  "speaking"
-  };
-
+  // remote.html에서 선택한 모드 표시만
   let currentMode = "reading";
-
-  let latestOcrText = "";
-  let latestOcrConf = 0;
-  let cameraBlocked = false;
-
-  let accQuestionText = "";
-
-  // STT 상태
-  let recognition = null;
-  let sttSupported = false;
-  let sttRunning = false;
-  let sttTextFull = "";
-
-  // ------------ 모드 전환 ------------
-  function setMode(mode) {
-    currentMode = mode;
-    tabReading.classList.remove("active");
-    tabListening.classList.remove("active");
-    tabWriting.classList.remove("active");
-    tabSpeaking.classList.remove("active");
-
-    if (mode === "reading")   tabReading.classList.add("active");
-    if (mode === "listening") tabListening.classList.add("active");
-    if (mode === "writing")   tabWriting.classList.add("active");
-    if (mode === "speaking")  tabSpeaking.classList.add("active");
-
-    db.ref("p2p/state").update({
-      modeHint: mode,
-      modeUpdatedAt: Date.now()
-    });
-
-    updateSectionStatus();
-  }
-
-  tabReading.onclick   = () => setMode("reading");
-  tabListening.onclick = () => setMode("listening");
-  tabWriting.onclick   = () => setMode("writing");
-  tabSpeaking.onclick  = () => setMode("speaking");
-
-  // ------------ Firebase 상태 구독 (OCR/카메라) ------------
-  db.ref("p2p/state").on("value", snap => {
-    const state = snap.val() || {};
-    latestOcrText = state.ocrText || "";
-    latestOcrConf = typeof state.ocrConfidence === "number" ? state.ocrConfidence : 0;
-    cameraBlocked = !!state.cameraBlocked;
-
-    debugOcr.textContent = latestOcrText || "(없음)";
-    updateSectionStatus();
+  db.ref("p2p/state/modeHint").on("value", snap => {
+    const m = snap.val();
+    if (m) {
+      currentMode = m;
+      if (statusLine.textContent.startsWith("카메라 ON")) {
+        // 해상도 부분은 유지
+        const match = statusLine.textContent.match(/\(.*?\)/);
+        const resInfo = match ? ` ${match[0]} ` : " ";
+        statusLine.textContent =
+          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      }
+    }
   });
 
-  function updateSectionStatus() {
-    const modeLabel = modeMapKo[currentMode] || currentMode;
+  let ocrRunning = false;
+  let lastSolvedSnippet = "";
+  let lastBlocked = null;
+  let lastOcrTime = 0;
 
-    let ocrLabel = "대기";
-    if (latestOcrText && latestOcrConf >= 10) {
-      ocrLabel = "완료";
-    } else if (latestOcrText && latestOcrConf > 0 && latestOcrConf < 10) {
-      ocrLabel = "무시(정확도 낮음)";
-    }
+  // 밝기 + 움직임 감지용 썸네일 캔버스
+  const BW = 64, BH = 36;
+  const bCanvas = document.createElement('canvas');
+  const bCtx = bCanvas.getContext('2d');
+  bCanvas.width = BW;
+  bCanvas.height = BH;
+  let prevThumb = null;
+  let lastStableTime = 0;
 
-    const camLabel = cameraBlocked ? "가려짐" : "정상";
+  // 고해상도 스틸 프레임용 ImageCapture
+  let imageCapture = null;
 
-    sectionStatus.textContent =
-      `섹션: ${modeLabel} · OCR: ${ocrLabel} (conf=${latestOcrConf.toFixed(1)}%) · 카메라 상태: ${camLabel}`;
-  }
+  zoomRange.addEventListener("input", () => {
+    const scale = parseFloat(zoomRange.value);
+    video.style.transform = `scale(${scale})`;
+  });
 
-  // ------------ STT 초기화 ------------
-  (function initSTT() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      sttSupported = false;
-      btnSTT.textContent = "음성 인식 미지원 (브라우저)";
-      btnSTT.disabled = true;
-      return;
-    }
-    sttSupported = true;
-    recognition = new SR();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
+  btnOCRNow.addEventListener("click", () => {
+    if (ocrRunning) return;
+    lastOcrTime = Date.now();
+    doOCROnce(true);
+  });
 
-    recognition.onresult = (event) => {
-      let finalText = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res.isFinal) {
-          finalText += res[0].transcript;
-          finalText += " ";
-        }
-      }
-      if (finalText) {
-        sttTextFull += finalText;
-        sttTextFull = sttTextFull.trim();
-        debugAudio.textContent = sttTextFull;
-        db.ref("p2p/state").update({
-          audioText: sttTextFull,
-          audioUpdatedAt: Date.now()
-        });
-      }
-    };
-
-    recognition.onerror = (e) => {
-      console.warn("STT error", e);
-      footerInfo.textContent = "STT 오류: " + e.error;
-      sttRunning = false;
-      btnSTT.textContent = "음성 인식 시작 (Listening/Speaking)";
-    };
-
-    recognition.onend = () => {
-      if (sttRunning) {
-        // 의도치 않은 종료 → 버튼 상태만 복구
-        sttRunning = false;
-        btnSTT.textContent = "음성 인식 시작 (Listening/Speaking)";
-      }
-    };
-  })();
-
-  function startSTT() {
-    if (!sttSupported || !recognition) return;
+  // ---------- 카메라 시작 (S25 울트라용 튜닝) ----------
+  async function startCamera() {
     try {
-      sttRunning = true;
-      btnSTT.textContent = "음성 인식 중지";
-      footerInfo.textContent = "음성 인식 중...";
-      recognition.start();
-    } catch (e) {
-      console.warn(e);
-    }
-  }
-
-  function stopSTT() {
-    if (!sttSupported || !recognition) return;
-    try {
-      sttRunning = false;
-      btnSTT.textContent = "음성 인식 시작 (Listening/Speaking)";
-      recognition.stop();
-    } catch (e) {
-      console.warn(e);
-    }
-  }
-
-  btnSTT.onclick = () => {
-    if (!sttSupported) return;
-    if (sttRunning) stopSTT(); else startSTT();
-  };
-
-  // ------------ 지문 누적/세션 초기화 ------------
-  btnAccumulate.onclick = () => {
-    const t = (latestOcrText || "").trim();
-    if (!t) {
-      footerInfo.textContent = "현재 OCR 텍스트가 없어 누적하지 못했습니다.";
-      return;
-    }
-    if (accQuestionText) accQuestionText += "\n\n" + t;
-    else accQuestionText = t;
-
-    debugQuestion.textContent = accQuestionText;
-    footerInfo.textContent = "지문 누적 완료.";
-  };
-
-  btnReset.onclick = () => {
-    accQuestionText = "";
-    sttTextFull = "";
-    debugQuestion.textContent = "";
-    debugAudio.textContent = "";
-    answerMain.textContent = "세션이 초기화되었습니다.";
-    probLine.textContent = "";
-    detailBox.textContent = "";
-
-    db.ref("p2p/state").update({
-      audioText: "",
-      questionText: "",
-      sessionResetAt: Date.now()
-    });
-
-    footerInfo.textContent = "세션 초기화 완료.";
-  };
-
-  // ------------ 디버그 토글 ------------
-  debugToggle.onclick = () => {
-    if (debugPanel.style.display === "flex") {
-      debugPanel.style.display = "none";
-    } else {
-      debugPanel.style.display = "flex";
-    }
-  };
-
-  // ------------ AI 호출 ------------
-  function parseP(resultText) {
-    const m = resultText.match(/\[P\]\s*([0-9.]+)/i);
-    if (!m) return null;
-    const v = parseFloat(m[1]);
-    if (isNaN(v)) return null;
-    return Math.max(0, Math.min(1, v));
-  }
-
-  function displayResult(mode, resultText) {
-    const p = parseP(resultText);
-    if (p != null) {
-      const pct = Math.round(p * 100);
-      probLine.textContent = `맞을 확률(추정): ${pct}%`;
-    } else {
-      probLine.textContent = "";
-    }
-
-    if (mode === "writing") {
-      const essayMatch = resultText.match(/\[ESSAY\]([\s\S]*?)\[FEEDBACK\]/i);
-      const fbMatch    = resultText.match(/\[FEEDBACK\]([\s\S]*)$/i);
-      const essay = essayMatch ? essayMatch[1].trim() : "(ESSAY 블록 없음)";
-      const feedback = fbMatch ? fbMatch[1].trim() : "";
-
-      answerMain.textContent = "Writing 모범 에세이 생성됨";
-      detailBox.textContent = "[ESSAY]\n" + essay + "\n\n[FEEDBACK]\n" + feedback;
-      return;
-    }
-
-    if (mode === "speaking") {
-      const modelMatch = resultText.match(/\[MODEL\]([\s\S]*?)\[P\]/i);
-      const script = modelMatch ? modelMatch[1].trim() : resultText.trim();
-      answerMain.textContent = "스피킹 답안 스크립트";
-      detailBox.textContent = script;
-      return;
-    }
-
-    // reading / listening / auto
-    const ansMatch = resultText.match(/\[ANSWER\]\s*([^\n]+)/i);
-    const ans = ansMatch ? ansMatch[1].trim() : "?";
-
-    const whyMatch = resultText.match(/\[WHY\]([\s\S]*)$/i);
-    const why = whyMatch ? whyMatch[1].trim() : resultText.trim();
-
-    answerMain.textContent = ans || "?";
-    detailBox.textContent = why;
-  }
-
-  btnSolve.onclick = async () => {
-    // 1) STT 중이면 먼저 종료
-    if (sttRunning) stopSTT();
-
-    // 2) 사용할 OCR 텍스트 결정
-    const useText = (accQuestionText && accQuestionText.trim().length > 0)
-      ? accQuestionText.trim()
-      : (latestOcrText || "").trim();
-
-    if (!useText) {
-      answerMain.textContent = "OCR 실패/무시 – 지문을 먼저 확실하게 찍어야 합니다.";
-      probLine.textContent = "";
-      detailBox.textContent = "";
-      footerInfo.textContent = "OCR 텍스트가 없어 AI를 호출하지 않았습니다.";
-      return;
-    }
-
-    // 누적을 쓰지 않는 경우에는 conf도 체크
-    if (!accQuestionText && latestOcrConf < 10) {
-      answerMain.textContent = "OCR 정확도가 너무 낮아서 AI 풀이는 건너뜁니다.";
-      probLine.textContent = "";
-      detailBox.textContent =
-        `현재 conf=${latestOcrConf.toFixed(1)}%. 카메라 거리를 조절하거나 다시 촬영해 주세요.`;
-      footerInfo.textContent = "OCR 정확도 부족으로 AI 호출 생략.";
-      return;
-    }
-
-    // 3) 오디오 텍스트 (Listening/Speaking/Writing 통합형용)
-    let audioForMode = "";
-    if (currentMode === "listening" || currentMode === "speaking" || currentMode === "writing") {
-      audioForMode = (sttTextFull || "").trim();
-    }
-
-    answerMain.textContent = "AI 풀이 중...";
-    probLine.textContent = "";
-    detailBox.textContent = "";
-    footerInfo.textContent = "AI에 문제를 보내는 중...";
-
-    btnSolve.disabled = true;
-
-    try {
-      const payload = {
-        mode: currentMode,
-        ocrText: useText,
-        audioText: audioForMode
+      const constraints = {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 2560 },
+          height: { ideal: 1440 },
+          frameRate: { ideal: 30 },
+          advanced: [
+            { width: 2560, height: 1440 },
+            { width: 1920, height: 1080 }
+          ]
+        },
+        audio: false
       };
 
-      const res = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
 
-      const text = await res.text();
-      displayResult(currentMode, text);
-      footerInfo.textContent = "AI 풀이 완료.";
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        // 텍스트에 유리한 디테일 모드 요청
+        if ("contentHint" in track) {
+          try {
+            track.contentHint = "detail";
+          } catch (e) {
+            console.warn("contentHint 설정 실패:", e);
+          }
+        }
+
+        // 실제 해상도 표시
+        const s = track.getSettings ? track.getSettings() : {};
+        const resInfo =
+          s.width && s.height ? ` (${s.width}x${s.height}) ` : " ";
+
+        statusLine.textContent =
+          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+
+        // 고해상도 스틸 캡처 준비
+        if ("ImageCapture" in window) {
+          try {
+            imageCapture = new ImageCapture(track);
+          } catch (e) {
+            console.warn("ImageCapture 생성 실패, video 프레임 fallback:", e);
+            imageCapture = null;
+          }
+        }
+      }
+
+      startAutoLoop();
     } catch (e) {
       console.error(e);
-      answerMain.textContent = "AI 호출 중 오류가 발생했습니다.";
-      probLine.textContent = "";
-      detailBox.textContent = e.toString();
-      footerInfo.textContent = "네트워크/서버 오류.";
-    } finally {
-      btnSolve.disabled = false;
+      statusLine.textContent = "카메라 접근 실패: " + e.toString();
     }
-  };
+  }
 
-  // 기본 모드: Reading
-  setMode("reading");
+  // ---------- 밝기 + 움직임 분석 ----------
+  function analyzeFrame() {
+    if (!video.videoWidth || !video.videoHeight) {
+      return { blocked: false, stable: false };
+    }
+
+    bCtx.drawImage(video, 0, 0, BW, BH);
+    const data = bCtx.getImageData(0, 0, BW, BH).data;
+    const len = BW * BH;
+
+    let sumBright = 0;
+    let diffSum = 0;
+    const currThumb = new Uint8Array(len);
+
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const gray = (r + g + b) / 3;
+      currThumb[p] = gray;
+      sumBright += gray;
+      if (prevThumb) {
+        diffSum += Math.abs(gray - prevThumb[p]);
+      }
+    }
+
+    const avgBright = sumBright / len;
+    const diffAvg   = prevThumb ? (diffSum / len) : 0;
+
+    const blocked = avgBright < 25; // 아주 어두우면 가려진 것으로 간주
+
+    const now = Date.now();
+    let stable = false;
+    if (diffAvg < 8) {
+      if (!lastStableTime) {
+        lastStableTime = now;
+      } else if (now - lastStableTime > 1000) {
+        stable = true;
+      }
+    } else {
+      lastStableTime = 0;
+    }
+
+    prevThumb = currThumb;
+
+    return { blocked, stable };
+  }
+
+  // ---------- 자동 루프 ----------
+  function startAutoLoop() {
+    function loop() {
+      const now = Date.now();
+
+      const { blocked, stable } = analyzeFrame();
+
+      if (blocked !== lastBlocked) {
+        lastBlocked = blocked;
+        db.ref("p2p/state").update({
+          cameraBlocked: blocked,
+          cameraUpdatedAt: Date.now()
+        });
+        const base = statusLine.textContent.replace(/ · 카메라 상태:.+$/, "");
+        statusLine.textContent = blocked
+          ? `${base} · 카메라 상태: 가려짐`
+          : `${base} · 카메라 상태: 정상`;
+      }
+
+      // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
+      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
+        lastOcrTime = now;
+        doOCROnce(false);
+      }
+
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- 스틸 캡처 ----------
+  async function captureToCanvas(canvas, ctx) {
+    // 1순위: takePhoto()
+    if (imageCapture && typeof imageCapture.takePhoto === "function") {
+      try {
+        const blob = await imageCapture.takePhoto();
+        const imgBitmap = await createImageBitmap(blob);
+        drawCroppedScaled(imgBitmap, canvas, ctx);
+        return;
+      } catch (e) {
+        console.warn("takePhoto 실패, grabFrame 시도:", e);
+      }
+    }
+
+    // 2순위: grabFrame()
+    if (imageCapture && typeof imageCapture.grabFrame === "function") {
+      try {
+        const bitmap = await imageCapture.grabFrame();
+        drawCroppedScaled(bitmap, canvas, ctx);
+        return;
+      } catch (e) {
+        console.warn("grabFrame 실패, video 프레임 fallback:", e);
+      }
+    }
+
+    // 3순위: video 프레임
+    fillCanvasFromVideoCenter(canvas, ctx);
+  }
+
+  // 중앙 90% 크롭 + 가로 최대 1600px
+  function drawCroppedScaled(source, canvas, ctx) {
+    const fullW = source.width;
+    const fullH = source.height;
+
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
+    const cropX = Math.floor((fullW - cropW) / 2);
+    const cropY = Math.floor((fullH - cropH) / 2);
+
+    const maxW = 1600;
+    const scale = Math.min(1, maxW / cropW);
+    const outW = Math.floor(cropW * scale);
+    const outH = Math.floor(cropH * scale);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(
+      source,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
+  }
+
+  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백)
+  function fillCanvasFromVideoCenter(canvas, ctx) {
+    if (!video.videoWidth || !video.videoHeight) {
+      canvas.width = 640;
+      canvas.height = 360;
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const fullW = video.videoWidth;
+    const fullH = video.videoHeight;
+
+    const scaleCrop = 0.9;
+    const cropW = Math.floor(fullW * scaleCrop);
+    const cropH = Math.floor(fullH * scaleCrop);
+    const cropX = Math.floor((fullW - cropW) / 2);
+    const cropY = Math.floor((fullH - cropH) / 2);
+
+    const maxW = 1600;
+    const scale = Math.min(1, maxW / cropW);
+    const outW = Math.floor(cropW * scale);
+    const outH = Math.floor(cropH * scale);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(
+      video,
+      cropX, cropY, cropW, cropH,
+      0, 0, outW, outH
+    );
+  }
+
+  // ---------- OCR 1회 ----------
+  async function doOCROnce(manual) {
+    if (ocrRunning) return;
+    ocrRunning = true;
+
+    try {
+      statusLine.textContent = manual
+        ? "수동 OCR 진행 중..."
+        : "자동 OCR 진행 중...";
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      await captureToCanvas(canvas, ctx);
+
+      const result = await Tesseract.recognize(canvas, OCR_LANG, {
+        logger: m => {
+          if (m.status === "recognizing text") {
+            statusLine.textContent =
+              (manual ? "[수동] " : "[자동] ") +
+              `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
+          }
+        }
+      });
+
+      const rawText = result.data.text || "";
+      const text = rawText.replace(/\s+\n/g, "\n").trim();
+      const conf = result.data.confidence || 0;
+
+      const effectiveLen = text.replace(/\s/g, "").length;
+      if (!text || effectiveLen < 10) {
+        statusLine.textContent =
+          `OCR 완료 (텍스트 너무 짧아서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
+        ocrRunning = false;
+        return;
+      }
+
+      // 신뢰도 10% 미만이면 그냥 버림 (AI 호출 안 함)
+      if (conf < 10) {
+        statusLine.textContent =
+          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 너무 낮아서 무시함)`;
+        ocrRunning = false;
+        return;
+      }
+
+      statusLine.textContent =
+        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
+
+      await db.ref("p2p/state").update({
+        ocrText: text,
+        ocrConfidence: conf,
+        cameraBlocked: false,
+        ocrUpdatedAt: Date.now()
+      });
+
+      const snippet = text.slice(0, 400);
+      if (snippet !== lastSolvedSnippet) {
+        lastSolvedSnippet = snippet;
+        await db.ref("p2p/command").set({
+          type: "solve",
+          timestamp: Date.now()
+        });
+      }
+    } catch (e) {
+      console.error(e);
+      statusLine.textContent = "OCR 에러: " + e.toString();
+    } finally {
+      ocrRunning = false;
+    }
+  }
+
+  startCamera();
 </script>
 </body>
 </html>
-
