@@ -23,7 +23,6 @@
       padding-bottom: 150px;
     }
 
-    /* 섹션 버튼 */
     .section-row {
       display: flex;
       gap: 6px;
@@ -45,7 +44,6 @@
       color: #fff;
     }
 
-    /* 정답 영역 */
     #answerSection {
       padding: 10px 12px;
       border-radius: 10px;
@@ -75,7 +73,6 @@
       word-break: break-word;
     }
 
-    /* 디버그 */
     #debugToggle {
       margin: 8px 0 4px;
       font-size: 11px;
@@ -109,8 +106,8 @@
       overflow-y: auto;
     }
 
-    /* Reading용 지문 스캔 버튼 */
-    #readingControls {
+    #readingControls,
+    #listeningControls {
       margin-bottom: 8px;
       display: flex;
       gap: 6px;
@@ -127,7 +124,6 @@
       text-align: center;
     }
 
-    /* 상태 라인 */
     #statusLines {
       font-size: 11px;
       color: #ccc;
@@ -135,7 +131,6 @@
     }
     #statusLines div { margin-bottom: 2px; }
 
-    /* 하단 고정 버튼 */
     #bottomBar {
       position: fixed;
       left: 0;
@@ -184,7 +179,6 @@
 </head>
 <body>
 <div class="page">
-  <!-- 섹션 선택 -->
   <div class="section-row">
     <button class="section-btn active" data-section="reading">Reading</button>
     <button class="section-btn" data-section="listening">Listening</button>
@@ -192,17 +186,14 @@
     <button class="section-btn" data-section="speaking">Speaking</button>
   </div>
 
-  <!-- 정답 영역 -->
   <section id="answerSection">
     <div id="answerMain">아직 정답 없음</div>
     <div id="answerMeta">섹션: reading · 확신도: -</div>
     <div id="answerRaw"></div>
   </section>
 
-  <!-- 디버그 토글 -->
   <button id="debugToggle">디버그 보기 토글 (OCR/음성/지문)</button>
 
-  <!-- 디버그 패널 -->
   <section id="debugPanel">
     <h3>OCR 텍스트 (현재 화면)</h3>
     <pre id="ocrPreview"></pre>
@@ -214,13 +205,15 @@
     <pre id="audioPreview"></pre>
   </section>
 
-  <!-- Reading 전용 컨트롤 -->
   <div id="readingControls">
     <button id="btnPassageStart" class="small-btn">지문 스캔 시작(초기화)</button>
     <button id="btnPassageAdd" class="small-btn">화면 추가 (지문)</button>
   </div>
 
-  <!-- 상태 라인 -->
+  <div id="listeningControls">
+    <button id="btnListeningReset" class="small-btn">리스닝 세트 초기화</button>
+  </div>
+
   <div id="statusLines">
     <div id="cameraStatus">카메라 상태: -</div>
     <div id="ocrStatus">OCR: -</div>
@@ -229,7 +222,6 @@
   </div>
 </div>
 
-<!-- 하단 버튼 -->
 <div id="bottomBar">
   <button id="btnSolveQuestion">이 질문 풀기</button>
   <button id="btnStt">음성 인식 시작 (Listening/Speaking)</button>
@@ -237,7 +229,6 @@
 </div>
 
 <script>
-  // ---------- Firebase ----------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -269,6 +260,8 @@
   const btnPassageStart = document.getElementById("btnPassageStart");
   const btnPassageAdd   = document.getElementById("btnPassageAdd");
   const readingControls = document.getElementById("readingControls");
+  const listeningControls = document.getElementById("listeningControls");
+  const btnListeningReset = document.getElementById("btnListeningReset");
 
   let currentSection = "reading";
   let currentConfidenceText = "-";
@@ -284,8 +277,8 @@
       btn.classList.add("active");
       answerMeta.textContent = "섹션: " + currentSection + " · 확신도: " + currentConfidenceText;
 
-      // Reading일 때만 지문 스캔 버튼 보이기
       readingControls.style.display = (sec === "reading") ? "flex" : "none";
+      listeningControls.style.display = (sec === "listening") ? "flex" : "none";
 
       db.ref("p2p/state").update({
         modeHint: currentSection,
@@ -302,7 +295,6 @@
     }
   });
 
-  // ---------- Firebase state 구독 ----------
   let latestState = {
     ocrText: "",
     ocrConfidence: 0,
@@ -316,7 +308,6 @@
     const val = snap.val() || {};
     latestState = Object.assign(latestState, val);
 
-    // OCR
     ocrPreview.textContent = (val.ocrText || "").slice(0, 2000);
     if (typeof val.ocrConfidence === "number") {
       ocrStatus.textContent = "OCR: conf=" + val.ocrConfidence.toFixed(1) + "%";
@@ -324,14 +315,12 @@
       ocrStatus.textContent = "OCR: -";
     }
 
-    // 카메라
     if (val.cameraBlocked) {
       cameraStatus.textContent = "카메라 상태: 가려짐 (센서폰 확인)";
     } else {
       cameraStatus.textContent = "카메라 상태: 정상";
     }
 
-    // 지문
     if (typeof val.passageUpdatedAt === "number") {
       passageStatus.textContent = "지문: 마지막 업데이트 " + new Date(val.passageUpdatedAt).toLocaleTimeString();
     }
@@ -342,7 +331,6 @@
     passagePreview.textContent = txt.slice(0, 4000);
   });
 
-  // ---------- STT ----------
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
   let listening = false;
@@ -385,7 +373,7 @@
     btnStt.classList.add("listening");
     btnStt.textContent = "음성 인식 중지 (Listening/Speaking)";
     sttLine.textContent = "STT: 인식 중...";
-    sttStatus.textContent = "노트북 스피커/마이크 근처에 두고 영어로 말하면 인식됩니다.";
+    sttStatus.textContent = "스피커/마이크 근처에 두고 영어로 말하면 인식됩니다.";
 
     recognition.onresult = function(event) {
       let finalAdded = false;
@@ -463,7 +451,14 @@
     sttStatus.textContent = "음성 인식을 사용할 수 있습니다.";
   }
 
-  // ---------- 카메라 명령 ----------
+  // 리스닝 세트 리셋 (STT 텍스트 유지/삭제는 여기서만 수동으로)
+  btnListeningReset.addEventListener("click", function() {
+    audioBuffer = "";
+    updateAudioInFirebase();
+    sttLine.textContent = "STT: 리셋됨 (새 리스닝 세트 시작)";
+    sttStatus.textContent = "리스닝 세트용 STT가 초기화되었습니다.";
+  });
+
   function sendCameraCommand(kind) {
     const cmd = {
       kind: kind,
@@ -472,7 +467,7 @@
     return db.ref("p2p/cameraCommand").set(cmd);
   }
 
-  // Reading: 지문 스캔 초기화
+  // 지문 초기화 + 추가
   btnPassageStart.addEventListener("click", async function() {
     await db.ref("p2p/passageText").set("");
     await db.ref("p2p/state").update({
@@ -482,13 +477,11 @@
     passageStatus.textContent = "지문: 초기화 완료";
   });
 
-  // Reading: 현재 화면을 지문에 추가
   btnPassageAdd.addEventListener("click", async function() {
     passageStatus.textContent = "지문: 현재 화면 OCR 요청 중...";
     await sendCameraCommand("passage");
   });
 
-  // ---------- solve 호출 ----------
   let solving = false;
 
   async function callSolve() {
@@ -527,7 +520,7 @@
     }
   }
 
-  // 질문 풀기 버튼: 질문 화면 OCR → 끝나면 solve
+  // "이 질문 풀기" → 카메라에 질문 화면 OCR 요청 → 완료되면 solve 호출
   btnSolveQuestion.addEventListener("click", async function() {
     const startTs = Date.now();
     ocrStatus.textContent = "OCR: 질문 화면 캡처 요청 중...";
@@ -550,7 +543,7 @@
     waitLoop();
   });
 
-  // ---------- AI 응답 렌더링 ----------
+  // AI 답안 표시
   function renderAnswer(rawText) {
     const text = (rawText || "").trim();
     if (!text) {
@@ -560,6 +553,7 @@
       return;
     }
 
+    // [CONFIDENCE] 파싱
     let confText = currentConfidenceText;
     let confMatch = text.match(/^\[CONFIDENCE\]\s*([0-9.]+)/im);
     if (!confMatch) {
@@ -574,12 +568,12 @@
     }
     currentConfidenceText = confText;
 
+    // 메인 답변 추출
     let mainAnswer = null;
     const mAnswer = text.match(/^\[ANSWER\]\s*(.+)$/im);
     if (mAnswer) {
       mainAnswer = mAnswer[1].trim();
     } else {
-      // Speaking/Writing용 [MODEL] / [ESSAY]
       const modelIdx = text.indexOf("[MODEL]");
       const essayIdx = text.indexOf("[ESSAY]");
       let block = null;
