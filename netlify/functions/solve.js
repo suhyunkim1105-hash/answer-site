@@ -1,24 +1,23 @@
 // netlify/functions/solve.js
-
-const fetch = (...args) =>
-  import('node-fetch').then(({ default: fetch }) => fetch(...args));
+// Netlify Node 18+ : global fetch 사용 (node-fetch 불필요)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
 
+// 긴 텍스트는 뒤쪽만 남기기 (지문이 너무 길면 모델이 뻗을 수 있어서)
 function clip(str, max) {
   if (!str) return "";
   str = String(str).replace(/\r/g, "");
   if (str.length <= max) return str;
-  return str.slice(-max); // 뒤쪽이 보통 문제/선지라서 뒤에서 자름
+  return str.slice(-max);
 }
 
 function buildPrompt({ mode, ocrText, audioText }) {
   const baseInfo = `
 You are an AI that solves official-style TOEFL iBT questions.
-OCR text may contain noise, break lines, or include HTML junk. Ignore garbage and guess the most likely intended question.
+OCR text may contain noise, broken lines, or HTML junk. Ignore garbage and guess the most likely intended question.
 
-Your must always obey the OUTPUT FORMAT for the current mode.
+You must always obey the OUTPUT FORMAT for the current mode.
 If your confidence in the final answer is below 0.1, use "?" as the answer.
 Always include a probability line "[P] 0.00" between 0 and 1 (your estimate that your answer is correct).`;
 
@@ -27,7 +26,7 @@ Always include a probability line "[P] 0.00" between 0 and 1 (your estimate that
 ${ocrText || "(none)"}
 
 [AUDIO_TEXT]
-${audioText || "(none)"}  
+${audioText || "(none)"}
 `;
 
   if (mode === "reading" || mode === "listening") {
@@ -59,7 +58,7 @@ ${baseInfo}
 
 MODE: WRITING
 Task: Use OCR_TEXT (and AUDIO_TEXT if useful) to infer the TOEFL writing prompt.
-Write a high-scoring model answer. Assume time limit like TOEFL integrated (20분) / discussion (10분).
+Write a high-scoring model answer. Assume a TOEFL-like time limit.
 
 Length: about 220-320 English words total. Do NOT exceed ~350 words.
 
@@ -125,10 +124,7 @@ function ok(body) {
   return { statusCode: 200, body };
 }
 
-function bad(status, msg) {
-  return { statusCode: status, body: msg };
-}
-
+// OpenRouter 호출 + HTML/타임아웃 방어
 async function callOpenRouter(prompt) {
   if (!OPENROUTER_API_KEY) {
     return {
@@ -136,9 +132,6 @@ async function callOpenRouter(prompt) {
       text: "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter API key가 설정되어 있지 않습니다."
     };
   }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25초 하드 타임아웃
 
   const body = {
     model: OPENROUTER_MODEL,
@@ -155,25 +148,34 @@ async function callOpenRouter(prompt) {
     ]
   };
 
+  const fetchOptions = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+      "X-Title": "answer-site-toefl-helper"
+    },
+    body: JSON.stringify(body)
+  };
+
+  // 25초 타임아웃
+  let controller = null;
+  let timeoutId = null;
+  if (typeof AbortController !== "undefined") {
+    controller = new AbortController();
+    fetchOptions.signal = controller.signal;
+    timeoutId = setTimeout(() => controller.abort(), 25000);
+  }
+
   let res;
   let rawText = "";
 
   try {
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site-toefl-helper"
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", fetchOptions);
     rawText = await res.text();
   } catch (e) {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
     return {
       ok: false,
       text:
@@ -181,7 +183,7 @@ async function callOpenRouter(prompt) {
         `에러: ${e.toString()}`
     };
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
   const trimmed = rawText.trim();
@@ -192,14 +194,13 @@ async function callOpenRouter(prompt) {
     /^<head/i.test(trimmed.slice(0, 20)) ||
     /^<body/i.test(trimmed.slice(0, 20));
 
+  // HTTP 에러나 HTML 에러 페이지면 여기서 잘라버리기
   if (!res.ok || looksHtml) {
-    // 여기서 바로 HTML 에러를 먹어버리고, 깔끔한 텍스트만 돌려보냄
     return {
       ok: false,
       text:
         "[ANSWER] ?\n[P] 0.00\n[WHY]\n" +
-        `OpenRouter 응답 오류 (status=${res.status}).\n` +
-        "Inactivity Timeout 등 HTML 에러 페이지가 왔습니다. 잠시 후 다시 시도하세요."
+        `OpenRouter 응답 오류 (status=${res.status}). Inactivity Timeout 등 HTML 에러 페이지가 왔습니다. 잠시 후 다시 시도하세요.`
     };
   }
 
@@ -237,14 +238,14 @@ async function callOpenRouter(prompt) {
 
 exports.handler = async (event, context) => {
   if (event.httpMethod !== "POST") {
-    return bad(405, "Method Not Allowed");
+    return { statusCode: 405, body: "Method Not Allowed" };
   }
 
   let body;
   try {
     body = JSON.parse(event.body || "{}");
   } catch (e) {
-    return bad(400, "Invalid JSON body");
+    return { statusCode: 400, body: "Invalid JSON body" };
   }
 
   let { mode, ocrText, audioText } = body;
@@ -259,10 +260,9 @@ exports.handler = async (event, context) => {
     audioText: cleanAudio
   });
 
-  // OpenRouter 호출
   const result = await callOpenRouter(prompt);
 
-  // 항상 200 + text 로 돌려보내서, remote.html에서 그대로 파싱하도록 한다.
+  // 프론트는 항상 "텍스트만" 받도록 200으로 응답
   return ok(result.text);
 };
 
