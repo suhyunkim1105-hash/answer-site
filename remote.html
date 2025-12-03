@@ -14,221 +14,216 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 8px;
-      background: #000;
-      color: #fff;
+      padding: 10px;
+      background: #050505;
+      color: #f5f5f5;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
     }
-    .page {
-      padding-bottom: 150px;
+    .wrap {
+      max-width: 820px;
+      margin: 0 auto;
     }
 
-    .section-row {
+    /* 상단 모드 버튼 */
+    .mode-bar {
       display: flex;
       gap: 6px;
       margin-bottom: 8px;
     }
-    .section-btn {
+    .mode-btn {
       flex: 1 1 0;
-      text-align: center;
-      padding: 6px 0;
-      border-radius: 999px;
-      border: 1px solid #333;
-      font-size: 12px;
+      padding: 8px 0;
+      border-radius: 16px;
+      border: 1px solid #444;
       background: #111;
       color: #ddd;
+      font-size: 13px;
+      text-align: center;
+      cursor: pointer;
     }
-    .section-btn.active {
-      background: #1e88ff;
-      border-color: #1e88ff;
+    .mode-btn.active {
+      background: #1e90ff;
+      border-color: #1e90ff;
       color: #fff;
+      font-weight: 600;
     }
 
-    #answerSection {
+    /* 답 영역 */
+    #sectionInfo {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+
+    #answerMain {
       padding: 10px 12px;
       border-radius: 10px;
-      background: #111;
-      margin-bottom: 8px;
-    }
-    #answerMain {
-      font-size: 20px;
-      font-weight: 700;
-      margin-bottom: 4px;
+      background: #101010;
+      border: 1px solid #333;
+      min-height: 40px;
+      font-size: 18px;
+      font-weight: 600;
       white-space: pre-wrap;
-      word-break: break-word;
+      margin-bottom: 4px;
     }
+
     #answerMeta {
       font-size: 11px;
-      color: #aaa;
-    }
-    #answerRaw {
-      margin-top: 8px;
-      font-size: 12px;
-      background: #050505;
-      border-radius: 6px;
-      padding: 6px;
-      max-height: 200px;
-      overflow-y: auto;
+      color: #88c0ff;
+      margin-bottom: 8px;
       white-space: pre-wrap;
-      word-break: break-word;
     }
 
-    #debugToggle {
-      margin: 8px 0 4px;
-      font-size: 11px;
-      padding: 4px 8px;
-      border-radius: 999px;
-      border: 1px solid #444;
-      background: #111;
-      color: #eee;
-    }
-    #debugPanel {
-      display: none;
+    #answerRaw {
+      padding: 8px 10px;
       border-radius: 8px;
       background: #080808;
-      padding: 8px;
-      margin-bottom: 8px;
-    }
-    #debugPanel h3 {
-      margin: 4px 0;
-      font-size: 11px;
-      color: #7ee0ff;
-    }
-    pre {
-      margin: 0 0 6px;
-      font-size: 11px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      background: #020202;
-      padding: 4px;
-      border-radius: 4px;
-      max-height: 140px;
+      border: 1px solid #222;
+      font-size: 12px;
+      max-height: 180px;
       overflow-y: auto;
+      white-space: pre-wrap;
     }
 
-    #readingControls,
-    #listeningControls {
-      margin-bottom: 8px;
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-    .small-btn {
-      flex: 1 1 0;
-      padding: 6px 4px;
+    /* 디버그 토글 & 패널 */
+    #debugToggle {
+      margin-top: 10px;
+      padding: 4px 10px;
       font-size: 11px;
       border-radius: 999px;
       border: 1px solid #444;
       background: #111;
-      color: #eee;
-      text-align: center;
+      color: #ddd;
+      cursor: pointer;
     }
-
-    #statusLines {
+    #debugPanel {
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 8px;
+      background: #050505;
+      border: 1px solid #333;
+      display: none;
+    }
+    #debugPanel h4 {
+      margin: 4px 0;
+      font-size: 11px;
+      color: #9ad;
+    }
+    .debug-block {
+      margin-bottom: 6px;
+    }
+    .debug-pre {
+      max-height: 120px;
+      overflow-y: auto;
+      padding: 4px 6px;
+      border-radius: 4px;
+      background: #000;
+      border: 1px solid #222;
+      font-size: 11px;
+      white-space: pre-wrap;
+    }
+    #debugStatus {
       font-size: 11px;
       color: #ccc;
-      margin-bottom: 4px;
+      margin-top: 4px;
     }
-    #statusLines div { margin-bottom: 2px; }
 
-    #bottomBar {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      padding: 8px;
-      background: rgba(0,0,0,0.95);
-      border-top: 1px solid #222;
+    /* 하단 버튼들 */
+    .bottom-buttons {
+      margin-top: 10px;
       display: flex;
       flex-direction: column;
       gap: 6px;
     }
-    #btnSolveQuestion {
-      width: 100%;
-      padding: 12px 0;
-      font-size: 15px;
-      font-weight: 600;
-      border-radius: 999px;
-      border: none;
-      background: #1e88ff;
-      color: #fff;
-    }
-    #btnSolveQuestion:disabled {
-      opacity: 0.6;
-    }
-    #btnStt {
+    .btn-primary {
       width: 100%;
       padding: 10px 0;
+      font-size: 15px;
+      border-radius: 999px;
+      border: none;
+      background: #1e90ff;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+    .btn-secondary {
+      width: 100%;
+      padding: 8px 0;
       font-size: 13px;
       border-radius: 999px;
       border: 1px solid #444;
       background: #111;
-      color: #eee;
+      color: #ddd;
+      cursor: pointer;
     }
-    #btnStt.listening {
-      background: #00c853;
-      border-color: #00c853;
-      color: #000;
+    .btn-secondary:active {
+      transform: scale(0.98);
     }
-    #sttStatus {
+
+    #globalStatus {
+      margin-top: 6px;
       font-size: 11px;
-      color: #aaa;
-      text-align: center;
+      color: #bbb;
     }
   </style>
 </head>
 <body>
-<div class="page">
-  <div class="section-row">
-    <button class="section-btn active" data-section="reading">Reading</button>
-    <button class="section-btn" data-section="listening">Listening</button>
-    <button class="section-btn" data-section="writing">Writing</button>
-    <button class="section-btn" data-section="speaking">Speaking</button>
+<div class="wrap">
+  <!-- 모드 선택 -->
+  <div class="mode-bar">
+    <button class="mode-btn active"   data-mode="reading">Reading</button>
+    <button class="mode-btn"          data-mode="listening">Listening</button>
+    <button class="mode-btn"          data-mode="writing">Writing</button>
+    <button class="mode-btn"          data-mode="speaking">Speaking</button>
   </div>
 
-  <section id="answerSection">
-    <div id="answerMain">아직 정답 없음</div>
-    <div id="answerMeta">섹션: reading · 확신도: -</div>
-    <div id="answerRaw"></div>
-  </section>
+  <div id="sectionInfo">섹션: reading · 확신도: -</div>
 
+  <!-- 답 영역 -->
+  <div id="answerMain">아직 풀이 전입니다.</div>
+  <div id="answerMeta"></div>
+  <pre id="answerRaw"></pre>
+
+  <!-- 디버그 -->
   <button id="debugToggle">디버그 보기 토글 (OCR/음성/지문)</button>
-
-  <section id="debugPanel">
-    <h3>OCR 텍스트 (현재 화면)</h3>
-    <pre id="ocrPreview"></pre>
-
-    <h3>지문 텍스트 (누적)</h3>
-    <pre id="passagePreview"></pre>
-
-    <h3>음성 텍스트 (STT)</h3>
-    <pre id="audioPreview"></pre>
-  </section>
-
-  <div id="readingControls">
-    <button id="btnPassageStart" class="small-btn">지문 스캔 시작(초기화)</button>
-    <button id="btnPassageAdd" class="small-btn">화면 추가 (지문)</button>
+  <div id="debugPanel">
+    <div class="debug-block">
+      <h4>OCR 텍스트 (현재 화면)</h4>
+      <pre id="debugOcrCurrent" class="debug-pre"></pre>
+    </div>
+    <div class="debug-block">
+      <h4>지문 텍스트 (누적)</h4>
+      <pre id="debugOcrAccum" class="debug-pre"></pre>
+    </div>
+    <div class="debug-block">
+      <h4>음성 텍스트 (STT)</h4>
+      <pre id="debugSttText" class="debug-pre"></pre>
+    </div>
+    <div class="debug-block">
+      <h4>AI 원문 응답</h4>
+      <pre id="debugAiRaw" class="debug-pre"></pre>
+    </div>
+    <div id="debugStatus"></div>
   </div>
 
-  <div id="listeningControls">
-    <button id="btnListeningReset" class="small-btn">리스닝 세트 초기화</button>
+  <!-- 하단 버튼 -->
+  <div class="bottom-buttons">
+    <button id="btnSolve" class="btn-primary">이 질문 풀기</button>
+    <button id="btnResetListening" class="btn-secondary">리스닝 세트 초기화</button>
+    <button id="btnSttToggle" class="btn-secondary">
+      음성 인식 시작 (Listening/Speaking)
+    </button>
   </div>
 
-  <div id="statusLines">
-    <div id="cameraStatus">카메라 상태: -</div>
-    <div id="ocrStatus">OCR: -</div>
-    <div id="passageStatus">지문: -</div>
-    <div id="sttLine">STT: 대기 중</div>
-  </div>
-</div>
-
-<div id="bottomBar">
-  <button id="btnSolveQuestion">이 질문 풀기</button>
-  <button id="btnStt">음성 인식 시작 (Listening/Speaking)</button>
-  <div id="sttStatus">이 브라우저에서 음성 인식을 사용합니다.</div>
+  <div id="globalStatus"></div>
 </div>
 
 <script>
+  // ------------ Firebase ------------
   const firebaseConfig = {
     apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
     authDomain: "answer-site-p2p.firebaseapp.com",
@@ -241,266 +236,265 @@
   };
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
+  const stateRef   = db.ref("p2p/state");
+  const commandRef = db.ref("p2p/command");
 
-  const answerMain      = document.getElementById("answerMain");
-  const answerMeta      = document.getElementById("answerMeta");
-  const answerRaw       = document.getElementById("answerRaw");
-  const ocrPreview      = document.getElementById("ocrPreview");
-  const passagePreview  = document.getElementById("passagePreview");
-  const audioPreview    = document.getElementById("audioPreview");
-  const cameraStatus    = document.getElementById("cameraStatus");
-  const ocrStatus       = document.getElementById("ocrStatus");
-  const passageStatus   = document.getElementById("passageStatus");
-  const sttLine         = document.getElementById("sttLine");
-  const btnSolveQuestion= document.getElementById("btnSolveQuestion");
-  const btnStt          = document.getElementById("btnStt");
-  const sttStatus       = document.getElementById("sttStatus");
-  const debugToggle     = document.getElementById("debugToggle");
-  const debugPanel      = document.getElementById("debugPanel");
-  const btnPassageStart = document.getElementById("btnPassageStart");
-  const btnPassageAdd   = document.getElementById("btnPassageAdd");
-  const readingControls = document.getElementById("readingControls");
-  const listeningControls = document.getElementById("listeningControls");
-  const btnListeningReset = document.getElementById("btnListeningReset");
+  // ------------ DOM 요소 ------------
+  const modeButtons      = document.querySelectorAll(".mode-btn");
+  const sectionInfoSpan  = document.getElementById("sectionInfo");
+  const answerMainEl     = document.getElementById("answerMain");
+  const answerMetaEl     = document.getElementById("answerMeta");
+  const answerRawEl      = document.getElementById("answerRaw");
 
-  let currentSection = "reading";
-  let currentConfidenceText = "-";
+  const debugToggleBtn   = document.getElementById("debugToggle");
+  const debugPanel       = document.getElementById("debugPanel");
+  const debugOcrCurrent  = document.getElementById("debugOcrCurrent");
+  const debugOcrAccum    = document.getElementById("debugOcrAccum");
+  const debugSttText     = document.getElementById("debugSttText");
+  const debugAiRaw       = document.getElementById("debugAiRaw");
+  const debugStatus      = document.getElementById("debugStatus");
 
-  const sectionButtons = Array.prototype.slice.call(
-    document.querySelectorAll(".section-btn")
-  );
-  sectionButtons.forEach(function(btn) {
-    btn.addEventListener("click", function() {
-      const sec = btn.getAttribute("data-section");
-      currentSection = sec;
-      sectionButtons.forEach(function(b){ b.classList.remove("active"); });
-      btn.classList.add("active");
-      answerMeta.textContent = "섹션: " + currentSection + " · 확신도: " + currentConfidenceText;
+  const btnSolve         = document.getElementById("btnSolve");
+  const btnResetListening= document.getElementById("btnResetListening");
+  const btnSttToggle     = document.getElementById("btnSttToggle");
+  const globalStatus     = document.getElementById("globalStatus");
 
-      readingControls.style.display = (sec === "reading") ? "flex" : "none";
-      listeningControls.style.display = (sec === "listening") ? "flex" : "none";
+  // ------------ 상태 변수 ------------
+  let currentMode      = "reading";
+  let lastOcrText      = "";
+  let accumulatedText  = ""; // 리딩/리스닝 지문 누적
+  let lastOcrUpdatedAt = 0;
 
-      db.ref("p2p/state").update({
-        modeHint: currentSection,
-        modeUpdatedAt: Date.now()
-      });
+  let sttSupported     = false;
+  let sttRecognition   = null;
+  let sttActive        = false;
+  let sttFinalText     = "";
+  let sttRestartPlanned= false;
+
+  let solving          = false;
+  let pendingSolve     = false;
+  let lastCommandTs    = 0;
+
+  // ------------ 모드 전환 ------------
+  function updateModeUI() {
+    modeButtons.forEach(btn => {
+      const m = btn.getAttribute("data-mode");
+      btn.classList.toggle("active", m === currentMode);
+    });
+    let sectionLabel = currentMode;
+    sectionInfoSpan.textContent = `섹션: ${sectionLabel} · 확신도: -`;
+  }
+
+  modeButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const newMode = btn.getAttribute("data-mode");
+      if (currentMode === newMode) return;
+      currentMode = newMode;
+      updateModeUI();
+      stateRef.update({ modeHint: currentMode });
     });
   });
 
-  debugToggle.addEventListener("click", function() {
-    if (!debugPanel.style.display || debugPanel.style.display === "none") {
-      debugPanel.style.display = "block";
-    } else {
-      debugPanel.style.display = "none";
-    }
+  // ------------ 디버그 토글 ------------
+  debugToggleBtn.addEventListener("click", () => {
+    debugPanel.style.display =
+      debugPanel.style.display === "none" || debugPanel.style.display === ""
+        ? "block" : "none";
   });
 
-  let latestState = {
-    ocrText: "",
-    ocrConfidence: 0,
-    audioText: "",
-    cameraBlocked: false,
-    ocrUpdatedAt: 0,
-    passageUpdatedAt: 0
-  };
+  // ------------ Firebase 상태 구독 ------------
+  stateRef.on("value", snap => {
+    const state = snap.val() || {};
+    const ocrText = state.ocrText || "";
+    const ocrConf = typeof state.ocrConfidence === "number"
+      ? state.ocrConfidence.toFixed(1) + "%"
+      : "-";
+    const audioText = state.audioText || "";
+    const cameraBlocked = state.cameraBlocked ? "가려짐" : "정상";
 
-  db.ref("p2p/state").on("value", function(snap) {
-    const val = snap.val() || {};
-    latestState = Object.assign(latestState, val);
+    // 현재 OCR
+    lastOcrText = ocrText;
+    lastOcrUpdatedAt = state.ocrUpdatedAt || 0;
+    debugOcrCurrent.textContent = ocrText || "(없음)";
 
-    ocrPreview.textContent = (val.ocrText || "").slice(0, 2000);
-    if (typeof val.ocrConfidence === "number") {
-      ocrStatus.textContent = "OCR: conf=" + val.ocrConfidence.toFixed(1) + "%";
-    } else {
-      ocrStatus.textContent = "OCR: -";
+    // 누적 지문(리딩/리스닝)
+    if (ocrText) {
+      // 아주 단순: 같은 스니펫이 아니면 계속 이어 붙이기
+      const snippet = ocrText.slice(0, 200);
+      if (!accumulatedText.includes(snippet)) {
+        accumulatedText = (accumulatedText + "\n" + ocrText).trim();
+      }
     }
+    debugOcrAccum.textContent = accumulatedText || "(없음)";
 
-    if (val.cameraBlocked) {
-      cameraStatus.textContent = "카메라 상태: 가려짐 (센서폰 확인)";
-    } else {
-      cameraStatus.textContent = "카메라 상태: 정상";
+    // STT
+    if (!sttFinalText && audioText) {
+      // 외부에서 이미 채워진 경우(혹시)
+      sttFinalText = audioText;
     }
+    debugSttText.textContent = sttFinalText || audioText || "(없음)";
 
-    if (typeof val.passageUpdatedAt === "number") {
-      passageStatus.textContent = "지문: 마지막 업데이트 " + new Date(val.passageUpdatedAt).toLocaleTimeString();
-    }
+    // 상태 표시
+    const secLabel = currentMode;
+    sectionInfoSpan.textContent =
+      `섹션: ${secLabel} · OCR: conf=${ocrConf} · 카메라 상태: ${cameraBlocked}`;
   });
 
-  db.ref("p2p/passageText").on("value", function(snap) {
-    const txt = snap.val() || "";
-    passagePreview.textContent = txt.slice(0, 4000);
+  // ------------ solve 트리거 (카메라에서) ------------
+  commandRef.on("value", snap => {
+    const cmd = snap.val();
+    if (!cmd || cmd.type !== "solve" || !cmd.timestamp) return;
+    if (cmd.timestamp === lastCommandTs) return;
+    lastCommandTs = cmd.timestamp;
+    // 카메라에서 온 자동 트리거 → 지금 풀기
+    runSolve("auto");
   });
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let recognition = null;
-  let listening = false;
-  let audioBuffer = "";
-  let interimDisplay = "";
-
-  function updateAudioInFirebase() {
-    db.ref("p2p/state").update({
-      audioText: audioBuffer,
-      audioUpdatedAt: Date.now()
-    });
-    audioPreview.textContent = audioBuffer.slice(0, 2000);
-  }
-
-  function initRecognition() {
+  // ------------ STT 초기화 ------------
+  function initSTT() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      sttStatus.textContent = "⚠️ 이 브라우저는 음성 인식을 지원하지 않습니다.";
-      btnStt.disabled = true;
-      return null;
-    }
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    return rec;
-  }
-
-  function startStt() {
-    if (!SpeechRecognition) {
-      sttStatus.textContent = "⚠️ 브라우저에서 STT 미지원.";
+      sttSupported = false;
+      btnSttToggle.textContent = "브라우저에서 음성 인식 미지원";
+      btnSttToggle.disabled = true;
       return;
     }
-    if (listening && recognition) return;
+    sttSupported = true;
+    sttRecognition = new SpeechRecognition();
+    sttRecognition.lang = "en-US";
+    sttRecognition.interimResults = true;
+    sttRecognition.continuous = true;
 
-    recognition = initRecognition();
-    if (!recognition) return;
-
-    listening = true;
-    btnStt.classList.add("listening");
-    btnStt.textContent = "음성 인식 중지 (Listening/Speaking)";
-    sttLine.textContent = "STT: 인식 중...";
-    sttStatus.textContent = "스피커/마이크 근처에 두고 영어로 말하면 인식됩니다.";
-
-    recognition.onresult = function(event) {
-      let finalAdded = false;
+    sttRecognition.onresult = (event) => {
+      let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
-        const text = res[0].transcript.trim();
-        if (!text) continue;
+        const txt = res[0].transcript;
         if (res.isFinal) {
-          audioBuffer += (audioBuffer ? " " : "") + text;
-          finalAdded = true;
-          interimDisplay = "";
+          sttFinalText += (sttFinalText ? " " : "") + txt.trim();
         } else {
-          interimDisplay = text;
+          interim += txt;
         }
       }
-      if (finalAdded) {
-        updateAudioInFirebase();
+      const display = sttFinalText + (interim ? " [" + interim + "]" : "");
+      debugSttText.textContent = display || "(없음)";
+
+      // Firebase에 최종 텍스트 업데이트 (너무 자주 쓰지 않게 조금 조건)
+      if (sttFinalText && sttFinalText.length % 20 < 5) {
+        stateRef.update({
+          audioText: sttFinalText,
+          audioUpdatedAt: Date.now()
+        });
       }
-      const previewText = audioBuffer + (interimDisplay ? (" " + interimDisplay) : "");
-      audioPreview.textContent = previewText.slice(0, 2000);
-      sttLine.textContent = "STT: 인식 중...";
     };
 
-    recognition.onerror = function(event) {
+    sttRecognition.onerror = (event) => {
       console.warn("STT error:", event.error);
-      sttLine.textContent = "STT 에러: " + event.error;
+      debugStatus.textContent = "STT 오류: " + event.error;
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        sttActive = false;
+        btnSttToggle.textContent = "음성 인식 불가 (권한 거부)";
+      }
     };
 
-    recognition.onend = function() {
-      if (listening) {
+    sttRecognition.onend = () => {
+      // 사용자가 직접 끈 게 아니고, 여전히 active면 자동 재시작
+      if (sttActive) {
+        debugStatus.textContent = "STT 재시작 중...";
         try {
-          recognition.start();
+          sttRecognition.start();
         } catch (e) {
           console.warn("STT 재시작 실패:", e);
-          sttLine.textContent = "STT 재시작 실패: " + e.toString();
         }
       } else {
-        sttLine.textContent = "STT: 중지됨";
+        debugStatus.textContent = "STT 중지됨.";
       }
     };
-
-    try {
-      recognition.start();
-    } catch (e) {
-      console.error("STT 시작 실패:", e);
-      sttStatus.textContent = "STT 시작 실패: " + e.toString();
-    }
   }
 
-  function stopStt() {
-    listening = false;
-    btnStt.classList.remove("listening");
-    btnStt.textContent = "음성 인식 시작 (Listening/Speaking)";
-    sttLine.textContent = "STT: 중지됨";
-    sttStatus.textContent = "음성 인식이 중지되었습니다.";
-    try {
-      if (recognition) {
-        recognition.onend = null;
-        recognition.stop();
+  initSTT();
+
+  // STT 토글 버튼
+  btnSttToggle.addEventListener("click", () => {
+    if (!sttSupported || !sttRecognition) return;
+    if (!sttActive) {
+      // 시작
+      sttActive = true;
+      sttFinalText = "";
+      debugSttText.textContent = "(녹음 중...)";
+      btnSttToggle.textContent = "음성 인식 중지";
+      debugStatus.textContent = "STT 동작 중 (Listening/Speaking).";
+      try {
+        sttRecognition.start();
+      } catch (e) {
+        console.warn("STT start error:", e);
+        debugStatus.textContent = "STT 시작 에러: " + e.toString();
       }
-    } catch (e) {
-      console.warn("STT stop error:", e);
+    } else {
+      // 중지
+      sttActive = false;
+      btnSttToggle.textContent = "음성 인식 시작 (Listening/Speaking)";
+      debugStatus.textContent = "STT 중지 요청.";
+      try {
+        sttRecognition.stop();
+      } catch (e) {
+        console.warn("STT stop error:", e);
+      }
+      // 마지막으로 Firebase에 확정본 push
+      if (sttFinalText) {
+        stateRef.update({
+          audioText: sttFinalText,
+          audioUpdatedAt: Date.now()
+        });
+      }
     }
-  }
-
-  btnStt.addEventListener("click", function() {
-    if (!listening) startStt();
-    else stopStt();
   });
 
-  if (!SpeechRecognition) {
-    sttStatus.textContent = "⚠️ 이 브라우저는 Web Speech API를 지원하지 않습니다.";
-    btnStt.disabled = true;
-  } else {
-    sttStatus.textContent = "음성 인식을 사용할 수 있습니다.";
-  }
-
-  // 리스닝 세트 리셋 (STT 텍스트 유지/삭제는 여기서만 수동으로)
-  btnListeningReset.addEventListener("click", function() {
-    audioBuffer = "";
-    updateAudioInFirebase();
-    sttLine.textContent = "STT: 리셋됨 (새 리스닝 세트 시작)";
-    sttStatus.textContent = "리스닝 세트용 STT가 초기화되었습니다.";
-  });
-
-  function sendCameraCommand(kind) {
-    const cmd = {
-      kind: kind,
-      timestamp: Date.now()
-    };
-    return db.ref("p2p/cameraCommand").set(cmd);
-  }
-
-  // 지문 초기화 + 추가
-  btnPassageStart.addEventListener("click", async function() {
-    await db.ref("p2p/passageText").set("");
-    await db.ref("p2p/state").update({
-      passageUpdatedAt: Date.now()
+  // 리스닝 세트 초기화
+  btnResetListening.addEventListener("click", () => {
+    accumulatedText = "";
+    sttFinalText = "";
+    debugOcrAccum.textContent = "(없음)";
+    debugSttText.textContent = "(없음)";
+    stateRef.update({
+      ocrText: "",
+      ocrConfidence: null,
+      audioText: "",
+      audioUpdatedAt: null
     });
-    passagePreview.textContent = "";
-    passageStatus.textContent = "지문: 초기화 완료";
+    globalStatus.textContent = "리스닝 세트 초기화 완료.";
   });
 
-  btnPassageAdd.addEventListener("click", async function() {
-    passageStatus.textContent = "지문: 현재 화면 OCR 요청 중...";
-    await sendCameraCommand("passage");
+  // ------------ AI 호출 ------------
+  btnSolve.addEventListener("click", () => {
+    runSolve("manual");
   });
 
-  let solving = false;
+  async function runSolve(reason) {
+    if (solving) {
+      // 한 번 더 들어오면 끝나고 다시 실행
+      pendingSolve = true;
+      globalStatus.textContent = "이전 풀이가 끝나는 중입니다...";
+      return;
+    }
 
-  async function callSolve() {
-    if (solving) return;
     solving = true;
-    btnSolveQuestion.disabled = true;
-    btnSolveQuestion.textContent = "풀이 중...";
+    pendingSolve = false;
+
+    const payload = {
+      mode: currentMode || "auto",
+      ocrText: accumulatedText || lastOcrText || "",
+      audioText: sttFinalText || "",
+    };
+
+    globalStatus.textContent =
+      `AI 풀이 중... (mode=${payload.mode}, 호출 이유=${reason})`;
+    answerMainEl.textContent = "AI 풀이 중...";
+    answerMetaEl.textContent = "";
+    answerRawEl.textContent = "";
+    debugAiRaw.textContent = "";
 
     try {
-      const snap = await db.ref("p2p/passageText").once("value");
-      const passageText = snap.val() || "";
-
-      const payload = {
-        section: currentSection,
-        passageText: passageText,
-        screenText: latestState.ocrText || "",
-        audioText: latestState.audioText || ""
-      };
-
       const res = await fetch("/.netlify/functions/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -508,100 +502,104 @@
       });
 
       const text = await res.text();
-      renderAnswer(text);
+      const trimmed = text.trim();
+
+      // HTML 에러 방어
+      const looksLikeHtml = /^<!?html/i.test(trimmed.slice(0, 15)) ||
+                            /^<html/i.test(trimmed.slice(0, 10)) ||
+                            /^<head/i.test(trimmed.slice(0, 10)) ||
+                            /^<body/i.test(trimmed.slice(0, 10));
+
+      debugAiRaw.textContent = trimmed || "(응답 없음)";
+
+      if (!res.ok || looksLikeHtml) {
+        answerMainEl.textContent =
+          "[AI 오류] 서버에서 정상적인 답을 받지 못했습니다.";
+        answerMetaEl.textContent =
+          "잠시 후 다시 시도하거나, 네트워크 상태·OpenRouter 대시보드를 확인해봐야 함.";
+        answerRawEl.textContent = trimmed.slice(0, 1000);
+        globalStatus.textContent =
+          `AI 호출 실패 (HTTP ${res.status}${looksLikeHtml ? ", HTML 응답" : ""})`;
+        solving = false;
+        if (pendingSolve) {
+          const again = pendingSolve;
+          pendingSolve = false;
+          if (again) runSolve("retry-after-error");
+        }
+        return;
+      }
+
+      // 정상 텍스트 → 파싱
+      renderAnswer(trimmed, payload.mode);
+      globalStatus.textContent = "AI 풀이 완료.";
     } catch (e) {
-      answerMain.textContent = "에러: AI 호출 실패";
-      answerMeta.textContent = "섹션: " + currentSection + " · 에러";
-      answerRaw.textContent = e.toString();
+      console.error(e);
+      answerMainEl.textContent = "[AI 오류] 네트워크/함수 에러.";
+      answerMetaEl.textContent = e.toString();
+      answerRawEl.textContent = "";
+      debugAiRaw.textContent = e.toString();
+      globalStatus.textContent = "AI 호출 중 예외 발생.";
     } finally {
       solving = false;
-      btnSolveQuestion.disabled = false;
-      btnSolveQuestion.textContent = "이 질문 풀기";
+      if (pendingSolve) {
+        const again = pendingSolve;
+        pendingSolve = false;
+        if (again) runSolve("retry");
+      }
     }
   }
 
-  // "이 질문 풀기" → 카메라에 질문 화면 OCR 요청 → 완료되면 solve 호출
-  btnSolveQuestion.addEventListener("click", async function() {
-    const startTs = Date.now();
-    ocrStatus.textContent = "OCR: 질문 화면 캡처 요청 중...";
-    await sendCameraCommand("question");
+  // ------------ 답 파싱 & 표시 ------------
+  function renderAnswer(text, mode) {
+    answerRawEl.textContent = text;
 
-    const timeoutMs = 8000;
-    function waitLoop() {
-      const now = Date.now();
-      if (now - startTs > timeoutMs) {
-        ocrStatus.textContent = "OCR: 타임아웃 – 화면/조명 다시 확인";
-        return;
-      }
-      if (latestState.ocrUpdatedAt && latestState.ocrUpdatedAt >= startTs) {
-        ocrStatus.textContent = "OCR: 완료, AI 풀이 시작";
-        callSolve();
-        return;
-      }
-      setTimeout(waitLoop, 250);
-    }
-    waitLoop();
-  });
+    let mainLine = "";
+    let probInfo = "";
+    let metaInfo = "";
 
-  // AI 답안 표시
-  function renderAnswer(rawText) {
-    const text = (rawText || "").trim();
-    if (!text) {
-      answerMain.textContent = "AI 응답이 비어 있습니다.";
-      answerMeta.textContent = "섹션: " + currentSection + " · 확신도: -";
-      answerRaw.textContent = "";
-      return;
+    // 공통: 확률 추출 ([P] 0.83 형태 or p=0.83)
+    const probMatch = text.match(/p\s*=\s*([0-9.]+)/i) ||
+                      text.match(/\[P\]\s*([0-9.]+)/i);
+    if (probMatch) {
+      const p = Math.max(0, Math.min(1, parseFloat(probMatch[1] || "0")));
+      const pct = Math.round(p * 100);
+      probInfo = `맞을 확률(추정): ${pct}%`;
     }
 
-    // [CONFIDENCE] 파싱
-    let confText = currentConfidenceText;
-    let confMatch = text.match(/^\[CONFIDENCE\]\s*([0-9.]+)/im);
-    if (!confMatch) {
-      confMatch = text.match(/confidence[:=]\s*([0-9.]+)/i);
-    }
-    if (confMatch) {
-      let v = parseFloat(confMatch[1]);
-      if (!isNaN(v)) {
-        if (v <= 1) v = v * 100;
-        confText = v.toFixed(1) + "%";
-      }
-    }
-    currentConfidenceText = confText;
-
-    // 메인 답변 추출
-    let mainAnswer = null;
-    const mAnswer = text.match(/^\[ANSWER\]\s*(.+)$/im);
-    if (mAnswer) {
-      mainAnswer = mAnswer[1].trim();
+    if (mode === "reading" || mode === "listening") {
+      const ansMatch = text.match(/\[ANSWER\]\s*([^\n]+)/i);
+      const whyMatch = text.match(/\[WHY\]([\s\S]*)/i);
+      mainLine = ansMatch ? ansMatch[1].trim() : "(정답 정보 없음)";
+      metaInfo = whyMatch ? whyMatch[1].trim() : "";
+    } else if (mode === "writing") {
+      const essayMatch = text.match(/\[ESSAY\]([\s\S]*?)(?:\[FEEDBACK\]|$)/i);
+      const fbMatch    = text.match(/\[FEEDBACK\]([\s\S]*)/i);
+      mainLine = essayMatch ? essayMatch[1].trim() : "(에세이 본문 없음)";
+      metaInfo = fbMatch ? fbMatch[1].trim() : "";
+    } else if (mode === "speaking") {
+      const evalMatch  = text.match(/\[EVAL\]([\s\S]*?)(?=\[MODEL\]|\[KOREAN\]|$)/i);
+      const modelMatch = text.match(/\[MODEL\]([\s\S]*?)(?=\[KOREAN\]|$)/i);
+      const krMatch    = text.match(/\[KOREAN\]([\s\S]*)/i);
+      mainLine = modelMatch ? modelMatch[1].trim()
+                            : (evalMatch ? evalMatch[1].trim() : "(모범 답안 없음)");
+      metaInfo = [
+        evalMatch ? "[EVAL]\n" + evalMatch[1].trim() : "",
+        krMatch   ? "[KOREAN]\n" + krMatch[1].trim() : ""
+      ].filter(Boolean).join("\n\n");
     } else {
-      const modelIdx = text.indexOf("[MODEL]");
-      const essayIdx = text.indexOf("[ESSAY]");
-      let block = null;
-      if (modelIdx >= 0) {
-        block = text.slice(modelIdx + "[MODEL]".length);
-      } else if (essayIdx >= 0) {
-        block = text.slice(essayIdx + "[ESSAY]".length);
-      }
-      if (block) {
-        const lines = block.split(/\r?\n/).map(function(l){return l.trim();});
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].length > 0) {
-            mainAnswer = lines[i];
-            break;
-          }
-        }
-      }
+      // 기타 모드/자동
+      const firstLine = text.split(/\r?\n/).find(line => line.trim().length > 0) || "";
+      mainLine = firstLine.trim();
+      metaInfo = text;
     }
 
-    if (!mainAnswer) {
-      const first = text.split(/\r?\n/).find(function(l){ return l.trim().length > 0; });
-      mainAnswer = first || "(내용 없음)";
-    }
-
-    answerMain.textContent = mainAnswer;
-    answerMeta.textContent = "섹션: " + currentSection + " · 확신도: " + confText;
-    answerRaw.textContent = text;
+    answerMainEl.textContent = mainLine || "(내용 없음)";
+    answerMetaEl.textContent =
+      [probInfo, metaInfo].filter(s => s && s.trim().length > 0).join("\n\n");
   }
+
+  // 초기 모드 표시
+  updateModeUI();
 </script>
 </body>
 </html>
