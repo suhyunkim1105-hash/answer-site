@@ -119,13 +119,13 @@
   // 🔤 영어만 인식 (가로/세로 상관 없이)
   const OCR_LANG = "eng";
 
-  // remote.html에서 선택한 모드 읽어서 표시만 함
+  // 모드 표시용
   let currentMode = "reading";
   db.ref("p2p/state/modeHint").on("value", snap => {
     const m = snap.val();
     if (m) {
       currentMode = m;
-      statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+      updateStatusLine();
     }
   });
 
@@ -146,6 +146,18 @@
   // 고해상도 스틸 프레임용 ImageCapture
   let imageCapture = null;
 
+  // 센서 줌 지원 관련
+  let zoomSupport = false;
+  let zoomTrack = null;
+  let zoomMin = 1;
+  let zoomMax = 3;
+  let zoomStep = 0.1;
+
+  function updateStatusLine(extra) {
+    const base = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식${zoomSupport ? ", 센서 줌 사용" : ""})`;
+    statusLine.textContent = extra || base;
+  }
+
   // ---------- 카메라 ----------
   async function startCamera() {
     try {
@@ -160,6 +172,8 @@
       video.srcObject = stream;
 
       const track = stream.getVideoTracks()[0];
+      setupZoom(track);
+
       if ('ImageCapture' in window && track) {
         try {
           imageCapture = new ImageCapture(track);
@@ -169,9 +183,7 @@
         }
       }
 
-      if (!statusLine.textContent.includes("모드:")) {
-        statusLine.textContent = `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
-      }
+      updateStatusLine();
       startAutoLoop();
     } catch (e) {
       console.error(e);
@@ -179,9 +191,74 @@
     }
   }
 
+  // ---------- 센서 줌 초기화 (갤럭시 S25 울트라용) ----------
+  function setupZoom(track) {
+    zoomTrack = track;
+    zoomSupport = false;
+
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps && typeof caps.zoom === 'object') {
+        zoomSupport = true;
+        zoomMin = (typeof caps.zoom.min === 'number') ? caps.zoom.min : 1;
+        zoomMax = (typeof caps.zoom.max === 'number') ? caps.zoom.max : 3;
+        zoomStep = (typeof caps.zoom.step === 'number' && caps.zoom.step > 0) ? caps.zoom.step : 0.1;
+
+        // 너무 과도한 줌은 잘라서 사용 (예: max 10 이상이면 5로 제한)
+        if (zoomMax > 5) zoomMax = 5;
+        if (zoomMin < 1) zoomMin = 1;
+
+        zoomRange.min = zoomMin.toString();
+        zoomRange.max = zoomMax.toString();
+        zoomRange.step = zoomStep.toString();
+
+        const settings = track.getSettings ? track.getSettings() : {};
+        const currentZoom = (typeof settings.zoom === 'number')
+          ? settings.zoom
+          : zoomMin;
+
+        const clamped = Math.min(Math.max(currentZoom, zoomMin), zoomMax);
+        zoomRange.value = clamped.toString();
+        applyZoomToTrack(clamped);
+
+        console.log('Zoom capability detected:', caps.zoom);
+      } else {
+        console.log('Zoom capability not found, fallback to CSS scale.');
+        zoomSupport = false;
+        zoomRange.min = "1";
+        zoomRange.max = "3";
+        zoomRange.step = "0.05";
+        zoomRange.value = "1";
+      }
+    } catch (e) {
+      console.warn('setupZoom error, fallback to CSS scale:', e);
+      zoomSupport = false;
+      zoomRange.min = "1";
+      zoomRange.max = "3";
+      zoomRange.step = "0.05";
+      zoomRange.value = "1";
+    }
+  }
+
+  function applyZoomToTrack(z) {
+    if (!zoomTrack || !zoomSupport) return;
+    zoomTrack.applyConstraints({
+      advanced: [{ zoom: z }]
+    }).catch(err => {
+      console.warn('센서 줌 적용 실패, CSS 확대만 사용:', err);
+      zoomSupport = false;
+    });
+  }
+
   zoomRange.addEventListener("input", () => {
-    const scale = parseFloat(zoomRange.value);
-    video.style.transform = `scale(${scale})`;
+    const val = parseFloat(zoomRange.value);
+    if (zoomSupport) {
+      applyZoomToTrack(val);          // ✅ 센서 줌 (갤럭시 울트라에서 중요한 부분)
+      video.style.transform = "scale(1)"; // 센서 줌 사용 시 화면 스케일은 1로 유지
+    } else {
+      // 센서 줌 미지원 기기용 폴백 (그냥 화면 확대)
+      video.style.transform = `scale(${val})`;
+    }
   });
 
   // ---------- 밝기 + 움직임 분석 ----------
@@ -247,7 +324,7 @@
         });
         statusLine.textContent = blocked
           ? "카메라가 가려짐 – 마지막 답 유지 중"
-          : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+          : `카메라 ON – 모드: ${currentMode} (화면 안정되면 자동 인식${zoomSupport ? ", 센서 줌 사용" : ""})`;
       }
 
       // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
@@ -263,7 +340,7 @@
 
   // ---------- 고해상도 스틸 우선 캡처 ----------
   async function captureToCanvas(canvas, ctx) {
-    // 1순위: ImageCapture.takePhoto() (Chrome + 일부 안드로이드)
+    // 1순위: ImageCapture.takePhoto() (Chrome + 안드로이드 플래그십에서 고해상도 스틸)
     if (imageCapture && typeof imageCapture.takePhoto === "function") {
       try {
         const blob = await imageCapture.takePhoto();
@@ -290,18 +367,18 @@
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 90% 크롭 + 가로 최대 1600px로 스케일
+  // 중앙 크롭 + 스케일 (조금 더 타이트하게 85%로)
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
 
-    const scaleCrop = 0.9;
+    const scaleCrop = 0.85; // 중앙 85%만 사용해 글자를 더 키움
     const cropW = Math.floor(fullW * scaleCrop);
     const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
     const cropY = Math.floor((fullH - cropH) / 2);
 
-    const maxW = 1600;
+    const maxW = 2000; // OCR용 가로 최대 2000px까지 허용 (S25 성능 감안)
     const scale = Math.min(1, maxW / cropW);
     const outW = Math.floor(cropW * scale);
     const outH = Math.floor(cropH * scale);
@@ -353,7 +430,7 @@
       }
 
       statusLine.textContent =
-        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
+        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}${zoomSupport ? " | 센서 줌" : ""}`;
 
       await db.ref("p2p/state").update({
         ocrText: text,
@@ -378,7 +455,7 @@
     }
   }
 
-  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백용)
+  // 비디오 프레임에서 중앙 85% 캡처 (iOS 등 폴백용)
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -390,13 +467,13 @@
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
 
-    const scaleCrop = 0.9;
+    const scaleCrop = 0.85;
     const cropW = Math.floor(fullW * scaleCrop);
     const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
     const cropY = Math.floor((fullH - cropH) / 2);
 
-    const maxW = 1600;
+    const maxW = 2000;
     const scale = Math.min(1, maxW / cropW);
     const outW = Math.floor(cropW * scale);
     const outH = Math.floor(cropH * scale);
