@@ -56,7 +56,7 @@ You are an AI that solves official-style TOEFL iBT questions.
 OCR text may contain noise, broken lines, or HTML junk. Ignore garbage and infer the intended question.
 You must always obey the OUTPUT FORMAT for the current mode.
 If your confidence in the final answer is below 0.1, use "?" as the answer.
-Always include a probability line "[P] 0.00" between 0 and 1 (your estimate that your answer is correct).`;
+Always include a probability line "[P] 0.00" between 0 and 1 (your estimate is correct).`;
 
   const sharedContext = `
 [OCR_TEXT]
@@ -99,7 +99,7 @@ MODE: WRITING
 Task: Use OCR_TEXT (and AUDIO_TEXT if useful) to infer the TOEFL writing prompt (integrated or discussion).
 Write a high-scoring model answer. Assume a realistic TOEFL time limit.
 
-Length: about 220-320 English words total. Do NOT exceed ~350 words.
+Length: about 150-225 English words total. Do NOT exceed ~250 words.
 
 OUTPUT FORMAT (exactly):
 [ESSAY]
@@ -127,16 +127,21 @@ Use OCR_TEXT (and AUDIO_TEXT only if it clearly contains the speaking QUESTION, 
 Even if OCR_TEXT includes multiple-choice options (A/B/C/D), IGNORE those options.
 Do NOT solve it as a multiple-choice question. Do NOT output letters like "A", "B", "C" as the final answer.
 
-Assume the student has only 15 seconds of preparation time before speaking.
+Assume the student speaks rather slowly and has only 15 seconds of preparation time before speaking.
 You must respond as quickly as possible. Keep internal reasoning minimal and focus on emitting the final script.
 
-Length: 70-100 English words. This should fit in about 40 seconds at a natural speaking speed.
-NEVER exceed 110 words.
+Length: about 55-80 English words. NEVER exceed 90 words.
+
+Pronunciation help:
+- For a few words (around 3–6) that are likely hard to pronounce (academic vocabulary, long words),
+  add Korean Hangul pronunciation in parentheses RIGHT AFTER the word.
+- Example: sociology (소시오럴러지)
+- Do NOT add pronunciation to easy words like "I", "think", "because", "very", etc.
+- Keep the script readable; do not add pronunciation for every word.
 
 OUTPUT FORMAT (exactly):
 [MODEL]
-<English speaking script only, full sentences, first-person, natural speaking style>
-(Do NOT include Korean here.)
+<English speaking script only, full sentences, with some words followed by Korean pronunciation in parentheses>
 
 [P]
 <probability between 0 and 1 that this script is appropriate for the task>
@@ -199,8 +204,7 @@ async function callOpenRouter(prompt, mode) {
   let rawText = "";
 
   try {
-    // ❗ 여기서는 별도의 AbortController/타임아웃을 쓰지 않는다.
-    // Netlify나 OpenRouter 쪽에서 타임아웃이 나면 그때의 에러만 처리.
+    // 별도의 AbortController/타임아웃 사용 X
     res = await fetch("https://openrouter.ai/api/v1/chat/completions", fetchOptions);
     rawText = await res.text();
   } catch (e) {
@@ -291,8 +295,6 @@ exports.handler = async (event, context) => {
 
   const result = await callOpenRouter(prompt, mode);
 
-  // Netlify 쪽에서는 항상 200으로 돌려주고,
-  // 내용 안에서 에러 여부를 표현 (포맷은 섹션별로 맞춰 둠)
   return {
     statusCode: 200,
     body: result.text
