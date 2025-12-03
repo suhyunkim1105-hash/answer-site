@@ -1,22 +1,23 @@
 // netlify/functions/solve.js
-// Netlify Node 18+ : global fetch 사용 (node-fetch 불필요)
+// Netlify Functions (Node 18+) → global fetch 사용, node-fetch 불필요
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL   = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-5.1-mini";
 
-// 긴 텍스트는 뒤쪽만 남기기 (지문이 너무 길면 모델이 뻗을 수 있어서)
+// ===== 유틸 =====
 function clip(str, max) {
   if (!str) return "";
   str = String(str).replace(/\r/g, "");
   if (str.length <= max) return str;
+  // 지문 뒤쪽이 보통 문제/선지라서 뒤에서 자름
   return str.slice(-max);
 }
 
 function buildPrompt({ mode, ocrText, audioText }) {
   const baseInfo = `
 You are an AI that solves official-style TOEFL iBT questions.
-OCR text may contain noise, broken lines, or HTML junk. Ignore garbage and guess the most likely intended question.
 
+OCR text may contain noise, broken lines, or HTML junk. Ignore garbage and infer the intended question.
 You must always obey the OUTPUT FORMAT for the current mode.
 If your confidence in the final answer is below 0.1, use "?" as the answer.
 Always include a probability line "[P] 0.00" between 0 and 1 (your estimate that your answer is correct).`;
@@ -29,13 +30,14 @@ ${ocrText || "(none)"}
 ${audioText || "(none)"}
 `;
 
+  // ---- READING / LISTENING: 객관식 정답 ----
   if (mode === "reading" || mode === "listening") {
     return `
 ${baseInfo}
 
 MODE: ${mode.toUpperCase()}
 Task: Read the OCR_TEXT (and AUDIO_TEXT if listening). Identify the TOEFL multiple-choice question and options.
-Pick the single best answer (or most likely correct choice if question is unclear).
+Pick the single best answer (or most likely correct choice if the question is unclear).
 
 If the question asks for a letter/number choice, answer only that label (e.g. "B" or "3").
 If the question is unclear but you can guess, still choose one most probable option.
@@ -52,13 +54,14 @@ ${sharedContext}
 `;
   }
 
+  // ---- WRITING: 통합형/디스커션 모범 에세이 ----
   if (mode === "writing") {
     return `
 ${baseInfo}
 
 MODE: WRITING
-Task: Use OCR_TEXT (and AUDIO_TEXT if useful) to infer the TOEFL writing prompt.
-Write a high-scoring model answer. Assume a TOEFL-like time limit.
+Task: Use OCR_TEXT (and AUDIO_TEXT if useful) to infer the TOEFL writing prompt (integrated or discussion).
+Write a high-scoring model answer. Assume a realistic TOEFL time limit.
 
 Length: about 220-320 English words total. Do NOT exceed ~350 words.
 
@@ -76,36 +79,36 @@ ${sharedContext}
 `;
   }
 
+  // ---- SPEAKING: 읽을 스크립트만 ----
   if (mode === "speaking") {
     return `
 ${baseInfo}
 
 MODE: SPEAKING
-Task: From OCR_TEXT you may infer the speaking question. AUDIO_TEXT contains the student's spoken answer (with possible STT errors).
-Evaluate the student's answer and also propose the best possible model answer.
+Goal: Generate the best possible TOEFL iBT speaking answer script that the student can read out loud.
 
-Assume TOEFL speaking time limit (about 45~60 seconds).
-Model answer length: about 120-160 English words (do NOT exceed ~180 words).
+Use OCR_TEXT (and AUDIO_TEXT only if it clearly contains the speaking QUESTION, not an answer).
+Even if OCR_TEXT includes multiple-choice options (A/B/C/D), IGNORE those options.
+Do NOT solve it as a multiple-choice question. Do NOT output letters like "A", "B", "C" as the final answer.
+
+Instead, infer the situation and question, then produce a natural first-person spoken response.
+
+Length: 80-120 English words. This should fit in about 45 seconds at a natural speaking speed.
+NEVER exceed 130 words.
 
 OUTPUT FORMAT (exactly):
-[EVAL]
-- In Korean, briefly rate the student's answer (0~4 느낌) and list strengths/weaknesses.
-- Focus on content, organization, and language use.
-
 [MODEL]
-<English model answer, about 120-160 words, something a 4점 답안 수준>
+<English speaking script only, full sentences, first-person, natural speaking style>
+(Do NOT include Korean here.)
 
-[KOREAN]
-- In Korean, 2~3 concrete tips on how to improve.
-- Keep it short.
-
-[P] <probability between 0 and 1 that your evaluation and model answer are appropriate>
+[P]
+<probability between 0 and 1 that this script is appropriate for the task>
 
 ${sharedContext}
 `;
   }
 
-  // fallback / auto
+  // ---- AUTO / 기타: 리딩 스타일로 처리 ----
   return `
 ${baseInfo}
 
@@ -120,16 +123,13 @@ ${sharedContext}
 `;
 }
 
-function ok(body) {
-  return { statusCode: 200, body };
-}
-
 // OpenRouter 호출 + HTML/타임아웃 방어
 async function callOpenRouter(prompt) {
   if (!OPENROUTER_API_KEY) {
     return {
       ok: false,
-      text: "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter API key가 설정되어 있지 않습니다."
+      text:
+        "[ANSWER] ?\n[P] 0.00\n[WHY]\nOpenRouter API key가 설정되어 있지 않습니다."
     };
   }
 
@@ -152,7 +152,7 @@ async function callOpenRouter(prompt) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
       "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
       "X-Title": "answer-site-toefl-helper"
     },
@@ -172,7 +172,10 @@ async function callOpenRouter(prompt) {
   let rawText = "";
 
   try {
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", fetchOptions);
+    res = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      fetchOptions
+    );
     rawText = await res.text();
   } catch (e) {
     if (timeoutId) clearTimeout(timeoutId);
@@ -194,7 +197,7 @@ async function callOpenRouter(prompt) {
     /^<head/i.test(trimmed.slice(0, 20)) ||
     /^<body/i.test(trimmed.slice(0, 20));
 
-  // HTTP 에러나 HTML 에러 페이지면 여기서 잘라버리기
+  // HTTP 에러나 HTML 에러 페이지면 여기서 잘라버림
   if (!res.ok || looksHtml) {
     return {
       ok: false,
@@ -251,7 +254,7 @@ exports.handler = async (event, context) => {
   let { mode, ocrText, audioText } = body;
   mode = (mode || "auto").toLowerCase();
 
-  const cleanOcr   = clip(ocrText || "", 2500);
+  const cleanOcr = clip(ocrText || "", 2500);
   const cleanAudio = clip(audioText || "", 1200);
 
   const prompt = buildPrompt({
@@ -262,7 +265,7 @@ exports.handler = async (event, context) => {
 
   const result = await callOpenRouter(prompt);
 
-  // 프론트는 항상 "텍스트만" 받도록 200으로 응답
-  return ok(result.text);
+  // 프론트 쪽은 항상 "텍스트만" 받게 200으로 응답
+  return { statusCode: 200, body: result.text };
 };
 
