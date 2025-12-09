@@ -37,7 +37,7 @@ ${msg}`;
 ${msg}`;
   }
 
-  // reading / listening 기본 형식
+  // reading / listening 공통
   return `[ANSWER] ?
 [P] 0.00
 [WHY]
@@ -45,10 +45,7 @@ ${msg}`;
 }
 
 /**
- * message(또는 delta) 객체에서 content를 최대한 뽑아내는 함수
- * - 기본 string
- * - [{type:"text", text:"..."}] 형태
- * - { text: "..."} / { text: { value: "..." } } 등 방어적으로 처리
+ * OpenRouter message 객체에서 content를 최대한 뽑아내는 함수
  */
 function extractContentFromMessage(msg) {
   if (!msg) return "";
@@ -56,9 +53,7 @@ function extractContentFromMessage(msg) {
   const c = msg.content;
 
   // 1) content가 문자열
-  if (typeof c === "string") {
-    return c;
-  }
+  if (typeof c === "string") return c;
 
   // 2) content가 배열 (여러 파트)
   if (Array.isArray(c)) {
@@ -93,7 +88,7 @@ function extractContentFromMessage(msg) {
     return parts.join("\n").trim();
   }
 
-  // 3) content가 객체인 경우
+  // 3) content가 객체
   if (typeof c === "object" && c !== null) {
     if (typeof c.text === "string") return c.text;
     if (c.text && typeof c.text.value === "string") return c.text.value;
@@ -113,10 +108,7 @@ function buildPrompts(mode, ocrText, audioText) {
   let temperature = 0.2;
 
   if (mode === "writing") {
-    // Writing: 실제 시험 기준
-    // - Integrated: 20분
-    // - Academic Discussion: 10분
-    // => 150~225단어면 시간 내에 충분히 가능
+    // Writing: Integrated 20분, Discussion 10분 → 150~225단어 현실적인 분량
     system = `
 You are an expert TOEFL iBT Writing tutor.
 
@@ -135,8 +127,8 @@ Task:
 - Write a high-scoring model answer that directly answers the question.
 
 Length:
-- Aim for about 150-225 English words total.
-- Do NOT exceed about 250 words.
+- Aim for about 150-220 English words total.
+- Do NOT exceed about 240 words.
 
 Style:
 - Clear, natural academic English.
@@ -165,13 +157,11 @@ ${cleanAUDIO || "(none)"}
 Use OCR_TEXT and AUDIO_TEXT to infer the exact TOEFL writing prompt, then write the model essay and feedback.
 `.trim();
 
-    maxTokens = 640;
+    maxTokens = 512; // 너무 크지 않게 줄여서 속도 확보
     temperature = 0.25;
   } else if (mode === "speaking") {
-    // Speaking: 실제 시험
-    // - 섹션 전체 16~17분, 4문항
-    // - 각 문항: 준비 15~30초 + 답변 45~60초
-    // 여기서는 "10~15초 (40~70단어)"짜리 짧은 모범 답안을 요구
+    // Speaking: 섹션 16~17분 / 문항당 45~60초 발화
+    // 여기서는 10~15초(40~70단어)짜리 짧은 템플릿 스크립트
     system = `
 You are an expert TOEFL iBT Speaking tutor.
 
@@ -220,7 +210,7 @@ ${cleanAUDIO || "(none)"}
 Use OCR_TEXT and AUDIO_TEXT to infer the TOEFL Speaking task and then produce the model spoken answer, pronunciation help, and Korean tips.
 `.trim();
 
-    maxTokens = 256;      // 더 짧게, 빠르게
+    maxTokens = 256; // 짧은 답
     temperature = 0.25;
   } else {
     // reading / listening 공통
@@ -287,7 +277,7 @@ function looksLikeHtmlResponse(contentType, rawText) {
   const upper = trimmed.toUpperCase();
 
   if (ct.includes("text/html")) return true;
-  if (/^<!?DOCTYPE\\s+HTML/i.test(trimmed)) return true;
+  if (/^<!?DOCTYPE\s+HTML/i.test(trimmed)) return true;
   if (/^<HTML/i.test(trimmed)) return true;
   if (/^<HEAD/i.test(trimmed)) return true;
   if (/^<BODY/i.test(trimmed)) return true;
@@ -297,9 +287,9 @@ function looksLikeHtmlResponse(contentType, rawText) {
 }
 
 /**
- * OpenRouter 한 번 호출:
- *  - 성공: { ok:true, text }
- *  - 실패: { ok:false, code, message }
+ * OpenRouter 한 번 호출
+ * - ok: { ok:true, text }
+ * - fail: { ok:false, code, message }
  */
 async function callOpenRouterOnce({
   modelName,
@@ -312,7 +302,13 @@ async function callOpenRouterOnce({
   baseUrl
 }) {
   const controller = new AbortController();
-  const timeoutMs = mode === "speaking" ? 18000 : 25000; // 스피킹은 더 짧게
+  const timeoutMs =
+    mode === "speaking"
+      ? 15000 // 스피킹은 빠르게
+      : mode === "writing"
+      ? 28000 // 라이팅은 Netlify 한계(30초) 바로 아래
+      : 22000; // 리딩/리스닝
+
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -407,7 +403,7 @@ async function callOpenRouterOnce({
       rawText = choice.text;
     }
 
-    // 4) content 필드만 문자열인 경우
+    // 4) content 필드가 문자열인 경우
     if (!rawText && typeof choice.content === "string") {
       rawText = choice.content;
     }
@@ -425,9 +421,13 @@ async function callOpenRouterOnce({
   } catch (e) {
     const isAbort = e && e.name === "AbortError";
     const msg = isAbort
-      ? "요청 시간이 너무 오래 걸려 중단되었습니다. 네트워크 상태를 확인한 뒤 같은 문제를 다시 시도해 주세요."
+      ? "요청 시간이 너무 오래 걸려 중단되었습니다. (플랫폼 제한상 30초 이상 대기할 수 없습니다.)"
       : "OpenRouter 요청 중 오류: " + (e && e.message ? e.message : e);
-    return { ok: false, code: "NETWORK", message: msg };
+    return {
+      ok: false,
+      code: isAbort ? "TIMEOUT" : "NETWORK",
+      message: msg
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -481,7 +481,7 @@ exports.handler = async (event, context) => {
   const baseUrl =
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 
-  // 1차: 설정된 모델(or 기본)을 사용
+  // 1차: 설정된 모델 사용
   const first = await callOpenRouterOnce({
     modelName: primaryModel,
     system,
@@ -497,8 +497,7 @@ exports.handler = async (event, context) => {
     return jsonResponse(200, { ok: true, mode, text: first.text });
   }
 
-  // 1차에서 "내용 없음" 에러이고, 설정 모델이 gpt-4o-mini가 아니면
-  // gpt-4o-mini로 한 번 더 시도 (reasoning 전용 모델 대비)
+  // 1차에서 "내용 없음"이고, 설정 모델이 gpt-4o-mini가 아니면 예비 모델로 재시도
   if (first.code === "NO_CONTENT" && primaryModel !== "openai/gpt-4o-mini") {
     const second = await callOpenRouterOnce({
       modelName: "openai/gpt-4o-mini",
@@ -523,7 +522,7 @@ exports.handler = async (event, context) => {
     return jsonResponse(200, { ok: false, mode, text });
   }
 
-  // 그 외 에러는 makeErrorText로 감싸서 프론트에 전달
+  // 그 외 에러
   const text = makeErrorText(mode, first.message);
   return jsonResponse(200, { ok: false, mode, text });
 };
