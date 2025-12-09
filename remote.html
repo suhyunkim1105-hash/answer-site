@@ -432,6 +432,24 @@
     else stopSTT();
   });
 
+  // --------------- 세션 초기화 헬퍼 ---------------
+  // 자동 초기화용: 지문 누적 + STT만 비우고, 답卡드는 그대로 둠
+  function clearSessionInputs() {
+    questionAccumText = "";
+    sttText = "";
+    stopSTT();
+    updateDebugPanel();
+  }
+
+  // 버튼용: 답까지 전부 초기화
+  function fullReset() {
+    clearSessionInputs();
+    answerMain.textContent = "";
+    answerProb.textContent = "";
+    answerDetail.textContent = "";
+    aiStatusLine.textContent = "AI 풀이 전.";
+  }
+
   // --------------- Solve 버튼 / 누적 / 초기화 ---------------
   btnAccumulate.addEventListener("click", () => {
     const text = (latestOcrText || "").trim();
@@ -443,14 +461,7 @@
   });
 
   btnReset.addEventListener("click", () => {
-    questionAccumText = "";
-    sttText = "";
-    stopSTT();
-    answerMain.textContent = "";
-    answerProb.textContent = "";
-    answerDetail.textContent = "";
-    aiStatusLine.textContent = "AI 풀이 전.";
-    updateDebugPanel();
+    fullReset();
   });
 
   btnSolve.addEventListener("click", () => {
@@ -460,20 +471,6 @@
   btnToggleDebug.addEventListener("click", () => {
     debugPanel.classList.toggle("hidden");
   });
-
-  // --------------- 자동 세션 초기화 (문제 한 번 푼 뒤) ---------------
-  function autoResetSessionAfterSolve(mode) {
-    // 다음 문제를 위해 지문/음성은 항상 초기화
-    questionAccumText = "";
-    sttText = "";
-
-    // Listening / Speaking 에서만 STT 정지
-    if (mode === "listening" || mode === "speaking") {
-      stopSTT();
-    }
-
-    updateDebugPanel();
-  }
 
   // --------------- AI 호출 ---------------
   function showErrorAnswer(mode, message) {
@@ -518,6 +515,11 @@
       return;
     }
 
+    // 스피킹/리스닝은 문제 풀 때 STT 정지
+    if (mode === "speaking" || mode === "listening") {
+      stopSTT();
+    }
+
     solving = true;
     aiStatusLine.textContent = "AI 풀이 중...";
 
@@ -529,10 +531,6 @@
         questionAccum: questionAccumText.trim(),
         source: trigger || "manual"
       };
-
-      // 현재 문제 데이터는 payload에 담았으니,
-      // 다음 문제를 위해 세션은 자동 초기화
-      autoResetSessionAfterSolve(mode);
 
       const resp = await fetch("/.netlify/functions/solve", {
         method: "POST",
@@ -555,6 +553,8 @@
       showErrorAnswer(mode, msg);
     } finally {
       solving = false;
+      // ✅ 한 질문 풀이 끝나면, 다음 질문을 위해 지문/음성만 자동 초기화
+      clearSessionInputs();
     }
   }
 
@@ -630,8 +630,8 @@
     answerDetail.textContent = why || text;
   }
 
-  // 초기 상태 반영
-  updateStatusLine();
+  // 초기 상태: reading 모드 강제 세팅 + UI 반영
+  setMode(currentSection);
   updateDebugPanel();
   updateSttButton();
 </script>
