@@ -432,13 +432,29 @@
   });
 
   btnReset.addEventListener("click", () => {
+    // 1) 세션 내부 상태 전체 초기화
     questionAccumText = "";
     sttText = "";
+    latestOcrText = "";
+    latestOcrConf = null;
+    cameraBlocked = false;
+
+    // 2) Firebase에도 "비어 있음"으로 반영 — 다음 OCR부터 새로 시작
+    db.ref("p2p/state").update({
+      ocrText: "",
+      ocrConfidence: 0,
+      cameraBlocked: false,
+      ocrUpdatedAt: Date.now()
+    });
+
+    // 3) STT/화면/UI 초기화
     stopSTT();
     answerMain.textContent = "여기에 프롬프트가 생성됩니다.";
     answerProb.textContent = "아래 전체를 ChatGPT에 붙여넣으세요.";
     answerDetail.textContent = "";
     aiStatusLine.textContent = "AI 호출 없음. 프롬프트만 생성합니다.";
+
+    updateStatusLine();
     updateDebugPanel();
   });
 
