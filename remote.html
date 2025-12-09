@@ -170,6 +170,12 @@
       max-height: 80px;
       overflow-y: auto;
     }
+
+    #sttStatusLine {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+    }
   </style>
 </head>
 <body>
@@ -197,6 +203,7 @@
   </div>
 
   <div id="aiStatusLine">AI 풀이 전.</div>
+  <div id="sttStatusLine">STT: 대기 중.</div>
 
   <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
 
@@ -234,6 +241,7 @@
   const answerProb  = document.getElementById("answerProb");
   const answerDetail= document.getElementById("answerDetail");
   const aiStatusLine= document.getElementById("aiStatusLine");
+  const sttStatusLine = document.getElementById("sttStatusLine");
 
   const btnSolve      = document.getElementById("btnSolve");
   const btnAccumulate = document.getElementById("btnAccumulate");
@@ -294,6 +302,32 @@
     dbgAudio.textContent      = sttText || "(없음)";
   }
 
+  function updateSttStatus() {
+    const wordCount = sttText.trim()
+      ? sttText.trim().split(/\s+/).length
+      : 0;
+    if (!sttActive) {
+      sttStatusLine.textContent = "STT: 대기 중.";
+    } else {
+      sttStatusLine.textContent =
+        "STT: 인식 중 (대략 " + wordCount + "단어)";
+    }
+  }
+
+  function resetSession(clearAnswer = true) {
+    questionAccumText = "";
+    sttText = "";
+    stopSTT();
+    if (clearAnswer) {
+      answerMain.textContent = "";
+      answerProb.textContent = "";
+      answerDetail.textContent = "";
+      aiStatusLine.textContent = "AI 풀이 전.";
+    }
+    updateDebugPanel();
+    updateSttStatus();
+  }
+
   function setMode(mode) {
     currentSection = mode;
     modeButtons.forEach(btn => {
@@ -306,6 +340,9 @@
       modeHint: mode,
       modeUpdatedAt: Date.now()
     });
+
+    // 모드 변경 시 자동 세션 초기화
+    resetSession(true);
   }
 
   modeButtons.forEach(btn => {
@@ -368,6 +405,7 @@
       if (finalChunk) {
         sttText += (sttText ? " " : "") + finalChunk.trim();
         updateDebugPanel();
+        updateSttStatus();
       }
     };
 
@@ -377,11 +415,13 @@
 
     recognition.onend = () => {
       sttActive = false;
+      updateSttStatus();
       if (sttShouldRestart) {
         // 사용자가 중지 누르지 않았으면 자동 재시작 (질문 길어질 때 대비)
         try {
           recognition.start();
           sttActive = true;
+          updateSttStatus();
         } catch (e) {
           console.warn("STT 재시작 실패:", e);
           sttShouldRestart = false;
@@ -409,6 +449,7 @@
       rec.start();
       sttActive = true;
       updateSttButton();
+      updateSttStatus();
     } catch (e) {
       console.warn("STT start 실패:", e);
     }
@@ -425,30 +466,13 @@
     }
     sttActive = false;
     updateSttButton();
+    updateSttStatus();
   }
 
   btnSTT.addEventListener("click", () => {
     if (!sttActive) startSTT();
     else stopSTT();
   });
-
-  // --------------- 세션 초기화 헬퍼 ---------------
-  // 자동 초기화용: 지문 누적 + STT만 비우고, 답卡드는 그대로 둠
-  function clearSessionInputs() {
-    questionAccumText = "";
-    sttText = "";
-    stopSTT();
-    updateDebugPanel();
-  }
-
-  // 버튼용: 답까지 전부 초기화
-  function fullReset() {
-    clearSessionInputs();
-    answerMain.textContent = "";
-    answerProb.textContent = "";
-    answerDetail.textContent = "";
-    aiStatusLine.textContent = "AI 풀이 전.";
-  }
 
   // --------------- Solve 버튼 / 누적 / 초기화 ---------------
   btnAccumulate.addEventListener("click", () => {
@@ -461,7 +485,7 @@
   });
 
   btnReset.addEventListener("click", () => {
-    fullReset();
+    resetSession(true);
   });
 
   btnSolve.addEventListener("click", () => {
@@ -553,8 +577,6 @@
       showErrorAnswer(mode, msg);
     } finally {
       solving = false;
-      // ✅ 한 질문 풀이 끝나면, 다음 질문을 위해 지문/음성만 자동 초기화
-      clearSessionInputs();
     }
   }
 
@@ -630,10 +652,11 @@
     answerDetail.textContent = why || text;
   }
 
-  // 초기 상태: reading 모드 강제 세팅 + UI 반영
-  setMode(currentSection);
+  // 초기 상태 반영
+  updateStatusLine();
   updateDebugPanel();
   updateSttButton();
+  updateSttStatus();
 </script>
 </body>
 </html>
