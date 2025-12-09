@@ -33,10 +33,76 @@ ${msg}`;
 [KOREAN]
 ${msg}`;
   }
-  // reading / listening 기본 형식
   return `[ANSWER] ?
 [P] 0.00
 [WHY] ${msg}`;
+}
+
+/**
+ * message(또는 delta) 객체에서 content를 최대한 뽑아내는 헬퍼
+ * - OpenAI 형식: string
+ * - Anthropic/다중 파트: [{type:"text", text:"..."}, ...]
+ * - 기타 변형들까지 최대한 방어적으로 처리
+ */
+function extractContentFromMessage(msg) {
+  if (!msg) return "";
+
+  // 단일 문자열
+  if (typeof msg.content === "string") {
+    return msg.content;
+  }
+
+  // 배열 형식(content가 array)
+  if (Array.isArray(msg.content)) {
+    const parts = [];
+    for (const part of msg.content) {
+      if (!part) continue;
+
+      if (typeof part === "string") {
+        parts.push(part);
+        continue;
+      }
+
+      if (typeof part === "object") {
+        // Anthropic-style: { type: "text", text: "..." }
+        if (part.type === "text" && typeof part.text === "string") {
+          parts.push(part.text);
+          continue;
+        }
+        // { text: "..." }
+        if (typeof part.text === "string") {
+          parts.push(part.text);
+          continue;
+        }
+        // { text: { value: "..." } }
+        if (part.text && typeof part.text.value === "string") {
+          parts.push(part.text.value);
+          continue;
+        }
+        // { value: "..." }
+        if (typeof part.value === "string") {
+          parts.push(part.value);
+          continue;
+        }
+      }
+    }
+    return parts.join("\n").trim();
+  }
+
+  // 일부 구현에서 content를 객체로 줄 가능성까지 방어
+  if (typeof msg.content === "object" && msg.content !== null) {
+    if (typeof msg.content.text === "string") {
+      return msg.content.text;
+    }
+    if (msg.content.text && typeof msg.content.text.value === "string") {
+      return msg.content.text.value;
+    }
+    if (typeof msg.content.value === "string") {
+      return msg.content.value;
+    }
+  }
+
+  return "";
 }
 
 function buildPrompts(mode, ocrText, audioText) {
@@ -152,7 +218,7 @@ Tasks:
 Important:
 - Focus ONLY on the CURRENT question near the end of the OCR_TEXT.
 - If there are answer choices like 1-4, 1-5, A-D, etc, choose from them.
-- If the options do NOT show labels (only empty circles ●/○, bullets, or numbers in front of the sentences), infer an implicit label such as "1, 2, 3, 4" from top to bottom and answer using that label.
+- If the options do NOT show labels (only empty circles ●/○, bullets, dashes, or just sentences in a list), infer an implicit label such as "1, 2, 3, 4" from top to bottom and answer using that label.
 - For "Select TWO answers" type, return BOTH labels separated by a comma, e.g. "B, D" or "2, 4".
 - For ordering / sequence questions (e.g., "put the events in the correct order"), compress your final answer into a short sequence like "3-1-4-2" or "B-D-A-C".
 - For summary / drag / table questions, still convert your reasoning into a single choice label or a short sequence that clearly matches the options.
@@ -246,7 +312,7 @@ exports.handler = async (event, context) => {
 
   const model =
     process.env.OPENROUTER_MODEL ||
-    "openai/gpt-4o-mini"; // gpt-5로 바꾸고 싶으면 env에서 교체
+    "openai/gpt-4o-mini";
 
   const baseUrl =
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
@@ -301,44 +367,40 @@ exports.handler = async (event, context) => {
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    // message.content가 string일 수도 있고, 배열일 수도 있는 최신 포맷까지 처리
+    // ---- 여기가 핵심: 모든 형태의 content를 최대한 다 긁어온다 ----
     let rawText = "";
 
-    if (data && Array.isArray(data.choices) && data.choices[0]) {
+    if (data && Array.isArray(data.choices) && data.choices.length > 0) {
       const choice = data.choices[0];
-      const msg = choice.message || choice.delta || null;
 
-      if (msg && typeof msg.content === "string") {
-        rawText = msg.content;
-      } else if (msg && Array.isArray(msg.content)) {
-        const parts = [];
-        for (const part of msg.content) {
-          if (!part) continue;
-
-          if (typeof part === "string") {
-            parts.push(part);
-            continue;
-          }
-
-          if (part.text) {
-            if (typeof part.text === "string") {
-              parts.push(part.text);
-              continue;
-            }
-            if (part.text && typeof part.text.value === "string") {
-              parts.push(part.text.value);
-              continue;
-            }
-          }
-        }
-        rawText = parts.join("\n").trim();
+      // 1) chat 형식: choice.message.content / choice.delta.content
+      if (choice.message) {
+        rawText = extractContentFromMessage(choice.message);
       }
+      if (!rawText && choice.delta) {
+        rawText = extractContentFromMessage(choice.delta);
+      }
+
+      // 2) text 형식: choice.text (일부 모델)
+      if (!rawText && typeof choice.text === "string") {
+        rawText = choice.text;
+      }
+
+      // 3) 혹시 choice.content에 바로 들어오는 경우
+      if (!rawText && typeof choice.content === "string") {
+        rawText = choice.content;
+      }
+    }
+
+    // 4) 마지막 극단적인 fallback: data.message.content
+    if (!rawText && data && data.message) {
+      rawText = extractContentFromMessage(data.message);
     }
 
     if (!rawText) {
       const text = makeErrorText(
         mode,
-        "OpenRouter 응답에서 message.content를 찾지 못했습니다."
+        "OpenRouter 응답에서 유효한 message.content를 찾지 못했습니다."
       );
       return jsonResponse(200, { ok: false, mode, text });
     }
