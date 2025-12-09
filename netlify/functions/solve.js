@@ -54,7 +54,7 @@ function extractAssistantText(data) {
 
   const choice = data.choices[0];
 
-  // 보통 케이스: non-stream -> message.content
+  // 일반 non-stream 케이스: message.content
   if (choice.message) {
     const msg = choice.message;
     if (typeof msg.content === "string") {
@@ -75,7 +75,7 @@ function extractAssistantText(data) {
     }
   }
 
-  // 혹시 스트리밍/델타 형식이 섞여 들어온 경우 방어
+  // 혹시 delta 형식이 들어온 경우 방어
   if (choice.delta) {
     const delta = choice.delta;
     if (typeof delta.content === "string") return delta.content;
@@ -203,23 +203,44 @@ You will receive:
 - AUDIO_TEXT: transcript of the audio (for listening questions). It may be empty.
 
 Tasks:
-1. Understand what the user is asking: reading question, listening question, summary, sentence insertion, etc.
+1. Understand what the user is asking: reading question, listening question, summary, sentence insertion, order/sequence, table, negative factual, etc.
 2. Find the single best answer choice (or choices) for the current question.
 
-Important:
-- Focus ONLY on the CURRENT question near the end of the OCR_TEXT.
-- If there are answer choices like 1-4, 1-5, A-D, etc, choose from them.
-- For "Select TWO answers" type, return BOTH labels separated by a comma, e.g. "B, D".
-- For summary / drag / table questions, still convert your reasoning into a single choice label that matches the options.
-- TOEFL READING also includes sentence insertion questions, where small squares (▢, □, ■, etc.) show possible locations. For those, choose the option that indicates the correct position. Do NOT rewrite the whole paragraph.
+Answer choice formats you MUST handle:
+
+1) Normal labeled options:
+   - If choices are labeled (1-4, 1-5, A-D, etc.), choose from those labels.
+
+2) Unlabeled bullets (e.g. lines starting with "○", "●", "•", "-" or no label at all):
+   - Treat each bullet line as ONE option in order.
+   - In that case, assign labels "1", "2", "3", ... in top-to-bottom order.
+   - Output the label of the correct option using these numbers.
+   - For multiple answers, output "2, 4" style (comma + space).
+
+3) Order / sequence questions (put steps/events in correct order):
+   - Map each step/statement to a label (either the existing label, or numbers 1,2,3,... if there are only bullets).
+   - Output the correct order of labels as a single line, like:
+     [ANSWER] 3-1-4-2
+   - Use hyphens "-" between labels, no spaces.
+
+4) "Select TWO answers" / "TWO answers are correct":
+   - Return BOTH labels separated by a comma, e.g. "B, D" or "2, 4".
+
+5) Summary / drag / table questions:
+   - Convert your reasoning into a single choice label (or labels) that match the options you infer from the OCR text.
+   - If the UI uses checkboxes or circles without labels, again assign numbers 1, 2, 3, ... in visual order.
+
+Sentence insertion questions:
+- TOEFL READING includes sentence insertion questions, where small squares (▢, □, ■, etc.) show possible locations.
+- Choose the option that indicates the correct position. Do NOT rewrite the whole paragraph.
 
 Uncertainty:
 - If the OCR_TEXT is badly damaged and you are less than 0.1 confident in any answer, output "?" as the answer and explain why.
 
 Output format (exactly):
 
-[ANSWER] <label or "?" only>
-[P] <probability 0.00-1.00 as a decimal number, your confidence that the answer is correct>
+[ANSWER] <label, labels, or "?" only>
+[P] <probability 0.00-1.00 as a decimal number, your confidence that the answer or sequence is correct>
 [WHY]
 Short Korean explanation (2-5 bullet points) of:
 - why this answer is most likely correct
@@ -237,7 +258,7 @@ ${cleanOCR || "(none)"}
 AUDIO_TEXT:
 ${cleanAUDIO || "(none)"}
 
-Use OCR_TEXT and AUDIO_TEXT to infer the current TOEFL question and then produce the answer, probability, and Korean explanation.
+Use OCR_TEXT and AUDIO_TEXT to infer the current TOEFL question and then produce the answer label(s), probability, and Korean explanation.
 `.trim();
 
     maxTokens = 512;
