@@ -164,9 +164,9 @@ Task:
 - The user will read it aloud.
 
 Length:
-- About 40-70 English words (10-15 seconds).
+- About 50-80 English words (roughly 12-18 seconds).
 - 2-4 sentences.
-- Do NOT exceed 90 words.
+- Do NOT exceed about 95 words.
 
 Pronunciation help:
 - Choose 3-7 important or difficult English words from your answer.
