@@ -162,7 +162,7 @@
   let prevThumb = null;
   let lastStableTime = 0;
 
-  // 고해상도 스틸 프레임용 ImageCapture
+  // 고해상도 스틸 프레임용 ImageCapture (iOS에서는 대부분 미사용, 다른 기기 fallback용)
   let imageCapture = null;
 
   zoomRange.addEventListener("input", () => {
@@ -176,19 +176,15 @@
     doOCROnce(true);
   });
 
-  // ---------- 카메라 시작 (S25 울트라용 튜닝) ----------
+  // ---------- 카메라 시작 (iPhone 14 기준 튜닝, 다른 기기에서도 동작) ----------
   async function startCamera() {
     try {
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 2560 },
-          height: { ideal: 1440 },
-          frameRate: { ideal: 30 },
-          advanced: [
-            { width: 2560, height: 1440 },
-            { width: 1920, height: 1080 }
-          ]
+          width: { ideal: 1920, max: 1920 },
+          height: { ideal: 1080, max: 1080 },
+          frameRate: { ideal: 30, max: 30 }
         },
         audio: false
       };
@@ -215,7 +211,7 @@
         statusLine.textContent =
           `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
 
-        // 고해상도 스틸 캡처 준비
+        // 고해상도 스틸 캡처 준비 (iOS는 보통 미지원, 데스크탑/안드에서만 동작)
         if ("ImageCapture" in window) {
           try {
             imageCapture = new ImageCapture(track);
@@ -340,7 +336,7 @@
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 90% 크롭 + 가로 최대 1600px
+  // 중앙 90% 크롭 + 가로 최대 1600px (imageBitmap/bitmap용)
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
@@ -358,6 +354,10 @@
 
     canvas.width = outW;
     canvas.height = outH;
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingQuality = "high";
+
     ctx.drawImage(
       source,
       cropX, cropY, cropW, cropH,
@@ -390,6 +390,10 @@
 
     canvas.width = outW;
     canvas.height = outH;
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingQuality = "high";
+
     ctx.drawImage(
       video,
       cropX, cropY, cropW, cropH,
@@ -419,7 +423,9 @@
               (manual ? "[수동] " : "[자동] ") +
               `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
-        }
+        },
+        // 한 덩어리의 영어 텍스트 블록이라는 가정 (PSM 6)
+        tessedit_pageseg_mode: 6
       });
 
       const rawText = result.data.text || "";
@@ -472,5 +478,4 @@
 </script>
 </body>
 </html>
-
 
