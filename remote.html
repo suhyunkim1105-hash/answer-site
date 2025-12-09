@@ -48,7 +48,7 @@
       font-weight: 600;
     }
 
-    #statusLine, #aiStatusLine, #sttStatusLine {
+    #statusLine, #aiStatusLine {
       font-size: 11px;
       color: #aaa;
       margin-bottom: 4px;
@@ -66,10 +66,10 @@
     }
 
     #answerMain {
-      font-size: 20px;
+      font-size: 16px;
       font-weight: 700;
       margin-bottom: 4px;
-      min-height: 26px;
+      min-height: 22px;
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -184,20 +184,20 @@
   <div id="statusLine">섹션: reading · OCR: - · 카메라 상태: -</div>
 
   <div id="answerCard">
-    <div id="answerMain"></div>
-    <div id="answerProb"></div>
+    <div id="answerMain">여기에 프롬프트가 생성됩니다.</div>
+    <div id="answerProb">아래 전체를 ChatGPT에 붙여넣으세요.</div>
     <pre id="answerDetail"></pre>
   </div>
 
   <div class="btn-group">
-    <button id="btnSolve" class="btn-primary">이 질문 풀기</button>
+    <button id="btnSolve" class="btn-primary">이 질문 풀기용 프롬프트 만들기</button>
+    <button id="btnCopyPrompt" class="btn-secondary">프롬프트 복사 (클립보드)</button>
     <button id="btnAccumulate" class="btn-secondary">지문 누적 (긴 지문용)</button>
     <button id="btnReset" class="btn-secondary">이 세션 초기화</button>
     <button id="btnSTT" class="btn-secondary">음성 인식 시작 (Listening/Speaking)</button>
   </div>
 
-  <div id="aiStatusLine">AI 풀이 전.</div>
-  <div id="sttStatusLine">STT: 대기 중.</div>
+  <div id="aiStatusLine">AI 호출 없음. 프롬프트만 생성합니다.</div>
 
   <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
 
@@ -235,13 +235,13 @@
   const answerProb  = document.getElementById("answerProb");
   const answerDetail= document.getElementById("answerDetail");
   const aiStatusLine= document.getElementById("aiStatusLine");
-  const sttStatusLine = document.getElementById("sttStatusLine");
 
-  const btnSolve      = document.getElementById("btnSolve");
-  const btnAccumulate = document.getElementById("btnAccumulate");
-  const btnReset      = document.getElementById("btnReset");
-  const btnSTT        = document.getElementById("btnSTT");
-  const btnToggleDebug= document.getElementById("btnToggleDebug");
+  const btnSolve       = document.getElementById("btnSolve");
+  const btnCopyPrompt  = document.getElementById("btnCopyPrompt");
+  const btnAccumulate  = document.getElementById("btnAccumulate");
+  const btnReset       = document.getElementById("btnReset");
+  const btnSTT         = document.getElementById("btnSTT");
+  const btnToggleDebug = document.getElementById("btnToggleDebug");
 
   const debugPanel    = document.getElementById("debugPanel");
   const dbgOcrCurrent = document.getElementById("dbgOcrCurrent");
@@ -257,9 +257,6 @@
 
   let questionAccumText = ""; // 긴 지문 누적용
   let sttText           = ""; // STT 결과 전체
-
-  let solving       = false;
-  let lastCommandTs = 0;
 
   // STT 관련
   let recognition        = null;
@@ -328,20 +325,8 @@
     updateDebugPanel();
   });
 
-  // p2p/command 구독: reading/listening 자동 풀이용
-  db.ref("p2p/command").on("value", snap => {
-    const cmd = snap.val();
-    if (!cmd || cmd.type !== "solve") return;
-
-    const ts = cmd.timestamp || 0;
-    if (ts <= lastCommandTs) return;
-    lastCommandTs = ts;
-
-    // 자동 풀이는 reading / listening 에서만
-    if (currentSection === "reading" || currentSection === "listening") {
-      solveCurrentQuestion("auto");
-    }
-  });
+  // p2p/command는 이제 사용 안 함 (AI 자동 호출 없음)
+  db.ref("p2p/command").off();
 
   // --------------- STT (Web Speech API) ----------------
   function ensureRecognizer() {
@@ -368,27 +353,16 @@
         }
       }
       if (finalChunk) {
-        const cleaned = finalChunk.trim();
-        sttText += (sttText ? " " : "") + cleaned;
+        sttText += (sttText ? " " : "") + finalChunk.trim();
         updateDebugPanel();
-
-        const wordCount = sttText.trim().split(/\s+/).filter(Boolean).length;
-        if (!solving) {
-          sttStatusLine.textContent =
-            "STT: 인식 중 (누적 단어 수: " + wordCount + "개)";
-        }
       }
     };
 
     recognition.onerror = (event) => {
       console.warn("STT error:", event.error);
-      if (sttShouldRestart) {
-        try {
-          recognition.stop();
-        } catch (e) {}
-      }
     };
 
+    // 네가 직접 중지 누르기 전까지는 자동 재시작
     recognition.onend = () => {
       sttActive = false;
       if (sttShouldRestart) {
@@ -401,9 +375,6 @@
         }
       }
       updateSttButton();
-      if (!sttActive) {
-        sttStatusLine.textContent = "STT: 대기 중.";
-      }
     };
 
     return recognition;
@@ -425,7 +396,6 @@
       rec.start();
       sttActive = true;
       updateSttButton();
-      sttStatusLine.textContent = "STT: 인식 중...";
     } catch (e) {
       console.warn("STT start 실패:", e);
     }
@@ -442,7 +412,6 @@
     }
     sttActive = false;
     updateSttButton();
-    sttStatusLine.textContent = "STT: 대기 중.";
   }
 
   btnSTT.addEventListener("click", () => {
@@ -450,7 +419,7 @@
     else stopSTT();
   });
 
-  // --------------- Solve 버튼 / 누적 / 초기화 ---------------
+  // --------------- 지문 누적 / 초기화 ---------------
   btnAccumulate.addEventListener("click", () => {
     const text = (latestOcrText || "").trim();
     if (!text) return;
@@ -460,199 +429,94 @@
     }
   });
 
-  function hardResetSession() {
+  btnReset.addEventListener("click", () => {
     questionAccumText = "";
     sttText = "";
+    // STT는 네가 원할 때까지 유지하고 싶으면 stopSTT()를 빼도 된다.
     stopSTT();
-    answerMain.textContent = "";
-    answerProb.textContent = "";
+    answerMain.textContent = "여기에 프롬프트가 생성됩니다.";
+    answerProb.textContent = "아래 전체를 ChatGPT에 붙여넣으세요.";
     answerDetail.textContent = "";
-    aiStatusLine.textContent = "AI 풀이 전.";
+    aiStatusLine.textContent = "AI 호출 없음. 프롬프트만 생성합니다.";
     updateDebugPanel();
-  }
-
-  btnReset.addEventListener("click", () => {
-    hardResetSession();
-  });
-
-  btnSolve.addEventListener("click", () => {
-    solveCurrentQuestion("manual");
   });
 
   btnToggleDebug.addEventListener("click", () => {
     debugPanel.classList.toggle("hidden");
   });
 
-  // --------------- AI 결과 에러 표시 ---------------
-  function showErrorAnswer(mode, message) {
-    if (mode === "writing") {
-      answerMain.textContent = "모범 에세이 생성 실패";
-      answerProb.textContent = "";
-      answerDetail.textContent =
-        "[오류]\n" +
-        (message || "서버 오류로 인해 에세이를 생성하지 못했습니다.");
-    } else if (mode === "speaking") {
-      answerMain.textContent = "(스피킹 답안 생성 실패)";
-      answerProb.textContent = "";
-      answerDetail.textContent =
-        "[오류]\n" +
-        (message || "서버 오류로 인해 스크립트를 생성하지 못했습니다.");
-    } else {
-      answerMain.textContent = "?";
-      answerProb.textContent = "맞을 확률(추정): 0%";
-      answerDetail.textContent =
-        "[오류]\n" +
-        (message || "서버 오류로 인해 답을 생성하지 못했습니다.");
-    }
-    aiStatusLine.textContent = "AI 풀이 실패.";
+  // --------------- 프롬프트 생성 로직 ---------------
+  function buildPrompt(mode, ocrText, audioText, accumText) {
+    const cleanOCR   = (ocrText || "").trim();
+    const cleanAUDIO = (audioText || "").trim();
+    const cleanACC   = (accumText || "").trim();
+    const effectiveOcr = cleanACC || cleanOCR || "(none)";
+    const audioPart   = cleanAUDIO || "(none)";
+
+    // 여기서는 ChatGPT 쪽에 이미 "역할/형식" 세팅 프롬프트를 넣어둔다고 가정하고,
+    // 각 문제마다 딱 이 구조만 보내도록 한다.
+    return (
+`MODE: ${mode.toUpperCase()}
+OCR_TEXT:
+${effectiveOcr}
+
+AUDIO_TEXT:
+${audioPart}`
+    );
   }
 
-  // --------------- AI 호출 ---------------
-  async function solveCurrentQuestion(trigger) {
-    if (solving) return;
-    const mode = currentSection;
-
+  function generatePrompt() {
     const effectiveOcr = (questionAccumText.trim() || latestOcrText.trim());
     const effectiveLen = effectiveOcr.replace(/\s+/g, "").length;
     const conf = (typeof latestOcrConf === "number") ? latestOcrConf : 0;
 
-    // OCR 품질이 너무 떨어지면 그냥 건너뜀
     if (!effectiveOcr || effectiveLen < 10 || conf < 5) {
-      answerMain.textContent = "?";
-      answerProb.textContent = "맞을 확률(추정): 0%";
+      answerMain.textContent = "프롬프트 생성 실패";
+      answerProb.textContent = "";
       answerDetail.textContent =
-        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 5% 미만이라서 풀이를 건너뜁니다.\n" +
-        "화면을 더 가깝게/선명하게 찍고 다시 시도하세요.";
-      aiStatusLine.textContent = "AI 풀이 생략 (OCR 품질 부족).";
+        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 너무 낮습니다.\n" +
+        "화면을 더 선명하게 찍고 지문 누적을 다시 시도한 뒤, 다시 눌러주세요.";
+      aiStatusLine.textContent = "프롬프트 생성 불가 (OCR 품질 부족).";
       return;
     }
 
-    // 스피킹/리스닝은 문제 풀 때 STT 정지
-    if (mode === "speaking" || mode === "listening") {
-      stopSTT();
-    }
+    const promptText = buildPrompt(
+      currentSection,
+      effectiveOcr,
+      sttText,
+      questionAccumText
+    );
 
-    solving = true;
-    aiStatusLine.textContent = "AI 풀이 중...";
-
-    try {
-      const payload = {
-        mode,
-        ocrText: effectiveOcr,
-        audioText: sttText.trim(),
-        questionAccum: questionAccumText.trim(),
-        source: trigger || "manual"
-      };
-
-      const resp = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!resp.ok) {
-        const msg = "서버 응답 오류 (status " + resp.status + ").";
-        showErrorAnswer(mode, msg);
-        return;
-      }
-
-      const data = await resp.json();
-      const raw = (data && data.text) ? data.text : "";
-      renderAiResult(raw, mode);
-      aiStatusLine.textContent = "AI 풀이 완료.";
-
-      // 자동 세션 초기화: 다음 문제를 위해 누적 지문·STT 비움
-      questionAccumText = "";
-      sttText = "";
-      updateDebugPanel();
-    } catch (e) {
-      const msg = "네트워크/요청 중 오류: " + (e && e.message ? e.message : e);
-      showErrorAnswer(mode, msg);
-    } finally {
-      solving = false;
-    }
+    answerMain.textContent =
+      `섹션: ${currentSection} · 아래 전체를 ChatGPT에 붙여넣으세요.`;
+    answerProb.textContent = "";
+    answerDetail.textContent = promptText;
+    aiStatusLine.textContent = "프롬프트 생성 완료. 이제 복사해서 ChatGPT에 붙여넣으세요.";
   }
 
-  // --------------- AI 결과 파싱 ---------------
-  function renderAiResult(raw, mode) {
-    const text = (raw || "").trim();
+  btnSolve.addEventListener("click", () => {
+    generatePrompt();
+  });
+
+  // --------------- 프롬프트 클립보드 복사 ---------------
+  btnCopyPrompt.addEventListener("click", async () => {
+    const text = (answerDetail.textContent || "").trim();
     if (!text) {
-      showErrorAnswer(mode, "AI 응답이 비어 있습니다.");
+      aiStatusLine.textContent = "복사할 프롬프트가 없습니다. 먼저 프롬프트를 생성하세요.";
       return;
     }
-
-    if (mode === "writing") {
-      const mEssay = text.match(/\[ESSAY\]([\s\S]*?)(?:\[FEEDBACK\]|\Z)/i);
-      const mFb    = text.match(/\[FEEDBACK\]([\s\S]*)$/i);
-      const essay  = mEssay ? mEssay[1].trim() : text;
-      const fb     = mFb ? mFb[1].trim() : "";
-
-      answerMain.textContent = "모범 에세이";
-      answerProb.textContent = "";
-      answerDetail.textContent =
-        essay +
-        (fb ? "\n\n[피드백]\n" + fb : "");
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      aiStatusLine.textContent = "이 브라우저는 클립보드 API를 지원하지 않습니다. 수동으로 복사하세요.";
       return;
     }
-
-    if (mode === "speaking") {
-      const mAns   = text.match(/\[ANSWER\]([\s\S]*?)(?:\[WORDS\]|\[KOREAN\]|\Z)/i);
-      const mWords = text.match(/\[WORDS\]([\s\S]*?)(?:\[KOREAN\]|\Z)/i);
-      const mKor   = text.match(/\[KOREAN\]([\s\S]*)$/i);
-
-      const script = mAns ? mAns[1].trim() : text;
-      const words  = mWords ? mWords[1].trim() : "";
-      const kor    = mKor ? mKor[1].trim() : "";
-
-      answerMain.textContent = script;
-      answerProb.textContent = "";
-      let detail = "";
-      if (words) {
-        detail += "[발음 도움]\n" + words.trim() + "\n\n";
-      }
-      if (kor) {
-        detail += "[한국어 요약/팁]\n" + kor.trim();
-      }
-      answerDetail.textContent = detail || text;
-      return;
+    try {
+      await navigator.clipboard.writeText(text);
+      aiStatusLine.textContent = "프롬프트가 클립보드에 복사되었습니다. ChatGPT에 붙여넣으세요.";
+    } catch (e) {
+      console.warn("clipboard 오류:", e);
+      aiStatusLine.textContent = "클립보드 복사 실패. 텍스트를 길게 눌러 수동으로 복사하세요.";
     }
-
-    // 기본: reading / listening
-    let answer = "?";
-    let p = 0;
-    let why = "";
-
-    const mAns = text.match(/\[ANSWER\][^\S\r\n]*([^\n]+)/i);
-    if (mAns) {
-      answer = mAns[1].trim();
-    }
-
-    const mP = text.match(/\[P\][^\S\r\n]*([0-9.]+)/i);
-    if (mP) {
-      const val = parseFloat(mP[1]);
-      if (!isNaN(val)) {
-        p = Math.max(0, Math.min(1, val));
-      }
-    }
-
-    const mWhy = text.match(/\[WHY\]([\s\S]*)$/i);
-    if (mWhy) {
-      why = mWhy[1].trim();
-    }
-
-    // 만약 writing 스타일로 넘어온 경우 방어
-    if (!mAns && /\[ESSAY\]/i.test(text)) {
-      answer = "?";
-      p = 0;
-      why =
-        "[형식 오류]\n리딩/리스닝 모드인데 에세이 형식 응답을 받았습니다.\n" +
-        "같은 문제를 다시 요청해 보세요.";
-    }
-
-    answerMain.textContent = answer;
-    answerProb.textContent = "맞을 확률(추정): " + Math.round(p * 100) + "%";
-    answerDetail.textContent = why || text;
-  }
+  });
 
   // 초기 상태 반영
   updateStatusLine();
