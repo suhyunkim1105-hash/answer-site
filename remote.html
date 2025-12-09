@@ -257,7 +257,7 @@
   let latestOcrConf   = null;
   let cameraBlocked   = false;
 
-  let questionAccumText = ""; // 긴 지문 누적용
+  let questionAccumText = ""; // 긴 지문 누적용 (passage)
   let sttText           = ""; // STT 결과 전체
 
   // STT 관련
@@ -448,11 +448,23 @@
 
   // --------------- 프롬프트 생성 로직 ---------------
   function buildPrompt(mode, ocrText, audioText, accumText) {
-    const cleanOCR   = (ocrText || "").trim();
+    const cleanOCR   = (ocrText || "").trim();   // 현재 질문 + 선택지
     const cleanAUDIO = (audioText || "").trim();
-    const cleanACC   = (accumText || "").trim();
-    const effectiveOcr = cleanACC || cleanOCR || "(none)";
-    const audioPart   = cleanAUDIO || "(none)";
+    const cleanACC   = (accumText || "").trim(); // 누적 지문 (passage)
+
+    let effectiveOcr = "";
+    if (cleanACC && cleanOCR) {
+      effectiveOcr =
+        cleanACC + "\n\n[CURRENT_QUESTION]\n" + cleanOCR;
+    } else if (cleanACC) {
+      effectiveOcr = cleanACC;
+    } else if (cleanOCR) {
+      effectiveOcr = cleanOCR;
+    } else {
+      effectiveOcr = "(none)";
+    }
+
+    const audioPart = cleanAUDIO || "(none)";
 
     return (
 `MODE: ${mode.toUpperCase()}
@@ -465,10 +477,22 @@ ${audioPart}`
   }
 
   function generatePrompt() {
-    const effectiveOcr = (questionAccumText.trim() || latestOcrText.trim());
-    const effectiveLen = effectiveOcr.replace(/\s+/g, "").length;
+    const cleanOCR = (latestOcrText || "").trim();
+    const cleanACC = (questionAccumText || "").trim();
 
-    if (!effectiveOcr || effectiveLen < 10) {
+    let forLen = "";
+    if (cleanACC && cleanOCR) {
+      forLen = cleanACC + " " + cleanOCR;
+    } else if (cleanACC) {
+      forLen = cleanACC;
+    } else if (cleanOCR) {
+      forLen = cleanOCR;
+    } else {
+      forLen = "";
+    }
+
+    const effectiveLen = forLen.replace(/\s+/g, "").length;
+    if (!forLen || effectiveLen < 10) {
       answerMain.textContent = "프롬프트 생성 실패";
       answerProb.textContent = "";
       answerDetail.textContent =
@@ -480,7 +504,7 @@ ${audioPart}`
 
     const promptText = buildPrompt(
       currentSection,
-      effectiveOcr,
+      latestOcrText,
       sttText,
       questionAccumText
     );
