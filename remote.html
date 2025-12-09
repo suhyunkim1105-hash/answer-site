@@ -197,7 +197,7 @@
   </div>
 
   <div id="aiStatusLine">AI 풀이 전.</div>
-  <div id="sttStatusLine">STT: 꺼짐</div>
+  <div id="sttStatusLine">STT: 대기 중.</div>
 
   <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
 
@@ -265,8 +265,6 @@
   let recognition        = null;
   let sttShouldRestart   = false;
   let sttActive          = false;
-  let sttSupported       = true;
-  let lastSttError       = "";
 
   // ------------- UI helpers ----------------
   function sectionLabel(mode) {
@@ -296,18 +294,6 @@
     dbgOcrCurrent.textContent = latestOcrText || "(없음)";
     dbgOcrAccum.textContent   = questionAccumText || "(없음)";
     dbgAudio.textContent      = sttText || "(없음)";
-  }
-
-  function updateSttStatus() {
-    if (!sttSupported) {
-      sttStatusLine.textContent = "STT: 이 브라우저에서는 음성 인식을 지원하지 않습니다.";
-      return;
-    }
-    const wordCount = sttText ? sttText.trim().split(/\s+/).length : 0;
-    let base = sttActive ? "STT: 인식 중" : "STT: 대기/중지";
-    if (wordCount > 0) base += ` · 누적 ${wordCount}단어`;
-    if (lastSttError) base += ` · 마지막 오류: ${lastSttError}`;
-    sttStatusLine.textContent = base;
   }
 
   function setMode(mode) {
@@ -364,61 +350,60 @@
     const SR =
       window.SpeechRecognition || window.webkitSpeechRecognition || null;
     if (!SR) {
-      sttSupported = false;
-      updateSttStatus();
-      alert("이 브라우저에서는 Web Speech API(음성 인식)를 지원하지 않습니다. STT 없이도 사이트는 동작하지만, Listening/Speaking 통합 기능은 제한됩니다.");
+      alert("이 브라우저에서는 Web Speech API(음성 인식)를 지원하지 않습니다.");
       return null;
     }
 
     recognition = new SR();
     recognition.lang = "en-US";
-    recognition.interimResults = true;   // 중간 결과 받기
+    recognition.interimResults = false;
     recognition.continuous = true;
 
     recognition.onresult = (event) => {
       let finalChunk = "";
-      let interimChunk = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
-        if (!res[0] || !res[0].transcript) continue;
-        if (res.isFinal) {
+        if (res.isFinal && res[0] && res[0].transcript) {
           finalChunk += res[0].transcript + " ";
-        } else {
-          interimChunk += res[0].transcript + " ";
         }
       }
       if (finalChunk) {
-        sttText += (sttText ? " " : "") + finalChunk.trim();
+        const cleaned = finalChunk.trim();
+        sttText += (sttText ? " " : "") + cleaned;
+        updateDebugPanel();
+
+        const wordCount = sttText.trim().split(/\s+/).filter(Boolean).length;
+        if (!solving) {
+          sttStatusLine.textContent =
+            "STT: 인식 중 (누적 단어 수: " + wordCount + "개)";
+        }
       }
-      const combined =
-        (sttText || "") +
-        (interimChunk ? " " + interimChunk.trim() : "");
-      dbgAudio.textContent = combined.trim() || "(없음)";
-      lastSttError = "";
-      updateSttStatus();
     };
 
     recognition.onerror = (event) => {
       console.warn("STT error:", event.error);
-      lastSttError = event.error || "unknown";
-      updateSttStatus();
+      if (sttShouldRestart) {
+        try {
+          recognition.stop();
+        } catch (e) {}
+      }
     };
 
     recognition.onend = () => {
       sttActive = false;
-      updateSttStatus();
       if (sttShouldRestart) {
         try {
           recognition.start();
           sttActive = true;
         } catch (e) {
           console.warn("STT 재시작 실패:", e);
-          lastSttError = e && e.message ? e.message : "restart failed";
           sttShouldRestart = false;
         }
-        updateSttStatus();
       }
       updateSttButton();
+      if (!sttActive) {
+        sttStatusLine.textContent = "STT: 대기 중.";
+      }
     };
 
     return recognition;
@@ -437,15 +422,12 @@
 
     try {
       sttShouldRestart = true;
-      lastSttError = "";
       rec.start();
       sttActive = true;
       updateSttButton();
-      updateSttStatus();
+      sttStatusLine.textContent = "STT: 인식 중...";
     } catch (e) {
       console.warn("STT start 실패:", e);
-      lastSttError = e && e.message ? e.message : "start failed";
-      updateSttStatus();
     }
   }
 
@@ -460,7 +442,7 @@
     }
     sttActive = false;
     updateSttButton();
-    updateSttStatus();
+    sttStatusLine.textContent = "STT: 대기 중.";
   }
 
   btnSTT.addEventListener("click", () => {
@@ -478,17 +460,19 @@
     }
   });
 
-  btnReset.addEventListener("click", () => {
+  function hardResetSession() {
     questionAccumText = "";
     sttText = "";
-    lastSttError = "";
     stopSTT();
     answerMain.textContent = "";
     answerProb.textContent = "";
     answerDetail.textContent = "";
     aiStatusLine.textContent = "AI 풀이 전.";
     updateDebugPanel();
-    updateSttStatus();
+  }
+
+  btnReset.addEventListener("click", () => {
+    hardResetSession();
   });
 
   btnSolve.addEventListener("click", () => {
@@ -499,7 +483,7 @@
     debugPanel.classList.toggle("hidden");
   });
 
-  // --------------- AI 호출 ---------------
+  // --------------- AI 결과 에러 표시 ---------------
   function showErrorAnswer(mode, message) {
     if (mode === "writing") {
       answerMain.textContent = "모범 에세이 생성 실패";
@@ -523,6 +507,7 @@
     aiStatusLine.textContent = "AI 풀이 실패.";
   }
 
+  // --------------- AI 호출 ---------------
   async function solveCurrentQuestion(trigger) {
     if (solving) return;
     const mode = currentSection;
@@ -532,21 +517,18 @@
     const conf = (typeof latestOcrConf === "number") ? latestOcrConf : 0;
 
     // OCR 품질이 너무 떨어지면 그냥 건너뜀
-    if (!effectiveOcr || effectiveLen < 10 || conf < 10) {
+    if (!effectiveOcr || effectiveLen < 10 || conf < 5) {
       answerMain.textContent = "?";
       answerProb.textContent = "맞을 확률(추정): 0%";
       answerDetail.textContent =
-        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 10% 미만이라서 풀이를 건너뜁니다.\n" +
+        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 5% 미만이라서 풀이를 건너뜁니다.\n" +
         "화면을 더 가깝게/선명하게 찍고 다시 시도하세요.";
       aiStatusLine.textContent = "AI 풀이 생략 (OCR 품질 부족).";
       return;
     }
 
-    // 🔴 STT 중지 규칙:
-    // - Speaking/Listening에서
-    // - 네가 직접 '이 질문 풀기'를 눌러서 수동 풀이일 때만(stopSTT).
-    // - 카메라 자동 풀이(auto) 때는 STT 건드리지 않음.
-    if (trigger === "manual" && (mode === "speaking" || mode === "listening")) {
+    // 스피킹/리스닝은 문제 풀 때 STT 정지
+    if (mode === "speaking" || mode === "listening") {
       stopSTT();
     }
 
@@ -578,6 +560,11 @@
       const raw = (data && data.text) ? data.text : "";
       renderAiResult(raw, mode);
       aiStatusLine.textContent = "AI 풀이 완료.";
+
+      // 자동 세션 초기화: 다음 문제를 위해 누적 지문·STT 비움
+      questionAccumText = "";
+      sttText = "";
+      updateDebugPanel();
     } catch (e) {
       const msg = "네트워크/요청 중 오류: " + (e && e.message ? e.message : e);
       showErrorAnswer(mode, msg);
@@ -653,6 +640,15 @@
       why = mWhy[1].trim();
     }
 
+    // 만약 writing 스타일로 넘어온 경우 방어
+    if (!mAns && /\[ESSAY\]/i.test(text)) {
+      answer = "?";
+      p = 0;
+      why =
+        "[형식 오류]\n리딩/리스닝 모드인데 에세이 형식 응답을 받았습니다.\n" +
+        "같은 문제를 다시 요청해 보세요.";
+    }
+
     answerMain.textContent = answer;
     answerProb.textContent = "맞을 확률(추정): " + Math.round(p * 100) + "%";
     answerDetail.textContent = why || text;
@@ -661,7 +657,6 @@
   // 초기 상태 반영
   updateStatusLine();
   updateDebugPanel();
-  updateSttStatus();
   updateSttButton();
 </script>
 </body>
