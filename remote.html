@@ -95,6 +95,7 @@
 
     .btn-group {
       margin-top: 8px;
+      margin-bottom: 8px;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -174,19 +175,12 @@
 </head>
 <body>
 <div class="wrap">
+  <!-- 1) 모드 선택 + 버튼들 (제일 위) -->
   <div class="mode-bar">
     <button class="mode-btn active" data-mode="reading">Reading</button>
     <button class="mode-btn" data-mode="listening">Listening</button>
     <button class="mode-btn" data-mode="writing">Writing</button>
     <button class="mode-btn" data-mode="speaking">Speaking</button>
-  </div>
-
-  <div id="statusLine">섹션: reading · OCR: - · 카메라 상태: -</div>
-
-  <div id="answerCard">
-    <div id="answerMain">여기에 프롬프트가 생성됩니다.</div>
-    <div id="answerProb">아래 전체를 ChatGPT에 붙여넣으세요.</div>
-    <pre id="answerDetail"></pre>
   </div>
 
   <div class="btn-group">
@@ -197,7 +191,15 @@
     <button id="btnSTT" class="btn-secondary">음성 인식 시작 (Listening/Speaking)</button>
   </div>
 
+  <!-- 2) 상태 / 프롬프트 / 디버그 (버튼 뒤로) -->
+  <div id="statusLine">섹션: reading · OCR: - · 카메라 상태: -</div>
   <div id="aiStatusLine">AI 호출 없음. 프롬프트만 생성합니다.</div>
+
+  <div id="answerCard">
+    <div id="answerMain">여기에 프롬프트가 생성됩니다.</div>
+    <div id="answerProb">아래 전체를 ChatGPT에 붙여넣으세요.</div>
+    <pre id="answerDetail"></pre>
+  </div>
 
   <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
 
@@ -432,7 +434,6 @@
   btnReset.addEventListener("click", () => {
     questionAccumText = "";
     sttText = "";
-    // STT는 네가 원할 때까지 유지하고 싶으면 stopSTT()를 빼도 된다.
     stopSTT();
     answerMain.textContent = "여기에 프롬프트가 생성됩니다.";
     answerProb.textContent = "아래 전체를 ChatGPT에 붙여넣으세요.";
@@ -453,8 +454,6 @@
     const effectiveOcr = cleanACC || cleanOCR || "(none)";
     const audioPart   = cleanAUDIO || "(none)";
 
-    // 여기서는 ChatGPT 쪽에 이미 "역할/형식" 세팅 프롬프트를 넣어둔다고 가정하고,
-    // 각 문제마다 딱 이 구조만 보내도록 한다.
     return (
 `MODE: ${mode.toUpperCase()}
 OCR_TEXT:
@@ -468,15 +467,14 @@ ${audioPart}`
   function generatePrompt() {
     const effectiveOcr = (questionAccumText.trim() || latestOcrText.trim());
     const effectiveLen = effectiveOcr.replace(/\s+/g, "").length;
-    const conf = (typeof latestOcrConf === "number") ? latestOcrConf : 0;
 
-    if (!effectiveOcr || effectiveLen < 10 || conf < 5) {
+    if (!effectiveOcr || effectiveLen < 10) {
       answerMain.textContent = "프롬프트 생성 실패";
       answerProb.textContent = "";
       answerDetail.textContent =
-        "OCR 텍스트가 너무 짧거나 신뢰도(conf)가 너무 낮습니다.\n" +
+        "OCR 텍스트가 너무 짧습니다.\n" +
         "화면을 더 선명하게 찍고 지문 누적을 다시 시도한 뒤, 다시 눌러주세요.";
-      aiStatusLine.textContent = "프롬프트 생성 불가 (OCR 품질 부족).";
+      aiStatusLine.textContent = "프롬프트 생성 불가 (텍스트 길이 부족).";
       return;
     }
 
@@ -518,8 +516,8 @@ ${audioPart}`
     }
   });
 
-  // 초기 상태 반영
-  updateStatusLine();
+  // 초기 상태 반영: 모드 Firebase 동기화 + UI 초기화
+  setMode(currentSection);
   updateDebugPanel();
   updateSttButton();
 </script>
