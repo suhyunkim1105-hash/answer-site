@@ -18,44 +18,52 @@ function jsonResponse(statusCode, bodyObj) {
 }
 
 function makeErrorText(mode, message) {
-  const msg = message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
+  const msg =
+    message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
+
   if (mode === "writing") {
     return `[ESSAY]
-(작성 불가: 서버 오류로 인해 모델 답안을 생성하지 못했습니다.)
+(작성 불가: 모델 답안을 생성하지 못했습니다.)
 [FEEDBACK]
 ${msg}`;
   }
+
   if (mode === "speaking") {
     return `[ANSWER]
-(서버 오류로 스피킹 모델 답안을 생성하지 못했습니다.)
+(스피킹 답안을 생성하지 못했습니다.)
 [WORDS]
 -
 [KOREAN]
 ${msg}`;
   }
+
+  // reading / listening 공통
   return `[ANSWER] ?
 [P] 0.00
-[WHY] ${msg}`;
+[WHY]
+${msg}`;
 }
 
 /**
  * message(또는 delta) 객체에서 content를 최대한 뽑아내는 헬퍼
- * - OpenAI 형식: string
- * - Anthropic/다중 파트: [{type:"text", text:"..."}, ...]
- * - 기타 변형들까지 최대한 방어적으로 처리
+ * - OpenAI/OpenRouter 기본: string
+ * - Anthropic 스타일: [{type:"text", text:"..."}, ...]
+ * - 그 외 변형들까지 최대한 방어적으로 처리
  */
 function extractContentFromMessage(msg) {
   if (!msg) return "";
 
-  // 단일 문자열
-  if (typeof msg.content === "string") {
-    return msg.content;
+  const c = msg.content;
+
+  // 1) content가 문자열
+  if (typeof c === "string") {
+    return c;
   }
 
-  // 배열 형식(content가 array)
-  if (Array.isArray(msg.content)) {
+  // 2) content가 배열 (파트 여러 개)
+  if (Array.isArray(c)) {
     const parts = [];
-    for (const part of msg.content) {
+    for (const part of c) {
       if (!part) continue;
 
       if (typeof part === "string") {
@@ -89,16 +97,16 @@ function extractContentFromMessage(msg) {
     return parts.join("\n").trim();
   }
 
-  // 일부 구현에서 content를 객체로 줄 가능성까지 방어
-  if (typeof msg.content === "object" && msg.content !== null) {
-    if (typeof msg.content.text === "string") {
-      return msg.content.text;
+  // 3) content가 객체인 경우
+  if (typeof c === "object" && c !== null) {
+    if (typeof c.text === "string") {
+      return c.text;
     }
-    if (msg.content.text && typeof msg.content.text.value === "string") {
-      return msg.content.text.value;
+    if (c.text && typeof c.text.value === "string") {
+      return c.text.value;
     }
-    if (typeof msg.content.value === "string") {
-      return msg.content.value;
+    if (typeof c.value === "string") {
+      return c.value;
     }
   }
 
@@ -218,7 +226,7 @@ Tasks:
 Important:
 - Focus ONLY on the CURRENT question near the end of the OCR_TEXT.
 - If there are answer choices like 1-4, 1-5, A-D, etc, choose from them.
-- If the options do NOT show labels (only empty circles ●/○, bullets, dashes, or just sentences in a list), infer an implicit label such as "1, 2, 3, 4" from top to bottom and answer using that label.
+- If the options do NOT show labels (only empty circles ●/○, bullets, dashes, or just sentences in a list), infer implicit labels such as "1, 2, 3, 4" from top to bottom and answer using that label.
 - For "Select TWO answers" type, return BOTH labels separated by a comma, e.g. "B, D" or "2, 4".
 - For ordering / sequence questions (e.g., "put the events in the correct order"), compress your final answer into a short sequence like "3-1-4-2" or "B-D-A-C".
 - For summary / drag / table questions, still convert your reasoning into a single choice label or a short sequence that clearly matches the options.
@@ -298,8 +306,11 @@ exports.handler = async (event, context) => {
   const ocrText = (body.ocrText || "").toString();
   const audioText = (body.audioText || "").toString();
 
-  const { system, user, maxTokens, temperature } =
-    buildPrompts(mode, ocrText, audioText);
+  const { system, user, maxTokens, temperature } = buildPrompts(
+    mode,
+    ocrText,
+    audioText
+  );
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -311,8 +322,7 @@ exports.handler = async (event, context) => {
   }
 
   const model =
-    process.env.OPENROUTER_MODEL ||
-    "openai/gpt-4o-mini";
+    process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 
   const baseUrl =
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
@@ -348,6 +358,7 @@ exports.handler = async (event, context) => {
     const rawBody = await res.text();
     const contentType = res.headers.get("content-type") || "";
 
+    // HTTP 레벨 에러 or HTML 에러 페이지
     if (!res.ok || looksLikeHtmlResponse(contentType, rawBody)) {
       const msg = looksLikeHtmlResponse(contentType, rawBody)
         ? "OpenRouter 쪽에서 HTML 에러 페이지(예: Inactivity Timeout)를 돌려줬습니다. 같은 문제를 잠시 후 다시 시도해 주세요."
@@ -367,45 +378,69 @@ exports.handler = async (event, context) => {
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    // ---- 여기가 핵심: 모든 형태의 content를 최대한 다 긁어온다 ----
-    let rawText = "";
-
-    if (data && Array.isArray(data.choices) && data.choices.length > 0) {
-      const choice = data.choices[0];
-
-      // 1) chat 형식: choice.message.content / choice.delta.content
-      if (choice.message) {
-        rawText = extractContentFromMessage(choice.message);
-      }
-      if (!rawText && choice.delta) {
-        rawText = extractContentFromMessage(choice.delta);
-      }
-
-      // 2) text 형식: choice.text (일부 모델)
-      if (!rawText && typeof choice.text === "string") {
-        rawText = choice.text;
-      }
-
-      // 3) 혹시 choice.content에 바로 들어오는 경우
-      if (!rawText && typeof choice.content === "string") {
-        rawText = choice.content;
-      }
-    }
-
-    // 4) 마지막 극단적인 fallback: data.message.content
-    if (!rawText && data && data.message) {
-      rawText = extractContentFromMessage(data.message);
-    }
-
-    if (!rawText) {
+    // OpenRouter 스타일 에러 객체 처리 (choices가 없거나 error 필드가 있을 때)
+    if (!data || typeof data !== "object") {
       const text = makeErrorText(
         mode,
-        "OpenRouter 응답에서 유효한 message.content를 찾지 못했습니다."
+        "OpenRouter 응답 형식이 예상과 다릅니다."
       );
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    return jsonResponse(200, { ok: true, mode, text: rawText });
+    if (data.error) {
+      const errMsg =
+        (typeof data.error === "string"
+          ? data.error
+          : data.error.message || JSON.stringify(data.error).slice(0, 400)) ||
+        "OpenRouter 응답에서 error가 반환되었습니다.";
+      const text = makeErrorText(mode, "OpenRouter 오류: " + errMsg);
+      return jsonResponse(200, { ok: false, mode, text });
+    }
+
+    const choices = Array.isArray(data.choices) ? data.choices : [];
+    if (choices.length === 0) {
+      const text = makeErrorText(
+        mode,
+        "OpenRouter 응답에 choices가 없습니다. 응답 일부: " +
+          JSON.stringify(data).slice(0, 400)
+      );
+      return jsonResponse(200, { ok: false, mode, text });
+    }
+
+    const choice = choices[0];
+    let rawText = "";
+
+    // 1) message 기반 (비스트리밍)
+    if (choice.message) {
+      rawText = extractContentFromMessage(choice.message);
+    }
+
+    // 2) delta 기반 (스트리밍 조각이지만 비스트리밍에서도 있을 수 있음)
+    if (!rawText && choice.delta) {
+      rawText = extractContentFromMessage(choice.delta);
+    }
+
+    // 3) text 필드 (일부 모델)
+    if (!rawText && typeof choice.text === "string") {
+      rawText = choice.text;
+    }
+
+    // 4) content 필드만 문자열인 경우
+    if (!rawText && typeof choice.content === "string") {
+      rawText = choice.content;
+    }
+
+    // 5) 그래도 아무것도 없으면 진짜 포맷 문제 → 에러 메시지로 되돌림
+    if (!rawText || !rawText.toString().trim()) {
+      const text = makeErrorText(
+        mode,
+        "OpenRouter 응답에서 완성된 텍스트를 찾지 못했습니다. 응답 일부: " +
+          JSON.stringify(choice).slice(0, 400)
+      );
+      return jsonResponse(200, { ok: false, mode, text });
+    }
+
+    return jsonResponse(200, { ok: true, mode, text: rawText.toString() });
   } catch (e) {
     const isAbort = e && e.name === "AbortError";
     const msg = isAbort
