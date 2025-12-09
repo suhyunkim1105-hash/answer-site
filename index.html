@@ -258,7 +258,8 @@
     const avgBright = sumBright / len;
     const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    const blocked = avgBright < 25; // 아주 어두우면 가려진 것으로 간주
+    // 너무 어두운 경우만 "가려짐"으로 간주 (임계값 완화)
+    const blocked = avgBright < 15;
 
     const now = Date.now();
     let stable = false;
@@ -282,7 +283,7 @@
     function loop() {
       const now = Date.now();
 
-      const { blocked, stable } = analyzeFrame();
+      const { blocked } = analyzeFrame();
 
       if (blocked !== lastBlocked) {
         lastBlocked = blocked;
@@ -296,8 +297,8 @@
           : `${base} · 카메라 상태: 정상`;
       }
 
-      // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
-      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
+      // ✅ 8초마다 자동 OCR: 화면이 안 가려져 있고, 현재 OCR 중이 아닐 때
+      if (!blocked && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce(false);
       }
@@ -424,7 +425,6 @@
               `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         },
-        // 한 덩어리의 영어 텍스트 블록이라는 가정 (PSM 6) – 적용 안 되더라도 무해
         tessedit_pageseg_mode: 6
       });
 
