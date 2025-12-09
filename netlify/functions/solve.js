@@ -18,9 +18,7 @@ function jsonResponse(statusCode, bodyObj) {
 }
 
 function makeErrorText(mode, message) {
-  const msg =
-    message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
-
+  const msg = message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
   if (mode === "writing") {
     return `[ESSAY]
 (작성 불가: 서버 오류로 인해 모델 답안을 생성하지 못했습니다.)
@@ -39,61 +37,6 @@ ${msg}`;
   return `[ANSWER] ?
 [P] 0.00
 [WHY] ${msg}`;
-}
-
-// OpenRouter 응답에서 실제 assistant 텍스트 추출
-function extractAssistantText(data) {
-  if (
-    !data ||
-    !data.choices ||
-    !Array.isArray(data.choices) ||
-    data.choices.length === 0
-  ) {
-    return "";
-  }
-
-  const choice = data.choices[0];
-
-  // 일반 non-stream 케이스: message.content
-  if (choice.message) {
-    const msg = choice.message;
-    if (typeof msg.content === "string") {
-      return msg.content;
-    }
-    if (Array.isArray(msg.content)) {
-      // 멀티모달 스타일: [{type:"text", text:"..."}, ...]
-      return msg.content
-        .map((part) => {
-          if (typeof part === "string") return part;
-          if (part && part.type === "text" && typeof part.text === "string") {
-            return part.text;
-          }
-          return "";
-        })
-        .join("")
-        .trim();
-    }
-  }
-
-  // 혹시 delta 형식이 들어온 경우 방어
-  if (choice.delta) {
-    const delta = choice.delta;
-    if (typeof delta.content === "string") return delta.content;
-    if (Array.isArray(delta.content)) {
-      return delta.content
-        .map((part) => {
-          if (typeof part === "string") return part;
-          if (part && part.type === "text" && typeof part.text === "string") {
-            return part.text;
-          }
-          return "";
-        })
-        .join("")
-        .trim();
-    }
-  }
-
-  return "";
 }
 
 function buildPrompts(mode, ocrText, audioText) {
@@ -203,44 +146,25 @@ You will receive:
 - AUDIO_TEXT: transcript of the audio (for listening questions). It may be empty.
 
 Tasks:
-1. Understand what the user is asking: reading question, listening question, summary, sentence insertion, order/sequence, table, negative factual, etc.
+1. Understand what the user is asking: reading question, listening question, summary, sentence insertion, etc.
 2. Find the single best answer choice (or choices) for the current question.
 
-Answer choice formats you MUST handle:
-
-1) Normal labeled options:
-   - If choices are labeled (1-4, 1-5, A-D, etc.), choose from those labels.
-
-2) Unlabeled bullets (e.g. lines starting with "○", "●", "•", "-" or no label at all):
-   - Treat each bullet line as ONE option in order.
-   - In that case, assign labels "1", "2", "3", ... in top-to-bottom order.
-   - Output the label of the correct option using these numbers.
-   - For multiple answers, output "2, 4" style (comma + space).
-
-3) Order / sequence questions (put steps/events in correct order):
-   - Map each step/statement to a label (either the existing label, or numbers 1,2,3,... if there are only bullets).
-   - Output the correct order of labels as a single line, like:
-     [ANSWER] 3-1-4-2
-   - Use hyphens "-" between labels, no spaces.
-
-4) "Select TWO answers" / "TWO answers are correct":
-   - Return BOTH labels separated by a comma, e.g. "B, D" or "2, 4".
-
-5) Summary / drag / table questions:
-   - Convert your reasoning into a single choice label (or labels) that match the options you infer from the OCR text.
-   - If the UI uses checkboxes or circles without labels, again assign numbers 1, 2, 3, ... in visual order.
-
-Sentence insertion questions:
-- TOEFL READING includes sentence insertion questions, where small squares (▢, □, ■, etc.) show possible locations.
-- Choose the option that indicates the correct position. Do NOT rewrite the whole paragraph.
+Important:
+- Focus ONLY on the CURRENT question near the end of the OCR_TEXT.
+- If there are answer choices like 1-4, 1-5, A-D, etc, choose from them.
+- If the options do NOT show labels (only empty circles ●/○, bullets, or numbers in front of the sentences), infer an implicit label such as "1, 2, 3, 4" from top to bottom and answer using that label.
+- For "Select TWO answers" type, return BOTH labels separated by a comma, e.g. "B, D" or "2, 4".
+- For ordering / sequence questions (e.g., "put the events in the correct order"), compress your final answer into a short sequence like "3-1-4-2" or "B-D-A-C".
+- For summary / drag / table questions, still convert your reasoning into a single choice label or a short sequence that clearly matches the options.
+- TOEFL READING also includes sentence insertion questions, where small squares (▢, □, ■, etc.) show possible locations. For those, choose the option that indicates the correct position. Do NOT rewrite the whole paragraph.
 
 Uncertainty:
 - If the OCR_TEXT is badly damaged and you are less than 0.1 confident in any answer, output "?" as the answer and explain why.
 
 Output format (exactly):
 
-[ANSWER] <label, labels, or "?" only>
-[P] <probability 0.00-1.00 as a decimal number, your confidence that the answer or sequence is correct>
+[ANSWER] <label, sequence, or "?" only>
+[P] <probability 0.00-1.00 as a decimal number, your confidence that the answer is correct>
 [WHY]
 Short Korean explanation (2-5 bullet points) of:
 - why this answer is most likely correct
@@ -258,7 +182,7 @@ ${cleanOCR || "(none)"}
 AUDIO_TEXT:
 ${cleanAUDIO || "(none)"}
 
-Use OCR_TEXT and AUDIO_TEXT to infer the current TOEFL question and then produce the answer label(s), probability, and Korean explanation.
+Use OCR_TEXT and AUDIO_TEXT to infer the current TOEFL question and then produce the answer, probability, and Korean explanation.
 `.trim();
 
     maxTokens = 512;
@@ -301,20 +225,15 @@ exports.handler = async (event, context) => {
   }
 
   const modeRaw = (body.mode || "reading").toString().toLowerCase();
-  const mode = ["reading", "listening", "writing", "speaking"].includes(
-    modeRaw
-  )
+  const mode = ["reading", "listening", "writing", "speaking"].includes(modeRaw)
     ? modeRaw
     : "reading";
 
   const ocrText = (body.ocrText || "").toString();
   const audioText = (body.audioText || "").toString();
 
-  const { system, user, maxTokens, temperature } = buildPrompts(
-    mode,
-    ocrText,
-    audioText
-  );
+  const { system, user, maxTokens, temperature } =
+    buildPrompts(mode, ocrText, audioText);
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -326,7 +245,8 @@ exports.handler = async (event, context) => {
   }
 
   const model =
-    process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini"; // env에서 교체
+    process.env.OPENROUTER_MODEL ||
+    "openai/gpt-4o-mini"; // gpt-5로 바꾸고 싶으면 env에서 교체
 
   const baseUrl =
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
@@ -352,8 +272,7 @@ exports.handler = async (event, context) => {
         "Content-Type": "application/json",
         Authorization: "Bearer " + apiKey,
         "HTTP-Referer":
-          process.env.OPENROUTER_SITE_URL ||
-          "https://answer-site.netlify.app",
+          process.env.OPENROUTER_SITE_URL || "https://answer-site.netlify.app",
         "X-Title": process.env.OPENROUTER_TITLE || "answer-site-toefl"
       },
       body: JSON.stringify(payload),
@@ -363,7 +282,6 @@ exports.handler = async (event, context) => {
     const rawBody = await res.text();
     const contentType = res.headers.get("content-type") || "";
 
-    // HTTP 에러 or HTML 에러 페이지
     if (!res.ok || looksLikeHtmlResponse(contentType, rawBody)) {
       const msg = looksLikeHtmlResponse(contentType, rawBody)
         ? "OpenRouter 쪽에서 HTML 에러 페이지(예: Inactivity Timeout)를 돌려줬습니다. 같은 문제를 잠시 후 다시 시도해 주세요."
@@ -383,31 +301,46 @@ exports.handler = async (event, context) => {
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    // OpenRouter가 error 필드를 돌려준 경우 (모델 이름 오류, 크레딧 부족 등)
-    if (data.error) {
-      const errMsg =
-        (data.error && data.error.message) ||
-        JSON.stringify(data.error, null, 2);
-      const text = makeErrorText(
-        mode,
-        "OpenRouter 오류: " + errMsg
-      );
-      return jsonResponse(200, {
-        ok: false,
-        mode,
-        text,
-        openrouterError: data.error
-      });
-    }
+    // message.content가 string일 수도 있고, 배열일 수도 있는 최신 포맷까지 처리
+    let rawText = "";
 
-    const rawText = extractAssistantText(data);
+    if (data && Array.isArray(data.choices) && data.choices[0]) {
+      const choice = data.choices[0];
+      const msg = choice.message || choice.delta || null;
+
+      if (msg && typeof msg.content === "string") {
+        rawText = msg.content;
+      } else if (msg && Array.isArray(msg.content)) {
+        const parts = [];
+        for (const part of msg.content) {
+          if (!part) continue;
+
+          if (typeof part === "string") {
+            parts.push(part);
+            continue;
+          }
+
+          if (part.text) {
+            if (typeof part.text === "string") {
+              parts.push(part.text);
+              continue;
+            }
+            if (part.text && typeof part.text.value === "string") {
+              parts.push(part.text.value);
+              continue;
+            }
+          }
+        }
+        rawText = parts.join("\n").trim();
+      }
+    }
 
     if (!rawText) {
       const text = makeErrorText(
         mode,
-        "OpenRouter 응답에서 유효한 message.content를 찾지 못했습니다."
+        "OpenRouter 응답에서 message.content를 찾지 못했습니다."
       );
-      return jsonResponse(200, { ok: false, mode, text, raw: data });
+      return jsonResponse(200, { ok: false, mode, text });
     }
 
     return jsonResponse(200, { ok: true, mode, text: rawText });
