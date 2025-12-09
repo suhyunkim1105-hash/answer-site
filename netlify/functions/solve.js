@@ -18,7 +18,9 @@ function jsonResponse(statusCode, bodyObj) {
 }
 
 function makeErrorText(mode, message) {
-  const msg = message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
+  const msg =
+    message || "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
+
   if (mode === "writing") {
     return `[ESSAY]
 (작성 불가: 서버 오류로 인해 모델 답안을 생성하지 못했습니다.)
@@ -37,6 +39,61 @@ ${msg}`;
   return `[ANSWER] ?
 [P] 0.00
 [WHY] ${msg}`;
+}
+
+// OpenRouter 응답에서 실제 assistant 텍스트 추출
+function extractAssistantText(data) {
+  if (
+    !data ||
+    !data.choices ||
+    !Array.isArray(data.choices) ||
+    data.choices.length === 0
+  ) {
+    return "";
+  }
+
+  const choice = data.choices[0];
+
+  // 보통 케이스: non-stream -> message.content
+  if (choice.message) {
+    const msg = choice.message;
+    if (typeof msg.content === "string") {
+      return msg.content;
+    }
+    if (Array.isArray(msg.content)) {
+      // 멀티모달 스타일: [{type:"text", text:"..."}, ...]
+      return msg.content
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (part && part.type === "text" && typeof part.text === "string") {
+            return part.text;
+          }
+          return "";
+        })
+        .join("")
+        .trim();
+    }
+  }
+
+  // 혹시 스트리밍/델타 형식이 섞여 들어온 경우 방어
+  if (choice.delta) {
+    const delta = choice.delta;
+    if (typeof delta.content === "string") return delta.content;
+    if (Array.isArray(delta.content)) {
+      return delta.content
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (part && part.type === "text" && typeof part.text === "string") {
+            return part.text;
+          }
+          return "";
+        })
+        .join("")
+        .trim();
+    }
+  }
+
+  return "";
 }
 
 function buildPrompts(mode, ocrText, audioText) {
@@ -223,15 +280,20 @@ exports.handler = async (event, context) => {
   }
 
   const modeRaw = (body.mode || "reading").toString().toLowerCase();
-  const mode = ["reading", "listening", "writing", "speaking"].includes(modeRaw)
+  const mode = ["reading", "listening", "writing", "speaking"].includes(
+    modeRaw
+  )
     ? modeRaw
     : "reading";
 
   const ocrText = (body.ocrText || "").toString();
   const audioText = (body.audioText || "").toString();
 
-  const { system, user, maxTokens, temperature } =
-    buildPrompts(mode, ocrText, audioText);
+  const { system, user, maxTokens, temperature } = buildPrompts(
+    mode,
+    ocrText,
+    audioText
+  );
 
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -243,8 +305,7 @@ exports.handler = async (event, context) => {
   }
 
   const model =
-    process.env.OPENROUTER_MODEL ||
-    "openai/gpt-4o-mini"; // gpt-5로 바꾸고 싶으면 env에서 교체
+    process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini"; // env에서 교체
 
   const baseUrl =
     process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
@@ -270,7 +331,8 @@ exports.handler = async (event, context) => {
         "Content-Type": "application/json",
         Authorization: "Bearer " + apiKey,
         "HTTP-Referer":
-          process.env.OPENROUTER_SITE_URL || "https://answer-site.netlify.app",
+          process.env.OPENROUTER_SITE_URL ||
+          "https://answer-site.netlify.app",
         "X-Title": process.env.OPENROUTER_TITLE || "answer-site-toefl"
       },
       body: JSON.stringify(payload),
@@ -280,6 +342,7 @@ exports.handler = async (event, context) => {
     const rawBody = await res.text();
     const contentType = res.headers.get("content-type") || "";
 
+    // HTTP 에러 or HTML 에러 페이지
     if (!res.ok || looksLikeHtmlResponse(contentType, rawBody)) {
       const msg = looksLikeHtmlResponse(contentType, rawBody)
         ? "OpenRouter 쪽에서 HTML 에러 페이지(예: Inactivity Timeout)를 돌려줬습니다. 같은 문제를 잠시 후 다시 시도해 주세요."
@@ -299,21 +362,31 @@ exports.handler = async (event, context) => {
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    const rawText =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message &&
-      data.choices[0].message.content
-        ? data.choices[0].message.content
-        : "";
+    // OpenRouter가 error 필드를 돌려준 경우 (모델 이름 오류, 크레딧 부족 등)
+    if (data.error) {
+      const errMsg =
+        (data.error && data.error.message) ||
+        JSON.stringify(data.error, null, 2);
+      const text = makeErrorText(
+        mode,
+        "OpenRouter 오류: " + errMsg
+      );
+      return jsonResponse(200, {
+        ok: false,
+        mode,
+        text,
+        openrouterError: data.error
+      });
+    }
+
+    const rawText = extractAssistantText(data);
 
     if (!rawText) {
       const text = makeErrorText(
         mode,
-        "OpenRouter 응답에서 message.content를 찾지 못했습니다."
+        "OpenRouter 응답에서 유효한 message.content를 찾지 못했습니다."
       );
-      return jsonResponse(200, { ok: false, mode, text });
+      return jsonResponse(200, { ok: false, mode, text, raw: data });
     }
 
     return jsonResponse(200, { ok: true, mode, text: rawText });
@@ -329,4 +402,3 @@ exports.handler = async (event, context) => {
     clearTimeout(timeout);
   }
 };
-
