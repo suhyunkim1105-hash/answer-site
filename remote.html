@@ -461,6 +461,20 @@
     debugPanel.classList.toggle("hidden");
   });
 
+  // --------------- 자동 세션 초기화 (문제 한 번 푼 뒤) ---------------
+  function autoResetSessionAfterSolve(mode) {
+    // 다음 문제를 위해 지문/음성은 항상 초기화
+    questionAccumText = "";
+    sttText = "";
+
+    // Listening / Speaking 에서만 STT 정지
+    if (mode === "listening" || mode === "speaking") {
+      stopSTT();
+    }
+
+    updateDebugPanel();
+  }
+
   // --------------- AI 호출 ---------------
   function showErrorAnswer(mode, message) {
     if (mode === "writing") {
@@ -504,11 +518,6 @@
       return;
     }
 
-    // 스피킹/리스닝은 문제 풀 때 STT 정지
-    if (mode === "speaking" || mode === "listening") {
-      stopSTT();
-    }
-
     solving = true;
     aiStatusLine.textContent = "AI 풀이 중...";
 
@@ -520,6 +529,10 @@
         questionAccum: questionAccumText.trim(),
         source: trigger || "manual"
       };
+
+      // 현재 문제 데이터는 payload에 담았으니,
+      // 다음 문제를 위해 세션은 자동 초기화
+      autoResetSessionAfterSolve(mode);
 
       const resp = await fetch("/.netlify/functions/solve", {
         method: "POST",
