@@ -143,7 +143,7 @@
         const match = statusLine.textContent.match(/\(.*?\)/);
         const resInfo = match ? ` ${match[0]} ` : " ";
         statusLine.textContent =
-          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+          `카메라 ON${resInfo}– 모드: ${currentMode} (약 8초마다 자동 인식)`;
       }
     }
   });
@@ -162,8 +162,16 @@
   let prevThumb = null;
   let lastStableTime = 0;
 
-  // 고해상도 스틸 프레임용 ImageCapture (iOS에서는 대부분 미지원, 다른 기기 fallback용)
+  // 고해상도 스틸 프레임용 ImageCapture
   let imageCapture = null;
+
+  function getCropScale() {
+    // 리딩에서는 화면 거의 전체(95%) 사용, 나머지는 90%
+    if (currentMode === "reading") {
+      return 0.95;
+    }
+    return 0.9;
+  }
 
   zoomRange.addEventListener("input", () => {
     const scale = parseFloat(zoomRange.value);
@@ -176,15 +184,19 @@
     doOCROnce(true);
   });
 
-  // ---------- 카메라 시작 (iPhone 14 기준 튜닝, 다른 기기에서도 동작) ----------
+  // ---------- 카메라 시작 (아이폰 14 기준 튜닝) ----------
   async function startCamera() {
     try {
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1920, max: 1920 },
-          height: { ideal: 1080, max: 1080 },
-          frameRate: { ideal: 30, max: 30 }
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+          advanced: [
+            { width: 1920, height: 1080 },
+            { width: 1280, height: 720 }
+          ]
         },
         audio: false
       };
@@ -209,9 +221,9 @@
           s.width && s.height ? ` (${s.width}x${s.height}) ` : " ";
 
         statusLine.textContent =
-          `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
+          `카메라 ON${resInfo}– 모드: ${currentMode} (약 8초마다 자동 인식)`;
 
-        // 고해상도 스틸 캡처 준비 (iOS는 보통 미지원, 데스크탑/안드에서만 동작)
+        // 고해상도 스틸 캡처 준비
         if ("ImageCapture" in window) {
           try {
             imageCapture = new ImageCapture(track);
@@ -258,15 +270,16 @@
     const avgBright = sumBright / len;
     const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    // 너무 어두운 경우만 "가려짐"으로 간주 (임계값 완화)
-    const blocked = avgBright < 15;
+    // 아주 어두울 때만 "가려짐"으로 처리 (임계값 낮춤)
+    const blocked = avgBright < 10;
 
     const now = Date.now();
     let stable = false;
-    if (diffAvg < 8) {
+    // 움직임 허용폭/시간 완화 → 자동 OCR 더 잘 돌게
+    if (diffAvg < 15) {
       if (!lastStableTime) {
         lastStableTime = now;
-      } else if (now - lastStableTime > 1000) {
+      } else if (now - lastStableTime > 700) {
         stable = true;
       }
     } else {
@@ -283,7 +296,7 @@
     function loop() {
       const now = Date.now();
 
-      const { blocked } = analyzeFrame();
+      const { blocked, stable } = analyzeFrame();
 
       if (blocked !== lastBlocked) {
         lastBlocked = blocked;
@@ -297,8 +310,8 @@
           : `${base} · 카메라 상태: 정상`;
       }
 
-      // ✅ 8초마다 자동 OCR: 화면이 안 가려져 있고, 현재 OCR 중이 아닐 때
-      if (!blocked && !ocrRunning && now - lastOcrTime > 8000) {
+      // 약 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
+      if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce(false);
       }
@@ -337,12 +350,12 @@
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 90% 크롭 + 가로 최대 1600px (imageBitmap/bitmap용)
+  // 중앙부 크롭 + 가로 최대 1600px
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
 
-    const scaleCrop = 0.9;
+    const scaleCrop = getCropScale();
     const cropW = Math.floor(fullW * scaleCrop);
     const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
@@ -355,10 +368,6 @@
 
     canvas.width = outW;
     canvas.height = outH;
-
-    ctx.imageSmoothingEnabled = false;
-    ctx.imageSmoothingQuality = "high";
-
     ctx.drawImage(
       source,
       cropX, cropY, cropW, cropH,
@@ -366,7 +375,7 @@
     );
   }
 
-  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백)
+  // 비디오 프레임에서 중앙부 캡처 (iOS 등 폴백)
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -378,7 +387,7 @@
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
 
-    const scaleCrop = 0.9;
+    const scaleCrop = getCropScale();
     const cropW = Math.floor(fullW * scaleCrop);
     const cropH = Math.floor(fullH * scaleCrop);
     const cropX = Math.floor((fullW - cropW) / 2);
@@ -391,10 +400,6 @@
 
     canvas.width = outW;
     canvas.height = outH;
-
-    ctx.imageSmoothingEnabled = false;
-    ctx.imageSmoothingQuality = "high";
-
     ctx.drawImage(
       video,
       cropX, cropY, cropW, cropH,
@@ -417,6 +422,8 @@
 
       await captureToCanvas(canvas, ctx);
 
+      const psm = currentMode === "reading" ? 4 : 6;
+
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
         logger: m => {
           if (m.status === "recognizing text") {
@@ -425,7 +432,7 @@
               `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         },
-        tessedit_pageseg_mode: 6
+        tessedit_pageseg_mode: psm
       });
 
       const rawText = result.data.text || "";
@@ -434,7 +441,7 @@
 
       const effectiveLen = text.replace(/\s/g, "").length;
 
-      // 🔵 품질과 상관없이 OCR 결과는 항상 Firebase에 올림 (remote 디버그용)
+      // OCR 결과는 신뢰도가 낮아도 항상 Firebase에 올림 (remote에서 디버그 보기용)
       await db.ref("p2p/state").update({
         ocrText: text,
         ocrConfidence: conf,
@@ -442,7 +449,6 @@
         ocrUpdatedAt: Date.now()
       });
 
-      // 텍스트가 너무 짧으면 AI 호출은 안 함
       if (!text || effectiveLen < 10) {
         statusLine.textContent =
           `OCR 완료 (텍스트 너무 짧음: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
@@ -450,10 +456,10 @@
         return;
       }
 
-      // 신뢰도 10% 미만이면 AI 호출은 안 함
+      // 신뢰도 10% 미만이면 AI 호출만 생략 (텍스트는 이미 위에 올려둠)
       if (conf < 10) {
         statusLine.textContent =
-          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 낮아서 풀이 트리거는 생략함)`;
+          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 낮아서 AI 호출 생략)`;
         ocrRunning = false;
         return;
       }
@@ -461,7 +467,6 @@
       statusLine.textContent =
         `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
 
-      // 🔵 충분히 길고 conf도 10% 이상일 때만 solve 트리거
       const snippet = text.slice(0, 400);
       if (snippet !== lastSolvedSnippet) {
         lastSolvedSnippet = snippet;
