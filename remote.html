@@ -372,7 +372,7 @@
 
     recognition = new SR();
     recognition.lang = "en-US";
-    recognition.interimResults = true;   // 중간 결과도 받기
+    recognition.interimResults = true;   // 중간 결과 받기
     recognition.continuous = true;
 
     recognition.onresult = (event) => {
@@ -390,7 +390,6 @@
       if (finalChunk) {
         sttText += (sttText ? " " : "") + finalChunk.trim();
       }
-      // 디버그에는 최종+중간을 같이 보여줌
       const combined =
         (sttText || "") +
         (interimChunk ? " " + interimChunk.trim() : "");
@@ -409,7 +408,6 @@
       sttActive = false;
       updateSttStatus();
       if (sttShouldRestart) {
-        // 일부 브라우저에서 continuous=true 무시 → 자동 재시작
         try {
           recognition.start();
           sttActive = true;
@@ -544,8 +542,11 @@
       return;
     }
 
-    // 스피킹/리스닝은 문제 풀 때 STT 정지 (writing은 계속 허용)
-    if (mode === "speaking" || mode === "listening") {
+    // 🔴 STT 중지 규칙:
+    // - Speaking/Listening에서
+    // - 네가 직접 '이 질문 풀기'를 눌러서 수동 풀이일 때만(stopSTT).
+    // - 카메라 자동 풀이(auto) 때는 STT 건드리지 않음.
+    if (trigger === "manual" && (mode === "speaking" || mode === "listening")) {
       stopSTT();
     }
 
