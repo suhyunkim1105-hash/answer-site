@@ -45,9 +45,10 @@ ${msg}`;
 }
 
 /**
- * 학원 템플릿을 반영한 프롬프트 생성
- * - speaking: Part2/3/4 템플릿 문장 구조 사용
- * - writing: 통합형(리딩 vs 렉쳐) + 독립형(토론형) 템플릿 사용
+ * 모드별 프롬프트 생성
+ * - reading/listening: 객관식 정답 + 확률 + 한국어 해설
+ * - writing: 학원 템플릿 구조의 에세이 + 한국어 피드백
+ * - speaking: 학원 템플릿 구조의 짧은 스크립트 + 발음 도움 + 한국어 요약
  */
 function buildPrompts(mode, ocrText, audioText) {
   const cleanOCR = (ocrText || "").trim();
@@ -168,7 +169,7 @@ You will receive:
 There are 3 main TOEFL Speaking task types you must support:
 
 1) Campus reading + conversation (Task 2 style, policy/problem)
-   - Use this kind of structure:
+   - Use this structure:
 
      "In the reading passage, it says that ~~~."
      "On top of that, the man(woman) in the conversation agrees with it
@@ -180,7 +181,7 @@ There are 3 main TOEFL Speaking task types you must support:
      "That's it. Thank you for listening."
 
 2) Academic reading + lecture (Task 3 style)
-   - Use this kind of structure:
+   - Use this structure:
 
      "According to the reading passage, 000 is ~~~."
      "On top of that, in the 000 class the professor explains it
@@ -188,7 +189,7 @@ There are 3 main TOEFL Speaking task types you must support:
      Then clearly explain the examples and how they support the idea.
 
 3) Lecture only (Task 4 style)
-   - Use this kind of structure:
+   - Use this structure:
 
      "In the 000 class, the professor explains ~~~."
      "The first one is A. To be specific, ~~~. For example, ~~~."
@@ -248,24 +249,30 @@ You will receive:
 - OCR_TEXT: text recognized from the screen (passages, questions, answer choices, etc).
 - AUDIO_TEXT: transcript of the audio (for listening questions). It may be empty.
 
+Your job is NOT to write essays or summaries.
+Your job is ONLY to select the best answer choice and briefly explain WHY in Korean.
+
 Tasks:
 1. Understand what the user is asking: reading question, listening question, summary, sentence insertion, ordering, etc.
 2. Find the single best answer choice (or choices) for the current question.
 
 Important:
 - Focus ONLY on the CURRENT question near the end of the OCR_TEXT.
-- If there are answer choices like 1-4, 1-5, A-D, ○, ●, (A), (B), etc., choose from them.
-- The choices may be written:
-    "①, ②, ③, ④", "A.", "B.", "C.", "-", "•" or small circles without letters.
-  In that case, infer a clear label such as "1", "2", "3", "4" or "A", "B", "C", "D"
-  and output that label.
+- If there are answer choices like 1-4, 1-5, A-D, (A)-(D), ①-④, small circles (•, ○, ●), or hyphen/bullet lists,
+  treat each option as a numbered choice and infer a clear label such as "1", "2", "3", "4" or "A", "B", "C", "D".
 - For "select TWO answers" type, return BOTH labels separated by a comma, e.g. "B, D".
 - For summary / drag / ordering / table questions, still convert your reasoning
-  into a single choice label that matches the options as much as possible.
+  into a single choice label that best matches the options.
 - TOEFL READING also includes sentence insertion questions,
   where small squares (▢, □, ■, etc.) show possible locations.
   For those, choose the option that indicates the correct position.
   Do NOT rewrite the whole paragraph.
+
+Strict output & length rules:
+- You MUST NOT write a full essay, translation, or long summary.
+- You MUST NOT use the writing/speaking formats like [ESSAY], [FEEDBACK], [WORDS], [KOREAN].
+- Total output length MUST stay within about 220 English words (including Korean explanation).
+- The [WHY] section must be short bullet-style Korean notes, NOT a long essay.
 
 Uncertainty:
 - If the OCR_TEXT is badly damaged and you are less than 0.1 confident in any answer,
@@ -293,7 +300,10 @@ AUDIO_TEXT:
 ${cleanAUDIO || "(none)"}
 
 Use OCR_TEXT and AUDIO_TEXT to infer the current TOEFL question and then produce
-the answer label, probability, and Korean explanation.
+ONLY:
+- the answer label (NOT an essay),
+- the probability,
+- and a short Korean explanation.
 `.trim();
 
     maxTokens = 512;
@@ -374,7 +384,7 @@ exports.handler = async (event, context) => {
   };
 
   const controller = new AbortController();
-  // 라이팅은 최대 4분, 스피킹은 90초, 나머지는 30초 안에 끝나도록
+  // 라이팅은 최대 4분, 스피킹은 90초, 나머지는 30초
   const timeoutMs =
     mode === "writing"
       ? 240000
@@ -420,18 +430,13 @@ exports.handler = async (event, context) => {
       return jsonResponse(200, { ok: false, mode, text });
     }
 
-    // message.content가 비어 있고 reasoning에만 내용이 있는 모델까지 커버
+    // message.content만 사용 (reasoning은 절대 사용 X)
     let rawText = "";
     if (data && Array.isArray(data.choices) && data.choices.length > 0) {
       const choice = data.choices[0];
 
-      if (choice && choice.message) {
-        if (typeof choice.message.content === "string") {
-          rawText = choice.message.content.trim();
-        }
-        if (!rawText && typeof choice.message.reasoning === "string") {
-          rawText = choice.message.reasoning.trim();
-        }
+      if (choice && choice.message && typeof choice.message.content === "string") {
+        rawText = choice.message.content.trim();
       }
 
       if (!rawText && typeof choice.text === "string") {
