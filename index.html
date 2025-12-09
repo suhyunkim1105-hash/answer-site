@@ -162,7 +162,7 @@
   let prevThumb = null;
   let lastStableTime = 0;
 
-  // 고해상도 스틸 프레임용 ImageCapture (iOS에서는 대부분 미사용, 다른 기기 fallback용)
+  // 고해상도 스틸 프레임용 ImageCapture (iOS에서는 대부분 미지원, 다른 기기 fallback용)
   let imageCapture = null;
 
   zoomRange.addEventListener("input", () => {
@@ -424,7 +424,7 @@
               `OCR 진행 중... ${Math.round((m.progress || 0) * 100)}%`;
           }
         },
-        // 한 덩어리의 영어 텍스트 블록이라는 가정 (PSM 6)
+        // 한 덩어리의 영어 텍스트 블록이라는 가정 (PSM 6) – 적용 안 되더라도 무해
         tessedit_pageseg_mode: 6
       });
 
@@ -433,24 +433,8 @@
       const conf = result.data.confidence || 0;
 
       const effectiveLen = text.replace(/\s/g, "").length;
-      if (!text || effectiveLen < 10) {
-        statusLine.textContent =
-          `OCR 완료 (텍스트 너무 짧아서 무시: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
-        ocrRunning = false;
-        return;
-      }
 
-      // 신뢰도 10% 미만이면 그냥 버림 (AI 호출 안 함)
-      if (conf < 10) {
-        statusLine.textContent =
-          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 너무 낮아서 무시함)`;
-        ocrRunning = false;
-        return;
-      }
-
-      statusLine.textContent =
-        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
-
+      // 🔵 품질과 상관없이 OCR 결과는 항상 Firebase에 올림 (remote 디버그용)
       await db.ref("p2p/state").update({
         ocrText: text,
         ocrConfidence: conf,
@@ -458,6 +442,26 @@
         ocrUpdatedAt: Date.now()
       });
 
+      // 텍스트가 너무 짧으면 AI 호출은 안 함
+      if (!text || effectiveLen < 10) {
+        statusLine.textContent =
+          `OCR 완료 (텍스트 너무 짧음: 길이=${effectiveLen}, conf=${conf.toFixed(1)}%)`;
+        ocrRunning = false;
+        return;
+      }
+
+      // 신뢰도 10% 미만이면 AI 호출은 안 함
+      if (conf < 10) {
+        statusLine.textContent =
+          `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 낮아서 풀이 트리거는 생략함)`;
+        ocrRunning = false;
+        return;
+      }
+
+      statusLine.textContent =
+        `OCR 완료 | 길이=${effectiveLen}, conf=${conf.toFixed(1)}% | 모드=${currentMode}`;
+
+      // 🔵 충분히 길고 conf도 10% 이상일 때만 solve 트리거
       const snippet = text.slice(0, 400);
       if (snippet !== lastSolvedSnippet) {
         lastSolvedSnippet = snippet;
