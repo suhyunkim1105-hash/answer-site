@@ -172,9 +172,23 @@
   function setCropFactor(v) {
     const num = Number(v);
     if (!Number.isFinite(num)) return;
+
+    // cropFactor = 캡처에 쓸 중앙 크롭 비율 (0.72~1.00)
     cropFactor = Math.min(CROP_MAX, Math.max(CROP_MIN, num));
-    if (zoomLabelEl) zoomLabelEl.textContent = cropFactor.toFixed(2);
+
+    // 라벨 표시
+    if (zoomLabelEl) {
+      zoomLabelEl.textContent = cropFactor.toFixed(2);
+    }
+
+    // 화면 미리보기(비디오) 확대/축소
+    if (video) {
+      video.style.transformOrigin = "center center";
+      const scale = 1 / cropFactor; // cropFactor 작을수록 화면을 더 확대해서 보여줌
+      video.style.transform = `scale(${scale})`;
+    }
   }
+
   if (zoomRangeEl) {
     setCropFactor(zoomRangeEl.value);
     zoomRangeEl.addEventListener("input", () => setCropFactor(zoomRangeEl.value));
@@ -209,6 +223,11 @@
   let lastStatusSpokenAt = 0;
   let audioUnlocked = false;
   let voicesReady = false;
+
+  // 거리 음성 힌트 상태
+  let lastDistHint = "ok";
+  const DIST_HINT_COOLDOWN_MS = 8000;
+  let lastDistHintAt = 0;
 
   // =========================
   // 3) iOS 음성 언락 + voice 로딩
@@ -645,6 +664,35 @@
       tooFar = (effLen < 400 && conf < 35);
       tooNear = (effLen >= 800 && conf < 35);
 
+      // 거리/가려짐 즉시 음성 힌트
+      const tNowHint = now();
+      let distState = "ok";
+      if (blocked) distState = "blocked";
+      else if (tooFar) distState = "far";
+      else if (tooNear) distState = "near";
+
+      if (
+        distState !== "ok" &&
+        distState !== lastDistHint &&
+        (tNowHint - lastDistHintAt) > DIST_HINT_COOLDOWN_MS
+      ) {
+        let msg;
+        if (distState === "far") {
+          msg = "지문이 너무 멀어 보입니다. 종이를 화면에 더 크게 채워주세요.";
+        } else if (distState === "near") {
+          msg = "지문이 너무 가까워 보입니다. 5에서 10센티미터 정도만 멀리 두고 다시 비춰주세요.";
+        } else {
+          msg = "카메라가 가려졌습니다. 렌즈를 가리지 않게 해주세요.";
+        }
+        speak(msg, false);
+        lastDistHint = distState;
+        lastDistHintAt = tNowHint;
+      }
+      if (distState === "ok") {
+        lastDistHint = "ok";
+      }
+
+      // 누적 업데이트(중복이면 교체, 아니면 append)
       const mergeInfo = updateAccumulation(cleaned, conf);
 
       const ready = isReadyToSolve();
@@ -763,4 +811,5 @@
 </script>
 </body>
 </html>
+
 
