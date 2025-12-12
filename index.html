@@ -2,404 +2,512 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>Auto OCR(누적) → Auto Solve (KOR)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>NONSUL Auto OCR + Auto Solve</title>
 
   <!-- Tesseract.js v5 -->
-  <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
     * { box-sizing: border-box; }
-    body { margin:0; padding:10px; background:#000; color:#fff; font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif; }
-    .wrap { max-width:980px; margin:0 auto; }
-    #videoBox { position:relative; width:100%; border:1px solid #333; border-radius:12px; overflow:hidden; background:#000; }
-    #video { width:100%; height:auto; display:block; transform-origin:center center; }
-    #overlay { position:absolute; inset:0; border:2px solid rgba(0,255,0,0.30); pointer-events:none; }
-    #topBar { margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    button { padding:10px 12px; border-radius:10px; border:1px solid #333; background:#151515; color:#fff; font-size:13px; cursor:pointer; }
-    button:active { transform:scale(0.98); }
-    #status { margin-top:10px; padding:10px; border:1px solid #333; border-radius:10px; background:#111; font-size:13px; line-height:1.4; white-space:pre-wrap; }
-    .grid { display:grid; grid-template-columns:1fr; gap:10px; margin-top:10px; }
-    .panel { border:1px solid #333; border-radius:10px; background:#0b0b0b; padding:10px; }
-    .panel h3 { margin:0 0 8px 0; font-size:14px; color:#cfcfcf; font-weight:600; }
-    textarea, pre {
-      width:100%;
-      border:1px solid #222;
-      border-radius:8px;
-      background:#000;
-      color:#fff;
-      font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
-      font-size:12px;
-      padding:10px;
-      margin:0;
+    body {
+      margin: 0;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 10px;
     }
-    textarea { height:240px; resize:vertical; }
-    pre { min-height:260px; white-space:pre-wrap; }
-    .hint { margin-top:6px; font-size:12px; color:#aaa; line-height:1.35; }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    #videoBox {
+      position: relative;
+      width: 100%;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(0,255,0,0.35);
+    }
+    #video {
+      width: 100%;
+      height: auto;
+      transform-origin: center center;
+      /* “0.8배율” 요청: 카메라 자체 0.8은 iOS에서 불가(1.0 미만 불가가 많음)라서
+         화면 표시를 0.8로 줄여 “덜 확대된 것처럼” 보이게 함 */
+      transform: scale(0.8);
+    }
+    .btnRow {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #444;
+      background: #111;
+      color: #fff;
+      font-size: 14px;
+    }
+    button:active { transform: scale(0.98); }
+    .panel {
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 12px;
+      background: #0b0b0b;
+      margin-top: 10px;
+      white-space: pre-wrap;
+      line-height: 1.35;
+      font-size: 14px;
+    }
+    .title {
+      font-weight: 700;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+    pre {
+      margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 360px;
+      overflow: auto;
+      padding: 10px;
+      border-radius: 10px;
+      background: #000;
+      border: 1px solid #222;
+    }
+    #answerBox pre { max-height: 520px; font-size: 13px; }
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div id="videoBox">
-      <video id="video" autoplay playsinline></video>
-      <div id="overlay"></div>
-    </div>
-
-    <div id="topBar">
-      <button id="btnSpeakTest">🔊 음성 테스트(한 번 탭)</button>
-      <button id="btnForceSolve">⚡ 지금까지로 강제 풀이</button>
-      <button id="btnReset">🔄 OCR 재시작(새로고침)</button>
-    </div>
-
-    <div id="status">초기화 중...</div>
-
-    <div class="grid">
-      <div class="panel">
-        <h3>실시간 OCR(누적)</h3>
-        <textarea id="ocrPreview" readonly></textarea>
-        <div class="hint">
-          숫자/특수문자는 화면 표시에서 제거됨(방해 최소화).<br/>
-          iOS는 답안 TTS가 자동으로 안 나올 수 있으니 “음성 테스트”를 한 번 눌러서 언락해줘야 함.
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3>답안</h3>
-        <pre id="answerBox"></pre>
-      </div>
-    </div>
+<div class="wrap">
+  <div id="videoBox">
+    <video id="video" autoplay playsinline muted></video>
   </div>
+
+  <div class="btnRow">
+    <button id="btnTTS">🔊 음성 테스트(한 번 탭)</button>
+    <button id="btnForceSolve">⚡ 지금까지로 강제 풀이</button>
+    <button id="btnRestart">🔁 OCR 재시작(새로고침)</button>
+  </div>
+
+  <div class="panel" id="statusPanel">로딩 중...</div>
+
+  <div class="panel">
+    <div class="title">실시간 OCR(누적)</div>
+    <pre id="ocrPreview"></pre>
+  </div>
+
+  <div class="panel" id="answerBox">
+    <div class="title">답안</div>
+    <pre id="answerOut"></pre>
+  </div>
+</div>
 
 <script>
 (() => {
-  // =========================
+  // =============================
   // 설정
-  // =========================
-  const OCR_INTERVAL_MS = 6000;                 // 너무 짧으면 iOS에서 메모리/발열로 Aborted(-1) 확률↑
-  const OCR_LANG = "kor";
-
-  const TEXT_THRESHOLD_EFFECTIVE = 2400;        // 공백 제외 누적 길이 기준
-  const INSUFFICIENT_WARN_MS = 60 * 1000;       // 1분 지나면 “지문 부족” 안내
-  const MAX_WAIT_MS = 8 * 60 * 1000;            // 8분이면 “지문 부족 자동풀이”
-  const NO_NEW_SEGMENT_SOLVE_MS = 20000;        // 새 페이지(세그먼트) 변화가 20초 없으면 자동 풀이
-
+  // =============================
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  const CAP_MAX_W = 1280;                       // 1600보다 낮춰서 iOS 안정성↑
-  const PREVIEW_SCALE = 0.8;                    // 화면 프리뷰 배율(사용자 요청)
-  const REQUESTED_CAMERA_ZOOM = 0.8;            // 지원되는 기기면 카메라 줌 적용 시도
+  const OCR_INTERVAL_MS = 3000;              // 3초마다 OCR 시도
+  const INSUFFICIENT_WARN_MS = 60 * 1000;    // 1분: “지문 부족” 안내
+  const INSUFFICIENT_AUTO_SOLVE_MS = 8 * 60 * 1000; // 8분: 부족이어도 자동 풀이
+  const READY_LEN_TARGET = 2400;             // 공백제외 누적 길이 기준(충분하면 바로 풀이)
+  const MAX_OCR_PREVIEW_CHARS = 16000;       // 화면 표시용 최대 길이
+  const MAX_SEND_CHARS = 9000;               // solve로 보내는 최대 길이(타임아웃 방지)
 
-  const TTS_ENABLED = true;
-  const TTS_RATE = 1.05;
-  const TTS_PITCH = 1.0;
-  const TTS_STATUS_COOLDOWN_MS = 12000;
+  // OCR 엔진(중요): kor 언어데이터 경로 (기존에 여기 틀리면 “로딩 중” 무한)
+  const WORKER_PATH = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js";
+  const CORE_PATH   = "https://unpkg.com/tesseract.js-core@5.0.0";
+  const LANG_PATH   = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/kor@1.0.0/4.0.0/";
 
-  // ✅ OCR 엔진 무한 로딩 방지: 타임아웃/재시도
-  const WORKER_INIT_TIMEOUT_MS = 35000;
-  const WORKER_RETRY_MAX = 2;
-
-  // ✅ 한국어 traineddata 로딩 경로(가장 안정적인 CDN)
-  // 아래 경로에 kor.traineddata(.gz)가 있어야 함
-  const LANG_PATH = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/kor/4.0.0_best_int";
-
-  // =========================
+  // =============================
   // DOM
-  // =========================
+  // =============================
   const video = document.getElementById("video");
-  const statusEl = document.getElementById("status");
-  const ocrPreviewEl = document.getElementById("ocrPreview");
-  const answerBoxEl = document.getElementById("answerBox");
-  const btnSpeakTest = document.getElementById("btnSpeakTest");
+  const statusPanel = document.getElementById("statusPanel");
+  const ocrPreview = document.getElementById("ocrPreview");
+  const answerOut = document.getElementById("answerOut");
+
+  const btnTTS = document.getElementById("btnTTS");
   const btnForceSolve = document.getElementById("btnForceSolve");
-  const btnReset = document.getElementById("btnReset");
+  const btnRestart = document.getElementById("btnRestart");
 
-  // =========================
-  // 상태
-  // =========================
+  // =============================
+  // 상태 변수
+  // =============================
   let stream = null;
-  let track = null;
+  let worker = null;
+  let engineReady = false;
 
-  let ocrRunning = false;
+  let ocrBusy = false;
+  let ocrTickCount = 0;
+
   let lastOcrAt = 0;
 
-  const segments = [];
-  let lastNewSegmentAt = 0;
-
-  let cumulativeText = "";
-  let cumulativeEffLen = 0;
-  let cumulativeAvgConf = 0;
-
-  let blocked = false;
-  let tooNear = false;
-  let tooFar = false;
+  let accumulatedSegments = []; // {text, conf, gramsSig}
+  let avgConf = 0;
 
   let insufficientSince = null;
+  let insufficientWarned = false;
+  let solvedOnce = false;
 
-  let solved = false;
-  let solving = false;
+  let ttsUnlocked = false;
 
-  let lastStatusSpokenAt = 0;
-  let audioUnlocked = false;
+  // 카메라 상태(가려짐/거리 추정)
+  const TH_W = 96, TH_H = 54;
+  const thumbCanvas = document.createElement("canvas");
+  thumbCanvas.width = TH_W;
+  thumbCanvas.height = TH_H;
+  const thumbCtx = thumbCanvas.getContext("2d", { willReadFrequently: true });
 
-  let appliedZoomInfo = "알 수 없음";
-
-  let ocrFailCount = 0;
-
-  // 분석(가려짐/안정도)
-  const BW = 64, BH = 36;
-  const bCanvas = document.createElement("canvas");
-  bCanvas.width = BW; bCanvas.height = BH;
-  const bCtx = bCanvas.getContext("2d", { willReadFrequently: true });
   let prevThumb = null;
   let lastStableStart = 0;
 
-  // 캡처 캔버스(재사용)
-  const capCanvas = document.createElement("canvas");
-  const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
+  // =============================
+  // 유틸: 텍스트 정리(숫자/기호 제거 중심)
+  // =============================
+  function normalizeText(raw) {
+    const s = (raw || "")
+      .replace(/\r/g, "")
+      .replace(/[0-9]/g, "")                          // 숫자 제거
+      .replace(/[~`^_=+<>\\|]/g, " ")                 // 방해되는 기호 제거
+      .replace(/[■□◆◇●○▲△▼▽※★☆]/g, " ")
+      .replace(/[(){}\[\]]/g, " ")
+      .replace(/[“”"']/g, " ")
+      .replace(/[•·]/g, " ")
+      .replace(/[—–]/g, "-")
+      .replace(/[^\uAC00-\uD7A3\u3131-\u318E\u314F-\u3163\s\.\,\!\?\:\;\-\n]/g, " ") // 한글/기본문장부호만 남기기
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
 
-  // Tesseract worker
-  let worker = null;
-  let workerReady = false;
-
-  // =========================
-  // 유틸
-  // =========================
-  const now = () => Date.now();
-
-  function effectiveLenOf(text) {
-    return (text || "").replace(/\s/g, "").length;
+    // 줄 끝에 붙는 공백 정리
+    return s.split("\n").map(line => line.trim()).join("\n").trim();
   }
 
-  function normalizeForCompare(text) {
-    return (text || "").replace(/\s/g, "").replace(/[^\uAC00-\uD7A3]/g, "");
+  function effectiveLen(s) {
+    return (s || "").replace(/\s/g, "").length;
   }
 
-  function signatureOf(text) {
-    return normalizeForCompare(text).slice(0, 240);
+  // =============================
+  // 유틸: 유사도(세그먼트 교체용)
+  // =============================
+  function make3GramSet(s, limit = 1200) {
+    const t = (s || "").replace(/\s+/g, "");
+    const u = t.slice(0, limit);
+    const set = new Set();
+    for (let i = 0; i + 3 <= u.length; i++) {
+      set.add(u.slice(i, i + 3));
+    }
+    return set;
   }
 
-  function similarity(a, b) {
-    const A = a || "", B = b || "";
-    if (!A || !B) return 0;
-    const len = Math.max(A.length, B.length);
-    const min = Math.min(A.length, B.length);
-    let same = 0;
-    for (let i = 0; i < min; i++) if (A[i] === B[i]) same++;
-    return len ? (same / len) : 0;
+  function jaccard(aSet, bSet) {
+    if (!aSet || !bSet) return 0;
+    let inter = 0;
+    for (const x of aSet) if (bSet.has(x)) inter++;
+    const union = aSet.size + bSet.size - inter;
+    return union ? (inter / union) : 0;
   }
 
-  function setStatus(lines) {
-    statusEl.textContent = lines.join("\n");
-  }
+  function mergeSegment(newText, newConf) {
+    const grams = make3GramSet(newText);
+    let bestIdx = -1;
+    let bestSim = 0;
 
-  // =========================
-  // 텍스트 정리(숫자/기호 제거)
-  // =========================
-  function cleanOcrText(raw) {
-    let t = (raw || "").replace(/\r/g, "").replace(/\s+\n/g, "\n").trim();
-
-    // 한글(자모 포함) + 공백/개행만 남김
-    t = t.replace(/[^ \n\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/g, "");
-
-    t = t.replace(/[ \t]{2,}/g, " ");
-    t = t.replace(/\n{3,}/g, "\n\n");
-    return t.trim();
-  }
-
-  // =========================
-  // 비슷한 문장 교정(라인 병합)
-  // =========================
-  function mergeLinewise(oldText, newText, oldConf, newConf) {
-    const oldLines = (oldText || "").split("\n").map(s => s.trim());
-    const newLines = (newText || "").split("\n").map(s => s.trim());
-    const maxLen = Math.max(oldLines.length, newLines.length);
-
-    const out = [];
-    for (let i = 0; i < maxLen; i++) {
-      const a = oldLines[i] || "";
-      const b = newLines[i] || "";
-      if (!a && b) { out.push(b); continue; }
-      if (a && !b) { out.push(a); continue; }
-      if (!a && !b) continue;
-
-      const na = normalizeForCompare(a);
-      const nb = normalizeForCompare(b);
-      const sim = similarity(na, nb);
-
-      if (sim >= 0.58) {
-        const aEff = effectiveLenOf(a);
-        const bEff = effectiveLenOf(b);
-        const pickB =
-          (bEff > aEff + 6) ||
-          (Math.abs(bEff - aEff) <= 6 && (newConf > oldConf + 2));
-        out.push(pickB ? b : a);
-      } else {
-        out.push(a);
-        out.push(b);
+    for (let i = 0; i < accumulatedSegments.length; i++) {
+      const sim = jaccard(grams, accumulatedSegments[i].gramsSig);
+      if (sim > bestSim) {
+        bestSim = sim;
+        bestIdx = i;
       }
     }
-    return out.filter(x => (x || "").trim().length > 0).join("\n").trim();
-  }
 
-  // =========================
-  // TTS
-  // =========================
-  function unlockAudioOnce() {
-    if (audioUnlocked) return;
-    audioUnlocked = true;
-    speak("음성이 활성화되었습니다.", true);
-  }
+    // 비슷하면(겹치면) 더 좋은 걸로 “수정/대체”
+    if (bestIdx >= 0 && bestSim >= 0.62) {
+      const old = accumulatedSegments[bestIdx];
+      const oldLen = effectiveLen(old.text);
+      const newLen = effectiveLen(newText);
 
-  async function ensureVoicesReady(timeoutMs = 1800) {
-    if (!("speechSynthesis" in window)) return false;
-    const synth = window.speechSynthesis;
-    const start = now();
-    let voices = synth.getVoices();
-    if (voices && voices.length > 0) return true;
+      // 교체 기준: (1) 길이가 더 길거나 (2) 신뢰도가 더 높으면 교체
+      if (newLen > oldLen || newConf > old.conf + 3) {
+        accumulatedSegments[bestIdx] = { text: newText, conf: newConf, gramsSig: grams };
+      }
+      return;
+    }
 
-    return await new Promise((resolve) => {
-      let done = false;
-      const timer = setInterval(() => {
-        voices = synth.getVoices();
-        if (voices && voices.length > 0) {
-          if (!done) { done = true; clearInterval(timer); resolve(true); }
-        }
-        if (now() - start > timeoutMs) {
-          if (!done) { done = true; clearInterval(timer); resolve(false); }
-        }
-      }, 120);
+    // 충분히 다르면 새 페이지/세그먼트라고 보고 추가
+    accumulatedSegments.push({ text: newText, conf: newConf, gramsSig: grams });
 
-      synth.onvoiceschanged = () => {
-        voices = synth.getVoices();
-        if (voices && voices.length > 0) {
-          if (!done) { done = true; clearInterval(timer); resolve(true); }
-        }
-      };
-    });
-  }
-
-  function pickKoreanVoice() {
-    if (!("speechSynthesis" in window)) return null;
-    const voices = window.speechSynthesis.getVoices() || [];
-    const ko = voices.filter(v => (v.lang || "").toLowerCase().startsWith("ko"));
-    if (ko.length > 0) return ko[0];
-    return voices.length ? voices[0] : null;
-  }
-
-  async function speak(text, force = false) {
-    if (!TTS_ENABLED) return;
-    if (!("speechSynthesis" in window)) return;
-    const t = (text || "").trim();
-    if (!t) return;
-
-    const tNow = now();
-    if (!force && tNow - lastStatusSpokenAt < TTS_STATUS_COOLDOWN_MS) return;
-
-    const ok = await ensureVoicesReady();
-    const voice = ok ? pickKoreanVoice() : null;
-
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(t);
-      u.lang = "ko-KR";
-      u.rate = TTS_RATE;
-      u.pitch = TTS_PITCH;
-      if (voice) u.voice = voice;
-      lastStatusSpokenAt = tNow;
-      window.speechSynthesis.speak(u);
-    } catch (e) {}
-  }
-
-  async function speakLong(text) {
-    if (!TTS_ENABLED) return;
-    if (!("speechSynthesis" in window)) return;
-    const t = (text || "").trim();
-    if (!t) return;
-
-    await ensureVoicesReady();
-    const voice = pickKoreanVoice();
-
-    const chunkSize = 900;
-    const chunks = [];
-    for (let i = 0; i < t.length; i += chunkSize) chunks.push(t.slice(i, i + chunkSize));
-
-    try {
-      window.speechSynthesis.cancel();
-      let idx = 0;
-      const speakNext = () => {
-        if (idx >= chunks.length) return;
-        const u = new SpeechSynthesisUtterance(chunks[idx]);
-        u.lang = "ko-KR";
-        u.rate = TTS_RATE;
-        u.pitch = TTS_PITCH;
-        if (voice) u.voice = voice;
-        u.onend = () => { idx += 1; speakNext(); };
-        window.speechSynthesis.speak(u);
-      };
-      speakNext();
-    } catch (e) {}
-  }
-
-  btnSpeakTest.addEventListener("click", async () => {
-    unlockAudioOnce();
-    const hasSynth = ("speechSynthesis" in window);
-    const voiceOk = await ensureVoicesReady();
-    const v = voiceOk ? pickKoreanVoice() : null;
-
-    const msg =
-      !hasSynth ? "이 브라우저는 음성을 지원하지 않습니다."
-      : (!voiceOk ? "음성 목록 로딩이 지연됩니다. 무음모드 해제와 볼륨을 올리고 다시 눌러주세요."
-      : ("음성 테스트입니다. " + (v ? ("현재 음성: " + (v.name || "알 수 없음")) : "")));
-
-    speak(msg, true);
-  });
-
-  btnReset.addEventListener("click", () => location.reload());
-  btnForceSolve.addEventListener("click", async () => {
-    unlockAudioOnce();
-    await autoSolve("사용자 강제 풀이(지문 부족 가능)");
-  });
-
-  document.addEventListener("click", unlockAudioOnce, { passive: true, once: true });
-  document.addEventListener("touchstart", unlockAudioOnce, { passive: true, once: true });
-
-  // =========================
-  // “Aborted(-1)” 대응: OCR 엔진 재초기화/최종 새로고침
-  // =========================
-  async function hardResetOcrEngine() {
-    try { await speak("OCR 엔진이 중단되어 새로고침합니다.", true); } catch (e) {}
-    setTimeout(() => { location.reload(); }, 600);
-  }
-
-  // =========================
-  // Timeout helper
-  // =========================
-  async function withTimeout(promise, ms, label) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(label + " timeout")), ms);
-    });
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      clearTimeout(timer);
+    // 세그먼트 너무 많아지면 (메모리/중복 방지) 뒤에서 잘라냄
+    if (accumulatedSegments.length > 40) {
+      accumulatedSegments = accumulatedSegments.slice(-40);
     }
   }
 
-  // =========================
-  // 카메라
-  // =========================
+  function getAccumulatedText() {
+    const joined = accumulatedSegments.map(s => s.text).join("\n\n");
+    // 너무 길면 뒤에서부터 남기기(최근/추가된 게 보통 더 정확)
+    if (joined.length <= MAX_OCR_PREVIEW_CHARS) return joined;
+    return joined.slice(joined.length - MAX_OCR_PREVIEW_CHARS);
+  }
+
+  function calcAvgConf() {
+    if (!accumulatedSegments.length) return 0;
+    const sum = accumulatedSegments.reduce((a, s) => a + (s.conf || 0), 0);
+    return sum / accumulatedSegments.length;
+  }
+
+  // =============================
+  // 카메라 분석(가려짐/흔들림/거리 추정(추측))
+  // =============================
+  function analyzeFrame() {
+    if (!video.videoWidth || !video.videoHeight) {
+      return { blocked: false, stable: false, distanceHint: "알 수 없음(대기)" };
+    }
+
+    thumbCtx.drawImage(video, 0, 0, TH_W, TH_H);
+    const img = thumbCtx.getImageData(0, 0, TH_W, TH_H).data;
+
+    const n = TH_W * TH_H;
+    let sum = 0;
+    let diffSum = 0;
+
+    // “선명도” 대충 추정(인접 픽셀 차이)
+    let edgeSum = 0;
+
+    const curr = new Uint8Array(n);
+    for (let i = 0, p = 0; i < img.length; i += 4, p++) {
+      const r = img[i], g = img[i+1], b = img[i+2];
+      const gray = (r + g + b) / 3;
+      curr[p] = gray;
+      sum += gray;
+      if (prevThumb) diffSum += Math.abs(gray - prevThumb[p]);
+    }
+
+    // edge(간단)
+    for (let y = 1; y < TH_H - 1; y++) {
+      for (let x = 1; x < TH_W - 1; x++) {
+        const idx = y * TH_W + x;
+        const gx = Math.abs(curr[idx] - curr[idx - 1]) + Math.abs(curr[idx] - curr[idx + 1]);
+        const gy = Math.abs(curr[idx] - curr[idx - TH_W]) + Math.abs(curr[idx] - curr[idx + TH_W]);
+        edgeSum += (gx + gy);
+      }
+    }
+
+    const avgBright = sum / n;
+    const diffAvg = prevThumb ? (diffSum / n) : 0;
+    prevThumb = curr;
+
+    const blocked = avgBright < 18; // 거의 검정이면 가려짐/어두움
+
+    const now = Date.now();
+    let stable = false;
+    if (diffAvg < 7) {
+      if (!lastStableStart) lastStableStart = now;
+      if (now - lastStableStart > 700) stable = true;
+    } else {
+      lastStableStart = 0;
+    }
+
+    // 거리 힌트(정확한 판정 불가 → “추측”으로만)
+    // edge가 너무 낮으면: 너무 멀거나 초점/흔들림
+    // edge가 너무 높으면: 너무 가까워 글자가 크게 깨지거나(혹은 무늬/잡음)
+    let distanceHint = "정상(추측)";
+    const edgeAvg = edgeSum / (TH_W * TH_H);
+    if (blocked) {
+      distanceHint = "가려짐/너무 어두움";
+    } else if (edgeAvg < 9) {
+      distanceHint = "추측: 너무 멀거나 흔들림/초점 불량";
+    } else if (edgeAvg > 28) {
+      distanceHint = "추측: 너무 가까움/무늬(배경) 잡음";
+    }
+
+    return { blocked, stable, distanceHint };
+  }
+
+  // =============================
+  // 전처리 캔버스 만들기(다운스케일 + 대비)
+  // =============================
+  function buildOcrCanvas() {
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!vw || !vh) {
+      canvas.width = 640;
+      canvas.height = 360;
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+
+    // 너무 큰 프레임은 WASM 죽을 확률↑ → 강제 다운스케일
+    const maxW = 1280; // iPhone에서도 충분히 글자 인식됨
+    const scale = Math.min(1, maxW / vw);
+    const outW = Math.floor(vw * scale);
+    const outH = Math.floor(vh * scale);
+
+    canvas.width = outW;
+    canvas.height = outH;
+    ctx.drawImage(video, 0, 0, outW, outH);
+
+    // 간단 대비/그레이
+    const img = ctx.getImageData(0, 0, outW, outH);
+    const d = img.data;
+
+    // 대비 증가(가볍게)
+    const contrast = 1.25; // 1.0~1.4 정도
+    const intercept = 128 * (1 - contrast);
+
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i+1], b = d[i+2];
+      let gray = (r*0.299 + g*0.587 + b*0.114);
+
+      // 대비 조절
+      gray = gray * contrast + intercept;
+
+      // clamp
+      if (gray < 0) gray = 0;
+      if (gray > 255) gray = 255;
+
+      d[i] = d[i+1] = d[i+2] = gray;
+      d[i+3] = 255;
+    }
+
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
+  // =============================
+  // TTS
+  // =============================
+  function speak(text) {
+    if (!ttsUnlocked) return;
+
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(String(text || "").slice(0, 2200));
+      u.lang = "ko-KR";
+      u.rate = 1.02;
+      u.pitch = 1.0;
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      // 무시(일부 iOS 환경에서 예외)
+    }
+  }
+
+  btnTTS.addEventListener("click", () => {
+    ttsUnlocked = true;
+    speak("음성 연결 완료. 이제 답안이 나오면 자동으로 읽어줍니다.");
+    btnTTS.textContent = "🔊 음성 연결됨";
+  });
+
+  btnRestart.addEventListener("click", () => {
+    location.reload();
+  });
+
+  btnForceSolve.addEventListener("click", () => {
+    triggerSolve(true, "사용자가 강제 풀이를 눌렀습니다.");
+  });
+
+  // =============================
+  // OCR 엔진 초기화 (핵심: langPath 정확히!)
+  // =============================
+  async function initOcrEngine() {
+    engineReady = false;
+    setStatus("OCR 엔진 로딩 중...");
+
+    // 안전장치: 기존 워커 정리
+    if (worker) {
+      try { await worker.terminate(); } catch (e) {}
+      worker = null;
+    }
+
+    // createWorker 호환(서명 차이 대응)
+    try {
+      const opt = {
+        logger: (m) => {
+          // 로딩이 멈춘 것처럼 보여서 진행률 표시
+          if (m && m.status) {
+            if (m.status === "loading tesseract core" ||
+                m.status === "loading language traineddata" ||
+                m.status === "initializing tesseract" ||
+                m.status === "loading tesseract worker") {
+              setStatus(`OCR 엔진 로딩 중... (${m.status})`);
+            }
+          }
+        },
+        workerPath: WORKER_PATH,
+        corePath: CORE_PATH,
+        langPath: LANG_PATH,
+        // iOS/일부 환경에서 blob worker 문제 예방(지원 안 하면 무시됨)
+        workerBlobURL: false
+      };
+
+      // v5 일반 형태
+      worker = await Tesseract.createWorker(opt);
+
+      await worker.loadLanguage("kor");
+      await worker.initialize("kor");
+
+      // 숫자/기호 방해 최소화(완벽 차단은 불가하지만 효과 큼)
+      await worker.setParameters({
+        tessedit_pageseg_mode: "6",              // block of text
+        preserve_interword_spaces: "1",
+        tessedit_char_blacklist: "0123456789@#$%^&*_=+<>|{}[]~`",
+      });
+
+      engineReady = true;
+      setStatus("OCR 엔진 로딩 완료");
+    } catch (e) {
+      engineReady = false;
+      setStatus("OCR 엔진 로딩 실패: " + String(e && e.message ? e.message : e));
+
+      // 자동 재시도(1회)
+      await new Promise(r => setTimeout(r, 1200));
+      try {
+        const opt2 = {
+          logger: () => {},
+          workerPath: WORKER_PATH,
+          corePath: CORE_PATH,
+          langPath: LANG_PATH,
+          workerBlobURL: false
+        };
+        worker = await Tesseract.createWorker(opt2);
+        await worker.loadLanguage("kor");
+        await worker.initialize("kor");
+        await worker.setParameters({
+          tessedit_pageseg_mode: "6",
+          preserve_interword_spaces: "1",
+          tessedit_char_blacklist: "0123456789@#$%^&*_=+<>|{}[]~`",
+        });
+        engineReady = true;
+        setStatus("OCR 엔진 로딩 완료(재시도 성공)");
+      } catch (e2) {
+        engineReady = false;
+        setStatus("OCR 엔진 최종 실패. (1) 와이파이 연결 (2) 아래 URL이 열리는지 확인 필요\n" + LANG_PATH);
+      }
+    }
+  }
+
+  // =============================
+  // 카메라 시작(화질/초점 시도)
+  // =============================
   async function startCamera() {
     try {
-      video.style.transform = `scale(${PREVIEW_SCALE})`;
-      setStatus(["카메라 요청 중...", "권한 팝업이 뜨면 '허용'"]);
-
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 3840 },
-          height: { ideal: 2160 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
           frameRate: { ideal: 30 }
         },
         audio: false
@@ -407,477 +515,302 @@
 
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
-      track = stream.getVideoTracks()[0] || null;
 
-      await new Promise((resolve) => {
-        if (video.readyState >= 2) return resolve();
-        video.onloadedmetadata = () => resolve();
-      });
+      // 고급 제어(가능하면 적용, 안 되면 무시)
+      const track = stream.getVideoTracks()[0];
+      if (track && track.applyConstraints) {
+        const caps = track.getCapabilities ? track.getCapabilities() : null;
 
-      await tryApplyZoom(track, REQUESTED_CAMERA_ZOOM);
+        // iOS는 보통 zoom < 1 불가. 가능하면 1~ 사이에서만 조절됨.
+        // 여기선 “화질” 목적만: continuous focus/exposure 등 시도
+        try {
+          const adv = [];
+          if (caps && caps.focusMode && caps.focusMode.includes("continuous")) adv.push({ focusMode: "continuous" });
+          if (caps && caps.exposureMode && caps.exposureMode.includes("continuous")) adv.push({ exposureMode: "continuous" });
+          if (caps && caps.whiteBalanceMode && caps.whiteBalanceMode.includes("continuous")) adv.push({ whiteBalanceMode: "continuous" });
 
-      setStatus(buildStatusLines("카메라 ON · OCR 준비"));
-      requestAnimationFrame(analyzeLoop);
-
-      const ok = await initOcrWorkerWithRetry();
-      if (!ok) {
-        setStatus(buildStatusLines("OCR 엔진 로딩 실패. Wi-Fi로 접속 후 새로고침."));
-        speak("OCR 엔진 로딩에 실패했습니다. 와이파이로 접속 후 새로고침 해주세요.", true);
-        return;
+          if (adv.length) await track.applyConstraints({ advanced: adv });
+        } catch (e) {}
       }
 
-      scheduleOcrLoop();
-      setStatus(buildStatusLines("카메라 ON · 자동 OCR 시작"));
+      setStatus("카메라 ON");
     } catch (e) {
-      console.error(e);
-      setStatus(["카메라 접근 실패", String(e)]);
-      speak("카메라 접근에 실패했습니다.", true);
+      setStatus("카메라 접근 실패: " + String(e && e.message ? e.message : e));
     }
   }
 
-  async function tryApplyZoom(track, requested) {
-    try {
-      if (!track || typeof track.getCapabilities !== "function") { appliedZoomInfo = "zoom cap 없음"; return; }
-      const cap = track.getCapabilities();
-      if (!cap || typeof cap.zoom === "undefined") { appliedZoomInfo = "zoom 미지원"; return; }
-      const minZ = cap.zoom.min, maxZ = cap.zoom.max;
-      const target = Math.max(minZ, Math.min(maxZ, requested));
-      if (typeof track.applyConstraints === "function") {
-        await track.applyConstraints({ advanced: [{ zoom: target }] });
-        appliedZoomInfo = `요청 ${requested} → 적용 ${target} (cap ${minZ}-${maxZ})`;
-      } else {
-        appliedZoomInfo = "applyConstraints 없음";
-      }
-    } catch (e) {
-      appliedZoomInfo = "zoom 적용 실패";
-    }
-  }
+  // =============================
+  // OCR 1회 실행
+  // =============================
+  async function runOcrOnce() {
+    if (!engineReady || !worker) return;
+    if (ocrBusy) return;
 
-  // =========================
-  // 가려짐/안정도
-  // =========================
-  function analyzeFrame() {
-    if (!video.videoWidth || !video.videoHeight) {
-      return { blocked:false, stable:false };
-    }
-
-    bCtx.drawImage(video, 0, 0, BW, BH);
-    const img = bCtx.getImageData(0, 0, BW, BH).data;
-
-    const len = BW * BH;
-    const currThumb = new Uint8Array(len);
-
-    let sumBright = 0;
-    let diffSum = 0;
-
-    for (let i = 0, p = 0; i < img.length; i += 4, p++) {
-      const r = img[i], g = img[i+1], b = img[i+2];
-      const gray = (r + g + b) / 3;
-      currThumb[p] = gray;
-      sumBright += gray;
-      if (prevThumb) diffSum += Math.abs(gray - prevThumb[p]);
-    }
-
-    const avgBright = sumBright / len;
-    const diffAvg = prevThumb ? (diffSum / len) : 0;
-    prevThumb = currThumb;
-
-    const isBlocked = avgBright < 20;
-
-    const tNow = now();
-    let stable = false;
-    if (diffAvg < 8) {
-      if (!lastStableStart) lastStableStart = tNow;
-      if (tNow - lastStableStart >= 900) stable = true;
-    } else {
-      lastStableStart = 0;
-    }
-
-    return { blocked:isBlocked, stable };
-  }
-
-  function analyzeLoop() {
-    const a = analyzeFrame();
-    blocked = a.blocked;
-    requestAnimationFrame(analyzeLoop);
-  }
-
-  // =========================
-  // 캡처
-  // =========================
-  function captureToCanvas() {
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-
-    if (!vw || !vh) {
-      capCanvas.width = 640; capCanvas.height = 360;
-      capCtx.fillStyle = "black";
-      capCtx.fillRect(0, 0, capCanvas.width, capCanvas.height);
-      return capCanvas;
-    }
-
-    const cropW = vw;
-    const cropH = vh;
-
-    const scale = Math.min(1, CAP_MAX_W / cropW);
-    const outW = Math.max(480, Math.floor(cropW * scale));
-    const outH = Math.max(360, Math.floor(cropH * scale));
-
-    capCanvas.width = outW;
-    capCanvas.height = outH;
-
-    capCtx.imageSmoothingEnabled = false;
-    capCtx.drawImage(video, 0, 0, cropW, cropH, 0, 0, outW, outH);
-    return capCanvas;
-  }
-
-  // =========================
-  // OCR Worker init (핵심: langPath + timeout + retry)
-  // =========================
-  async function initOcrWorkerWithRetry() {
-    for (let attempt = 1; attempt <= WORKER_RETRY_MAX; attempt++) {
-      const ok = await initOcrWorkerOnce(attempt);
-      if (ok) return true;
-      try { if (worker) await worker.terminate(); } catch (e) {}
-      worker = null;
-      workerReady = false;
-    }
-    return false;
-  }
-
-  async function initOcrWorkerOnce(attempt) {
-    try {
-      setStatus(buildStatusLines(`OCR 엔진 로딩 중... (시도 ${attempt}/${WORKER_RETRY_MAX})`));
-
-      worker = await Tesseract.createWorker({
-        langPath: LANG_PATH,
-        logger: (m) => {
-          if (!m || !m.status) return;
-          const p = (typeof m.progress === "number") ? Math.round(m.progress * 100) : null;
-          if (p !== null) setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}] ${p}%`));
-          else setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}]`));
-        }
-      });
-
-      await withTimeout(worker.loadLanguage(OCR_LANG), WORKER_INIT_TIMEOUT_MS, "loadLanguage");
-      await withTimeout(worker.initialize(OCR_LANG), WORKER_INIT_TIMEOUT_MS, "initialize");
-
-      // 숫자/기호를 OCR 단계에서 덜 보이게 (최종 제거는 cleanOcrText에서)
-      await worker.setParameters({
-        tessedit_char_blacklist: "0123456789~`!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?·•※℃℉©®™"
-      });
-
-      workerReady = true;
-      setStatus(buildStatusLines("OCR 엔진 준비 완료"));
-      return true;
-
-    } catch (e) {
-      console.error(e);
-      setStatus(buildStatusLines("OCR 엔진 로딩 실패: " + String(e)));
-      return false;
-    }
-  }
-
-  // =========================
-  // OCR 루프
-  // =========================
-  function shouldTryOcr() {
-    if (solved || solving) return false;
-    if (ocrRunning) return false;
-    if (!workerReady) return false;
-    if (blocked) return false;
-    const tNow = now();
-    if (tNow - lastOcrAt < OCR_INTERVAL_MS) return false;
-    return true;
-  }
-
-  async function doOcrOnce() {
-    if (!shouldTryOcr()) return;
-
-    ocrRunning = true;
-    lastOcrAt = now();
-
-    try {
-      const canvas = captureToCanvas();
-      setStatus(buildStatusLines("OCR 진행 중..."));
-
-      const result = await worker.recognize(canvas);
-
-      const rawText = (result && result.data && result.data.text) ? result.data.text : "";
-      const conf = (result && result.data && typeof result.data.confidence === "number")
-        ? result.data.confidence
-        : 0;
-
-      const text = cleanOcrText(rawText);
-      const effLen = effectiveLenOf(text);
-
-      if (effLen < 30 || conf < 5) {
-        setStatus(buildStatusLines("OCR 완료(너무 짧음/낮은 신뢰도)"));
-        return;
-      }
-
-      // 거리 추정(휴리스틱)
-      tooFar = (effLen < 450 && conf < 35);
-      tooNear = (effLen >= 900 && conf < 35);
-
-      updateSegments(text, effLen, conf);
-      updateCumulative();
-
-      // 부족 타이머
-      const tNow = now();
-      if (cumulativeEffLen < TEXT_THRESHOLD_EFFECTIVE) {
-        if (!insufficientSince) insufficientSince = tNow;
-      } else {
-        insufficientSince = null;
-      }
-
-      ocrPreviewEl.value = cumulativeText;
-      setStatus(buildStatusLines("OCR 완료"));
-
-      // 자동 풀이 조건
-      if (!solved && !solving) {
-        const enough = cumulativeEffLen >= TEXT_THRESHOLD_EFFECTIVE;
-        const noNewFor = lastNewSegmentAt ? (tNow - lastNewSegmentAt) : 0;
-        const insufficientDuration = insufficientSince ? (tNow - insufficientSince) : 0;
-
-        if (insufficientSince && insufficientDuration >= INSUFFICIENT_WARN_MS && insufficientDuration < MAX_WAIT_MS) {
-          speak(buildInsufficientReason(), false);
-        }
-
-        if (enough && noNewFor >= NO_NEW_SEGMENT_SOLVE_MS) {
-          await autoSolve("누적 충분 + 변화 없음");
-          return;
-        }
-
-        if (insufficientSince && insufficientDuration >= MAX_WAIT_MS) {
-          await autoSolve("최대 대기시간 초과(지문 부족). 현재 누적 내용으로 풀이");
-          return;
-        }
-      }
-
-      ocrFailCount = 0;
-
-    } catch (e) {
-      console.error(e);
-      const msg = String(e || "");
-      setStatus(buildStatusLines("OCR 에러: " + msg));
-
-      // iOS에서 종종 뜨는 “RuntimeError: Aborted(-1)” 계열 대응
-      if (msg.includes("Aborted") || msg.includes("RuntimeError")) {
-        ocrFailCount += 1;
-        workerReady = false;
-        try { if (worker) await worker.terminate(); } catch (x) {}
-        worker = null;
-
-        if (ocrFailCount >= 2) {
-          await hardResetOcrEngine();
-          return;
-        } else {
-          const ok = await initOcrWorkerWithRetry();
-          if (!ok) return;
-        }
-      }
-    } finally {
-      ocrRunning = false;
-    }
-  }
-
-  function updateSegments(text, effLen, conf) {
-    const sig = signatureOf(text);
-
-    let bestIdx = -1;
-    let bestSim = 0;
-
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
-      const sim = similarity(sig, s.sig);
-      if (sim > bestSim) { bestSim = sim; bestIdx = i; }
-    }
-
-    const SAME_PAGE_SIM = 0.62;
-
-    if (bestIdx >= 0 && bestSim >= SAME_PAGE_SIM) {
-      const prev = segments[bestIdx];
-      const merged = mergeLinewise(prev.text, text, prev.conf, conf);
-      const mergedEff = effectiveLenOf(merged);
-
-      const better =
-        (mergedEff > prev.effLen + 30) ||
-        (Math.abs(mergedEff - prev.effLen) <= 30 && conf > prev.conf + 3);
-
-      if (better) {
-        segments[bestIdx] = {
-          text: merged,
-          effLen: mergedEff,
-          conf: Math.max(prev.conf, conf),
-          updatedAt: now(),
-          sig: signatureOf(merged)
-        };
-      } else {
-        segments[bestIdx].updatedAt = now();
-      }
+    const { blocked, stable, distanceHint } = analyzeFrame();
+    if (blocked) {
+      // 가려짐이면 OCR 하지 말고 “지문 부족” 카운트만 쌓이게 둠
+      markInsufficient();
+      renderStatus(blocked, stable, distanceHint, "카메라 가려짐/너무 어두움");
       return;
     }
 
-    segments.push({ text, effLen, conf, updatedAt: now(), sig });
-    lastNewSegmentAt = now();
-  }
-
-  function updateCumulative() {
-    let out = "";
-    let totalEff = 0;
-    let confSum = 0;
-
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
-      if (i > 0) out += "\n\n----------\n\n";
-      out += s.text;
-      totalEff += s.effLen;
-      confSum += s.conf;
+    // 흔들리면 OCR은 하되(사용자 요청: 자동 계속), 너무 잦은 폭발 방지로 stable 아니면 스킵
+    // (정확도 급락 + Aborted 유발)
+    if (!stable) {
+      markInsufficient();
+      renderStatus(blocked, stable, distanceHint, "흔들림 감지(잠깐 고정해줘)");
+      return;
     }
 
-    cumulativeText = out.trim();
-    cumulativeEffLen = totalEff;
-    cumulativeAvgConf = segments.length ? (confSum / segments.length) : 0;
+    ocrBusy = true;
+    lastOcrAt = Date.now();
+
+    try {
+      const canvas = buildOcrCanvas();
+
+      const res = await worker.recognize(canvas);
+      const conf = (res && res.data && typeof res.data.confidence === "number") ? res.data.confidence : 0;
+
+      const raw = (res && res.data && res.data.text) ? res.data.text : "";
+      const cleaned = normalizeText(raw);
+      const len = effectiveLen(cleaned);
+
+      // 너무 짧으면 누적 금지
+      if (len < 30) {
+        markInsufficient();
+        renderStatus(false, true, distanceHint, `OCR 너무 짧음(len=${len}, conf=${conf.toFixed(1)}%)`);
+        return;
+      }
+
+      // 누적(유사하면 교체)
+      mergeSegment(cleaned, conf);
+
+      avgConf = calcAvgConf();
+
+      // 지문 충분/부족 타이머 갱신
+      const acc = getAccumulatedText();
+      const accLen = effectiveLen(acc);
+
+      if (accLen >= READY_LEN_TARGET) {
+        clearInsufficient();
+      } else {
+        markInsufficient();
+      }
+
+      // 화면 갱신
+      ocrPreview.textContent = acc.slice(0, MAX_OCR_PREVIEW_CHARS);
+
+      // 자동 풀이 트리거
+      if (!solvedOnce) {
+        if (accLen >= READY_LEN_TARGET) {
+          await triggerSolve(false, "누적 지문이 충분해 자동 풀이합니다.");
+        } else {
+          // 1분 안내 / 8분 자동 풀이
+          const now = Date.now();
+          if (insufficientSince) {
+            const dur = now - insufficientSince;
+
+            if (!insufficientWarned && dur >= INSUFFICIENT_WARN_MS) {
+              insufficientWarned = true;
+              const msg = "지문이 부족합니다. 종이를 화면에 꽉 차게, 흔들림 없이 5초 이상 고정해 주세요.";
+              speak(msg);
+            }
+
+            if (dur >= INSUFFICIENT_AUTO_SOLVE_MS) {
+              await triggerSolve(false, "지문 부족이 오래 지속되어 현재까지로 자동 풀이합니다.", true);
+            }
+          }
+        }
+      }
+
+      // 워커 메모리 누수/Aborted 예방: 주기적으로 워커 재시작
+      ocrTickCount++;
+      if (ocrTickCount % 18 === 0) {
+        await restartWorkerSafely("주기적 워커 재시작(메모리 안정화)");
+      }
+
+      renderStatus(false, true, distanceHint, `OCR 완료(len=${len}, conf=${conf.toFixed(1)}%)`);
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+
+      // Aborted(-1) 같은 WASM 크래시는 “이미지 너무 큼/반복 누적으로 메모리”가 원인인 경우가 많음
+      if (msg.includes("Aborted") || msg.includes("RuntimeError")) {
+        await restartWorkerSafely("OCR 엔진 크래시 감지 → 워커 재시작");
+      }
+
+      markInsufficient();
+      renderStatus(false, true, analyzeFrame().distanceHint, "OCR 에러: " + msg);
+    } finally {
+      ocrBusy = false;
+    }
   }
 
-  function buildInsufficientReason() {
-    if (blocked) return "카메라가 가려졌습니다. 렌즈를 가리지 않게 해주세요.";
-    if (tooFar) return "지문이 너무 멀어 보입니다. 종이를 화면에 더 크게 채워주세요.";
-    if (tooNear) return "지문이 너무 가까워 보입니다. 조금만 멀리 두고 다시 비춰주세요.";
-    return "아직 지문이 부족합니다. 첫 제시문부터 마지막 질문까지 천천히 비춰주세요.";
+  async function restartWorkerSafely(reason) {
+    try {
+      setStatus(reason + "\nOCR 엔진 재시작 중...");
+      engineReady = false;
+      if (worker) {
+        try { await worker.terminate(); } catch (e) {}
+        worker = null;
+      }
+      await initOcrEngine();
+    } catch (e) {
+      setStatus("워커 재시작 실패: " + String(e && e.message ? e.message : e));
+    }
   }
 
-  function buildStatusLines(extraLine) {
+  // =============================
+  // 지문 부족 타이머
+  // =============================
+  function markInsufficient() {
+    const now = Date.now();
+    if (!insufficientSince) insufficientSince = now;
+  }
+
+  function clearInsufficient() {
+    insufficientSince = null;
+    insufficientWarned = false;
+  }
+
+  // =============================
+  // 상태 출력
+  // =============================
+  function setStatus(msg) {
+    statusPanel.textContent = String(msg || "");
+  }
+
+  function renderStatus(blocked, stable, distanceHint, lastMsg) {
+    const acc = getAccumulatedText();
+    const accLen = effectiveLen(acc);
+
+    const now = Date.now();
+    const dur = insufficientSince ? (now - insufficientSince) : 0;
+
+    const warnSec = Math.floor(INSUFFICIENT_WARN_MS / 1000);
+    const autoSec = Math.floor(INSUFFICIENT_AUTO_SOLVE_MS / 1000);
+
     const lines = [];
     lines.push("자동 OCR(누적) → 자동 풀이");
-    lines.push(`프리뷰 배율: ${PREVIEW_SCALE} | 카메라 zoom: ${appliedZoomInfo}`);
-    lines.push(`카메라 상태: ${blocked ? "가려짐" : "정상"}`);
+    lines.push("프리뷰 배율: 0.8 (표시용)");
+    lines.push("카메라 상태: " + (blocked ? "가려짐/어두움" : "정상"));
+    lines.push("안정성: " + (stable ? "안정" : "흔들림"));
+    lines.push("거리 상태: " + distanceHint);
+    lines.push("세그먼트(페이지 추정) 수: " + accumulatedSegments.length);
+    lines.push("누적 OCR 길이(공백제외): " + accLen + " / 기준 " + READY_LEN_TARGET);
+    lines.push("평균 OCR 신뢰도(대략): " + (avgConf ? avgConf.toFixed(1) : "0.0") + "%");
 
-    let dist = "정상(추정)";
-    if (tooFar) dist = "너무 멂(추정)";
-    else if (tooNear) dist = "너무 가까움(추정)";
-    lines.push(`거리 상태: ${dist}`);
-
-    lines.push(`세그먼트(페이지 추정) 수: ${segments.length}`);
-    lines.push(`누적 OCR 길이(공백제외): ${cumulativeEffLen} / 기준 ${TEXT_THRESHOLD_EFFECTIVE}`);
-    lines.push(`평균 OCR 신뢰도(대략): ${cumulativeAvgConf.toFixed(1)}%`);
-
-    if (insufficientSince && cumulativeEffLen < TEXT_THRESHOLD_EFFECTIVE) {
-      const sec = Math.floor((now() - insufficientSince) / 1000);
-      lines.push(`지문 부족 지속: ${sec}초 (1분 안내, 8분이면 자동 풀이)`);
+    if (insufficientSince) {
+      const sec = Math.floor(dur / 1000);
+      lines.push("지문 부족 지속: " + sec + "초 ("
+        + warnSec + "초에 안내, "
+        + autoSec + "초에 자동 풀이)");
     } else {
       lines.push("지문 부족 지속: 0초");
     }
 
-    const synthOk = ("speechSynthesis" in window) ? "지원" : "미지원";
-    lines.push(`음성(TTS): ${synthOk} | 언락: ${audioUnlocked ? "완료" : "대기(버튼 탭)"}`);
+    lines.push("OCR 엔진: " + (engineReady ? "준비됨" : "로딩/불안정"));
+    lines.push("마지막 메시지: " + (lastMsg || "-"));
 
-    if (extraLine) lines.push(String(extraLine));
-    return lines;
+    statusPanel.textContent = lines.join("\n");
   }
 
-  // =========================
-  // 자동 풀이 (답안 + 답안 TTS)
-  // =========================
-  async function autoSolve(reason) {
-    if (solved || solving) return;
-    solving = true;
+  // =============================
+  // solve 호출 + TTS
+  // =============================
+  async function triggerSolve(force, reason, becauseInsufficient = false) {
+    if (solvedOnce && !force) return;
+    solvedOnce = true;
 
-    unlockAudioOnce();
+    const acc = getAccumulatedText();
+    let sendText = acc;
 
-    const payloadText = (cumulativeText || "").trim();
-    if (!payloadText) {
-      answerBoxEl.textContent = "누적 OCR 텍스트가 없습니다.";
-      solving = false;
+    if (sendText.length > MAX_SEND_CHARS) {
+      sendText = sendText.slice(sendText.length - MAX_SEND_CHARS);
+    }
+
+    const accLen = effectiveLen(sendText);
+
+    if (!force && accLen < 80) {
+      // 너무 짧으면 의미가 없음 → 다시 풀기 가능하도록 solvedOnce 되돌림
+      solvedOnce = false;
       return;
     }
 
-    setStatus(buildStatusLines(`풀이 요청 중... (${reason})`));
-    answerBoxEl.textContent = "풀이 생성 중...";
-
-    const body = JSON.stringify({ ocrText: payloadText });
+    answerOut.textContent = "풀이 생성 중...\n" + reason;
 
     try {
+      const payload = {
+        mode: "NONSUL",
+        ocr_text: sendText,
+        ocrText: sendText
+      };
+
       const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body
+        body: JSON.stringify(payload)
       });
 
       const ct = (res.headers.get("content-type") || "").toLowerCase();
+      let answerText = "";
 
-      let out = "";
       if (ct.includes("application/json")) {
-        let data;
-        try { data = await res.json(); }
-        catch (e) { out = "JSON 파싱 에러: " + String(e); }
-
-        if (!out) {
-          if (data && typeof data.answer === "string") out = data.answer;
-          else if (data && typeof data.raw === "string") out = data.raw;
-          else if (data && typeof data.error === "string") out = "에러: " + data.error;
-          else out = JSON.stringify(data);
-        }
+        const data = await res.json();
+        answerText = (data && data.answer) ? String(data.answer) : JSON.stringify(data);
       } else {
-        out = await res.text();
+        answerText = await res.text();
       }
 
       if (!res.ok) {
-        answerBoxEl.textContent = `서버 에러 (status ${res.status})\n\n${out.slice(0, 4000)}`;
-        speak("서버 에러가 발생했습니다.", true);
-        solving = false;
+        answerOut.textContent = "서버 에러(" + res.status + ")\n" + answerText.slice(0, 2000);
+        solvedOnce = false; // 실패면 다시 시도 가능
         return;
       }
 
-      solved = true;
-
-      const isInsufficientSolve =
-        (reason || "").includes("최대 대기시간") ||
-        (reason || "").includes("지문 부족") ||
-        (reason || "").includes("강제 풀이");
-
-      const prefix = isInsufficientSolve
-        ? "지문이 부족하여 현재까지 인식된 내용으로 자동 풀이를 시작합니다.\n\n"
-        : "";
-
-      answerBoxEl.textContent = prefix + out;
-      setStatus(buildStatusLines("풀이 완료"));
-
-      if (isInsufficientSolve) {
-        speak("지문이 부족하여 현재까지 인식된 내용으로 자동 풀이를 시작합니다.", true);
-      } else {
-        speak("답안이 생성되었습니다.", true);
+      if (becauseInsufficient) {
+        answerText = "※ 지문이 부족하여 현재까지로 자동 풀이합니다.\n\n" + answerText;
       }
 
-      // ✅ 답안도 음성으로 낭독
-      speakLong(prefix + out);
-
+      answerOut.textContent = answerText;
+      speak(answerText);
     } catch (e) {
-      console.error(e);
-      answerBoxEl.textContent = "요청 실패: " + String(e);
-      speak("요청에 실패했습니다.", true);
-    } finally {
-      solving = false;
+      answerOut.textContent = "solve 호출 실패: " + String(e && e.message ? e.message : e);
+      solvedOnce = false;
     }
   }
 
-  // =========================
-  // OCR 루프
-  // =========================
-  function scheduleOcrLoop() {
-    doOcrOnce();
-    setInterval(() => { doOcrOnce(); }, OCR_INTERVAL_MS);
+  // =============================
+  // 자동 루프 시작
+  // =============================
+  async function boot() {
+    await startCamera();
+    await initOcrEngine();
+
+    // 상태 초기 렌더
+    const a = analyzeFrame();
+    renderStatus(a.blocked, a.stable, a.distanceHint, "시작");
+
+    // OCR 주기 실행(멈추지 않게 setInterval)
+    setInterval(() => {
+      // 엔진 로딩 중이면 상태만 갱신
+      const af = analyzeFrame();
+      if (!engineReady) {
+        renderStatus(af.blocked, af.stable, af.distanceHint, "OCR 엔진 로딩/불안정");
+        return;
+      }
+      // 너무 자주 겹치지 않도록 최소 간격 보호
+      if (Date.now() - lastOcrAt < (OCR_INTERVAL_MS - 200)) return;
+
+      runOcrOnce();
+    }, OCR_INTERVAL_MS);
   }
 
-  // =========================
-  // 시작
-  // =========================
-  startCamera();
+  boot();
 })();
 </script>
 </body>
 </html>
+
 
 
 
