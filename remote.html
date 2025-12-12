@@ -1,10 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>answer-site | Remote</title>
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>answer-site | Remote Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
@@ -12,554 +11,349 @@
 
   <style>
     * { box-sizing: border-box; }
-
     body {
       margin: 0;
-      padding: 10px;
-      background: #000;
-      color: #fff;
+      padding: 8px;
+      background: #050508;
+      color: #f5f5f5;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
-
-    .wrap {
-      max-width: 640px;
-      margin: 0 auto;
+    h1 {
+      margin: 0 0 8px;
+      font-size: 16px;
     }
-
-    .mode-bar {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-
-    .mode-btn {
-      flex: 1 1 0;
-      padding: 8px 4px;
-      border-radius: 999px;
-      border: 1px solid #333;
-      background: #111;
-      color: #ddd;
-      font-size: 13px;
-    }
-    .mode-btn.active {
-      background: #0b5cff;
-      border-color: #0b5cff;
-      color: #fff;
-      font-weight: 600;
-    }
-
-    #statusLine, #aiStatusLine {
-      font-size: 11px;
-      color: #aaa;
-      margin-bottom: 4px;
+    .status-bar {
+      font-size: 12px;
+      margin-bottom: 8px;
+      color: #a0e7ff;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-
-    #answerCard {
-      background: #111;
-      border-radius: 8px;
-      padding: 10px;
-      margin-bottom: 8px;
-      border: 1px solid #222;
+    .layout {
+      display: flex;
+      gap: 8px;
+      height: calc(100vh - 60px);
     }
-
-    #answerMain {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 4px;
-      min-height: 22px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    #answerProb {
-      font-size: 11px;
-      color: #9fd1ff;
-      margin-bottom: 6px;
-      min-height: 14px;
-    }
-
-    #answerDetail {
-      font-size: 12px;
-      line-height: 1.4;
-      background: #050505;
-      border-radius: 6px;
-      padding: 8px;
-      max-height: 260px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .btn-group {
-      margin-top: 8px;
-      margin-bottom: 8px;
+    .col {
+      flex: 1 1 0;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      min-width: 0;
     }
-
-    button {
-      font-family: inherit;
+    .col-title {
+      font-size: 12px;
+      margin-bottom: 4px;
+      color: #bbbbbb;
     }
-
-    .btn-primary {
+    textarea, pre {
+      flex: 1;
       width: 100%;
-      padding: 10px 6px;
-      border-radius: 999px;
-      border: none;
-      background: #0b5cff;
-      color: #fff;
-      font-size: 15px;
-      font-weight: 600;
-    }
-    .btn-primary:active {
-      transform: scale(0.98);
-    }
-
-    .btn-secondary {
-      width: 100%;
-      padding: 8px 6px;
-      border-radius: 999px;
+      padding: 8px;
+      border-radius: 6px;
       border: 1px solid #333;
-      background: #111;
-      color: #eee;
-      font-size: 13px;
+      background: #0b0b10;
+      color: #f5f5f5;
+      font-size: 12px;
+      resize: none;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-y: auto;
     }
-    .btn-secondary:active {
-      transform: scale(0.98);
+    pre {
+      margin: 0;
     }
-
-    #btnToggleDebug {
-      margin-top: 8px;
+    .controls {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 4px 10px;
       font-size: 11px;
-      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #555;
+      background: #14141c;
+      color: #f5f5f5;
+      cursor: pointer;
+    }
+    button:active {
+      transform: scale(0.97);
+    }
+    .tag {
+      font-size: 11px;
+      padding: 2px 6px;
       border-radius: 999px;
       border: 1px solid #444;
-      background: #050505;
-      color: #ccc;
+      background: #11131b;
+      color: #aaaaaa;
     }
-
-    #debugPanel {
-      margin-top: 6px;
-      padding: 8px;
-      border-radius: 8px;
-      background: #050505;
-      border: 1px solid #222;
-      font-size: 11px;
-      max-height: 280px;
-      overflow-y: auto;
-    }
-    #debugPanel.hidden {
-      display: none;
-    }
-
-    .dbg-title {
-      font-weight: 600;
-      color: #7fd6ff;
-      margin: 4px 0 2px;
-    }
-
-    .dbg-pre {
-      background: #000;
-      border-radius: 4px;
-      padding: 4px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 80px;
-      overflow-y: auto;
-    }
+    .tag-ok { color: #72f1b8; border-color: #2f9f6b; }
+    .tag-warn { color: #ffd16a; border-color: #b68522; }
+    .tag-error { color: #ff7a7a; border-color: #b52c2c; }
   </style>
 </head>
 <body>
-<div class="wrap">
-  <!-- 1) 모드 선택 + 버튼들 (제일 위) -->
-  <div class="mode-bar">
-    <button class="mode-btn active" data-mode="reading">Reading</button>
-    <button class="mode-btn" data-mode="listening">Listening</button>
-    <button class="mode-btn" data-mode="writing">Writing</button>
-    <button class="mode-btn" data-mode="speaking">Speaking</button>
+  <h1>answer-site Remote</h1>
+  <div id="status" class="status-bar">Firebase 연결 준비 중...</div>
+
+  <div class="controls">
+    <span id="modeTag" class="tag">모드: -</span>
+    <span id="cameraTag" class="tag">카메라: -</span>
+    <span id="ocrTag" class="tag">OCR: -</span>
+    <span id="solveTag" class="tag">풀이: -</span>
+
+    <button id="btnManualSolve">수동 풀이 요청</button>
+    <button id="btnReadAnswer">정답 읽어주기 (TTS)</button>
+    <button id="btnStopTTS">TTS 정지</button>
   </div>
 
-  <div class="btn-group">
-    <button id="btnSolve" class="btn-primary">이 질문 풀기용 프롬프트 만들기</button>
-    <button id="btnCopyPrompt" class="btn-secondary">프롬프트 복사 (클립보드)</button>
-    <button id="btnAccumulate" class="btn-secondary">지문 누적 (긴 지문용)</button>
-    <button id="btnReset" class="btn-secondary">이 세션 초기화</button>
-    <button id="btnSTT" class="btn-secondary">음성 인식 시작 (Listening/Speaking)</button>
+  <div class="layout">
+    <div class="col">
+      <div class="col-title">현재 OCR 텍스트 (카메라 폰 → Firebase)</div>
+      <textarea id="ocrView" readonly></textarea>
+    </div>
+    <div class="col">
+      <div class="col-title">논술 답안 (solve 함수 결과)</div>
+      <pre id="answerView"></pre>
+    </div>
   </div>
 
-  <!-- 2) 상태 / 프롬프트 / 디버그 (버튼 뒤로) -->
-  <div id="statusLine">섹션: reading · OCR: - · 카메라 상태: -</div>
-  <div id="aiStatusLine">AI 호출 없음. 프롬프트만 생성합니다.</div>
-
-  <div id="answerCard">
-    <div id="answerMain">여기에 프롬프트가 생성됩니다.</div>
-    <div id="answerProb">아래 전체를 ChatGPT에 붙여넣으세요.</div>
-    <pre id="answerDetail"></pre>
-  </div>
-
-  <button id="btnToggleDebug">디버그 보기 토글 (OCR/음성/지문)</button>
-
-  <div id="debugPanel" class="hidden">
-    <div class="dbg-title">OCR 텍스트 (현재 화면)</div>
-    <pre id="dbgOcrCurrent" class="dbg-pre"></pre>
-
-    <div class="dbg-title">지문 텍스트 (누적)</div>
-    <pre id="dbgOcrAccum" class="dbg-pre"></pre>
-
-    <div class="dbg-title">음성 텍스트 (STT)</div>
-    <pre id="dbgAudio" class="dbg-pre"></pre>
-  </div>
-</div>
-
-<script>
-  // ---------------- Firebase ----------------
-  const firebaseConfig = {
-    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-    authDomain: "answer-site-p2p.firebaseapp.com",
-    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "answer-site-p2p",
-    storageBucket: "answer-site-p2p.firebasestorage.app",
-    messagingSenderId: "364227113735",
-    appId: "1:364227113735:web:b18355cf0b16454663cba2",
-    measurementId: "G-C8MRHK5ZGS"
-  };
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
-
-  // --------------- DOM refs -----------------
-  const modeButtons = Array.from(document.querySelectorAll(".mode-btn"));
-  const statusLine  = document.getElementById("statusLine");
-  const answerMain  = document.getElementById("answerMain");
-  const answerProb  = document.getElementById("answerProb");
-  const answerDetail= document.getElementById("answerDetail");
-  const aiStatusLine= document.getElementById("aiStatusLine");
-
-  const btnSolve       = document.getElementById("btnSolve");
-  const btnCopyPrompt  = document.getElementById("btnCopyPrompt");
-  const btnAccumulate  = document.getElementById("btnAccumulate");
-  const btnReset       = document.getElementById("btnReset");
-  const btnSTT         = document.getElementById("btnSTT");
-  const btnToggleDebug = document.getElementById("btnToggleDebug");
-
-  const debugPanel    = document.getElementById("debugPanel");
-  const dbgOcrCurrent = document.getElementById("dbgOcrCurrent");
-  const dbgOcrAccum   = document.getElementById("dbgOcrAccum");
-  const dbgAudio      = document.getElementById("dbgAudio");
-
-  // --------------- State -----------------
-  let currentSection = "reading";
-
-  let latestOcrText   = "";
-  let latestOcrConf   = null;
-  let cameraBlocked   = false;
-
-  let questionAccumText = ""; // 긴 지문 누적용 (passage)
-  let sttText           = ""; // STT 결과 전체
-
-  // STT 관련
-  let recognition        = null;
-  let sttShouldRestart   = false;
-  let sttActive          = false;
-
-  // ------------- UI helpers ----------------
-  function sectionLabel(mode) {
-    switch (mode) {
-      case "reading":   return "reading";
-      case "listening": return "listening";
-      case "writing":   return "writing";
-      case "speaking":  return "speaking";
-      default:          return mode;
-    }
-  }
-
-  function updateStatusLine() {
-    let ocrPart = "OCR: -";
-    if (latestOcrText && latestOcrText.trim().length > 0) {
-      const confStr = (typeof latestOcrConf === "number")
-        ? latestOcrConf.toFixed(1) + "%"
-        : "?";
-      ocrPart = "OCR: conf=" + confStr + " (완료)";
-    }
-    const camPart = cameraBlocked ? "카메라 상태: 가려짐" : "카메라 상태: 정상";
-    statusLine.textContent =
-      "섹션: " + sectionLabel(currentSection) + " · " + ocrPart + " · " + camPart;
-  }
-
-  function updateDebugPanel() {
-    dbgOcrCurrent.textContent = latestOcrText || "(없음)";
-    dbgOcrAccum.textContent   = questionAccumText || "(없음)";
-    dbgAudio.textContent      = sttText || "(없음)";
-  }
-
-  function setMode(mode) {
-    currentSection = mode;
-    modeButtons.forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.mode === mode);
-    });
-    updateStatusLine();
-
-    // index.html 쪽에 현재 모드 알려주기
-    db.ref("p2p/state").update({
-      modeHint: mode,
-      modeUpdatedAt: Date.now()
-    });
-  }
-
-  modeButtons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      const mode = btn.dataset.mode;
-      setMode(mode);
-    });
-  });
-
-  // --------------- Firebase listeners ---------------
-  // p2p/state 구독: OCR / 카메라 상태
-  db.ref("p2p/state").on("value", snap => {
-    const v = snap.val() || {};
-    latestOcrText = v.ocrText || "";
-    latestOcrConf = typeof v.ocrConfidence === "number" ? v.ocrConfidence : null;
-    cameraBlocked = !!v.cameraBlocked;
-    updateStatusLine();
-    updateDebugPanel();
-  });
-
-  // p2p/command는 이제 사용 안 함 (AI 자동 호출 없음)
-  db.ref("p2p/command").off();
-
-  // --------------- STT (Web Speech API) ----------------
-  function ensureRecognizer() {
-    if (recognition) return recognition;
-
-    const SR =
-      window.SpeechRecognition || window.webkitSpeechRecognition || null;
-    if (!SR) {
-      alert("이 브라우저에서는 Web Speech API(음성 인식)를 지원하지 않습니다.");
-      return null;
-    }
-
-    recognition = new SR();
-    recognition.lang = "en-US";
-    recognition.interimResults = false;
-    recognition.continuous = true;
-
-    recognition.onresult = (event) => {
-      let finalChunk = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res.isFinal && res[0] && res[0].transcript) {
-          finalChunk += res[0].transcript + " ";
-        }
-      }
-      if (finalChunk) {
-        sttText += (sttText ? " " : "") + finalChunk.trim();
-        updateDebugPanel();
-      }
+  <script>
+    // --------- Firebase 초기화 ---------
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
+      authDomain: "answer-site-p2p.firebaseapp.com",
+      databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "answer-site-p2p",
+      storageBucket: "answer-site-p2p.firebasestorage.app",
+      messagingSenderId: "364227113735",
+      appId: "1:364227113735:web:b18355cf0b16454663cba2",
+      measurementId: "G-C8MRHK5ZGS"
     };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
 
-    recognition.onerror = (event) => {
-      console.warn("STT error:", event.error);
-    };
+    // --------- DOM ---------
+    const statusEl     = document.getElementById("status");
+    const ocrView      = document.getElementById("ocrView");
+    const answerView   = document.getElementById("answerView");
+    const modeTag      = document.getElementById("modeTag");
+    const cameraTag    = document.getElementById("cameraTag");
+    const ocrTag       = document.getElementById("ocrTag");
+    const solveTag     = document.getElementById("solveTag");
+    const btnManual    = document.getElementById("btnManualSolve");
+    const btnRead      = document.getElementById("btnReadAnswer");
+    const btnStopTTS   = document.getElementById("btnStopTTS");
 
-    // 네가 직접 중지 누르기 전까지는 자동 재시작
-    recognition.onend = () => {
-      sttActive = false;
-      if (sttShouldRestart) {
-        try {
-          recognition.start();
-          sttActive = true;
-        } catch (e) {
-          console.warn("STT 재시작 실패:", e);
-          sttShouldRestart = false;
-        }
-      }
-      updateSttButton();
-    };
-
-    return recognition;
-  }
-
-  function updateSttButton() {
-    btnSTT.textContent = sttActive
-      ? "음성 인식 중지"
-      : "음성 인식 시작 (Listening/Speaking)";
-  }
-
-  function startSTT() {
-    const rec = ensureRecognizer();
-    if (!rec) return;
-    if (sttActive) return;
-
-    try {
-      sttShouldRestart = true;
-      rec.start();
-      sttActive = true;
-      updateSttButton();
-    } catch (e) {
-      console.warn("STT start 실패:", e);
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+      console.log("[REMOTE]", msg);
     }
-  }
+    function setTag(el, text, cls) {
+      el.textContent = text;
+      el.className = "tag " + (cls || "");
+    }
 
-  function stopSTT() {
-    sttShouldRestart = false;
-    if (recognition && sttActive) {
+    // --------- 상태 변수 ---------
+    let lastOcrText = "";
+    let lastOcrUpdatedAt = 0;
+    let currentMode = "reading";
+    let lastSolveCommandTs = 0;
+    let lastSolvedSnippet = "";
+    let solving = false;
+
+    // --------- OCR / 상태 구독 ---------
+    db.ref("p2p/state").on("value", snap => {
+      const v = snap.val() || {};
+      currentMode = v.modeHint || "reading";
+      lastOcrText = v.ocrText || "";
+      lastOcrUpdatedAt = v.ocrUpdatedAt || 0;
+      const cameraBlocked = !!v.cameraBlocked;
+
+      ocrView.value = lastOcrText;
+
+      setTag(modeTag, `모드: ${currentMode}`, "tag-ok");
+      setTag(cameraTag, cameraBlocked ? "카메라: 가려짐" : "카메라: 정상", cameraBlocked ? "tag-warn" : "tag-ok");
+
+      const len = (lastOcrText || "").replace(/\s/g, "").length;
+      if (len === 0) {
+        setTag(ocrTag, "OCR: 텍스트 없음", "");
+      } else {
+        setTag(ocrTag, `OCR: 길이≈${len}`, "tag-ok");
+      }
+    }, err => {
+      setStatus("Firebase 상태 구독 에러: " + err.toString());
+      setTag(ocrTag, "OCR: 오류", "tag-error");
+    });
+
+    // --------- 커맨드 구독 (카메라에서 solve 신호) ---------
+    db.ref("p2p/command").on("value", snap => {
+      const cmd = snap.val();
+      if (!cmd || cmd.type !== "solve") return;
+
+      const ts = cmd.timestamp || 0;
+      if (ts === 0 || ts === lastSolveCommandTs) return;
+      lastSolveCommandTs = ts;
+
+      setStatus(`solve command 수신 (timestamp=${ts})`);
+
+      // 자동 solve: 너무 짧은 텍스트면 무시
+      const cleanLen = (lastOcrText || "").replace(/\s/g, "").length;
+      if (cleanLen < 50) {
+        setStatus("자동 solve 무시: OCR 텍스트가 너무 짧음");
+        setTag(solveTag, "풀이: 텍스트 부족 (자동 무시)", "tag-warn");
+        return;
+      }
+
+      // 같은 스니펫이면 중복 solve 방지
+      const snippet = (lastOcrText || "").slice(0, 200);
+      if (snippet === lastSolvedSnippet) {
+        setStatus("자동 solve 무시: 이전과 동일한 OCR 스니펫");
+        setTag(solveTag, "풀이: 중복 요청 무시", "tag-warn");
+        return;
+      }
+
+      lastSolvedSnippet = snippet;
+      doSolve();
+    }, err => {
+      setStatus("Firebase command 구독 에러: " + err.toString());
+      setTag(solveTag, "풀이: 오류", "tag-error");
+    });
+
+    // --------- Netlify Functions 호출 ---------
+    const SOLVE_URL = "/.netlify/functions/solve";
+
+    async function doSolve(manual) {
+      if (solving) {
+        setStatus("이미 solve 진행 중, 이번 요청은 무시");
+        return;
+      }
+      const text = (lastOcrText || "").trim();
+      const cleanLen = text.replace(/\s/g, "").length;
+      if (cleanLen < 50) {
+        setStatus("solve 중단: 텍스트가 너무 짧음");
+        setTag(solveTag, "풀이: 텍스트 부족", "tag-warn");
+        return;
+      }
+
       try {
-        recognition.stop();
-      } catch (e) {
-        console.warn("STT stop 실패:", e);
+        solving = true;
+        const modeLabel = manual ? "[수동]" : "[자동]";
+        setStatus(`${modeLabel} solve 호출 중... (길이≈${cleanLen})`);
+        setTag(solveTag, "풀이: 요청 중...", "");
+
+        const res = await fetch(SOLVE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ocrText: text })
+        });
+
+        const raw = await res.text();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          setStatus(`${modeLabel} solve 실패: JSON 파싱 에러`);
+          setTag(solveTag, "풀이: JSON 에러", "tag-error");
+          answerView.textContent =
+            "solve 응답이 JSON이 아님:\n\n" + raw.slice(0, 1000);
+          return;
+        }
+
+        if (!res.ok) {
+          setStatus(`${modeLabel} solve 실패: HTTP ${res.status}`);
+          setTag(solveTag, "풀이: 서버 에러", "tag-error");
+          answerView.textContent = "solve 에러 응답:\n\n" + JSON.stringify(data, null, 2);
+          return;
+        }
+
+        const answer = (data.answer || "").trim();
+        if (!answer) {
+          setStatus(`${modeLabel} solve 실패: answer 필드 없음`);
+          setTag(solveTag, "풀이: answer 없음", "tag-error");
+          answerView.textContent = "solve 응답에 answer가 없습니다:\n\n" + JSON.stringify(data, null, 2);
+          return;
+        }
+
+        setStatus(`${modeLabel} solve 완료 (model=${data.model || "?"}, usedLength=${data.usedLength || "?"})`);
+        setTag(solveTag, "풀이: 완료", "tag-ok");
+        answerView.textContent = answer;
+
+        // 자동으로 한 번 읽어주기까지는 부담되면 주석 처리해도 됨
+        // speakAnswer();
+      } catch (err) {
+        setStatus("solve 호출 중 예외 발생: " + err.toString());
+        setTag(solveTag, "풀이: 예외", "tag-error");
+        answerView.textContent = "solve 호출 중 예외 발생:\n\n" + (err.stack || err.toString());
+      } finally {
+        solving = false;
       }
     }
-    sttActive = false;
-    updateSttButton();
-  }
 
-  btnSTT.addEventListener("click", () => {
-    if (!sttActive) startSTT();
-    else stopSTT();
-  });
-
-  // --------------- 지문 누적 / 초기화 ---------------
-  btnAccumulate.addEventListener("click", () => {
-    const text = (latestOcrText || "").trim();
-    if (!text) return;
-    if (!questionAccumText.includes(text)) {
-      questionAccumText += (questionAccumText ? "\n\n" : "") + text;
-      updateDebugPanel();
-    }
-  });
-
-  btnReset.addEventListener("click", () => {
-    // 1) 세션 내부 상태 전체 초기화
-    questionAccumText = "";
-    sttText = "";
-    latestOcrText = "";
-    latestOcrConf = null;
-    cameraBlocked = false;
-
-    // 2) Firebase에도 "비어 있음"으로 반영 — 다음 OCR부터 새로 시작
-    db.ref("p2p/state").update({
-      ocrText: "",
-      ocrConfidence: 0,
-      cameraBlocked: false,
-      ocrUpdatedAt: Date.now()
+    btnManual.addEventListener("click", () => {
+      doSolve(true);
     });
 
-    // 3) STT/화면/UI 초기화
-    stopSTT();
-    answerMain.textContent = "여기에 프롬프트가 생성됩니다.";
-    answerProb.textContent = "아래 전체를 ChatGPT에 붙여넣으세요.";
-    answerDetail.textContent = "";
-    aiStatusLine.textContent = "AI 호출 없음. 프롬프트만 생성합니다.";
+    // --------- TTS (Web Speech API) ---------
+    let speaking = false;
+    let currentUtterance = null;
 
-    updateStatusLine();
-    updateDebugPanel();
-  });
+    function speakAnswer() {
+      if (!("speechSynthesis" in window)) {
+        alert("이 브라우저는 TTS(음성 합성)를 지원하지 않습니다.");
+        return;
+      }
+      const text = (answerView.textContent || "").trim();
+      if (!text) {
+        setStatus("TTS: 읽을 정답이 없습니다.");
+        return;
+      }
 
-  btnToggleDebug.addEventListener("click", () => {
-    debugPanel.classList.toggle("hidden");
-  });
+      // 이미 읽는 중이면 중단 토글
+      if (speaking) {
+        window.speechSynthesis.cancel();
+        speaking = false;
+        setStatus("TTS: 재생 중단");
+        return;
+      }
 
-  // --------------- 프롬프트 생성 로직 ---------------
-  function buildPrompt(mode, ocrText, audioText, accumText) {
-    const cleanOCR   = (ocrText || "").trim();   // 현재 질문 + 선택지
-    const cleanAUDIO = (audioText || "").trim();
-    const cleanACC   = (accumText || "").trim(); // 누적 지문 (passage)
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      u.rate = 0.9;   // 너무 빠르지 않게
+      u.pitch = 1.0;
 
-    let effectiveOcr = "";
-    if (cleanACC && cleanOCR) {
-      effectiveOcr =
-        cleanACC + "\n\n[CURRENT_QUESTION]\n" + cleanOCR;
-    } else if (cleanACC) {
-      effectiveOcr = cleanACC;
-    } else if (cleanOCR) {
-      effectiveOcr = cleanOCR;
-    } else {
-      effectiveOcr = "(none)";
+      u.onstart = () => {
+        speaking = true;
+        setStatus("TTS: 정답 읽는 중...");
+      };
+      u.onend = () => {
+        speaking = false;
+        setStatus("TTS: 완료");
+      };
+      u.onerror = (e) => {
+        speaking = false;
+        setStatus("TTS 에러: " + (e.error || e.toString()));
+      };
+
+      currentUtterance = u;
+      window.speechSynthesis.speak(u);
     }
 
-    const audioPart = cleanAUDIO || "(none)";
-
-    return (
-`MODE: ${mode.toUpperCase()}
-OCR_TEXT:
-${effectiveOcr}
-
-AUDIO_TEXT:
-${audioPart}`
-    );
-  }
-
-  function generatePrompt() {
-    const cleanOCR = (latestOcrText || "").trim();
-    const cleanACC = (questionAccumText || "").trim();
-
-    let forLen = "";
-    if (cleanACC && cleanOCR) {
-      forLen = cleanACC + " " + cleanOCR;
-    } else if (cleanACC) {
-      forLen = cleanACC;
-    } else if (cleanOCR) {
-      forLen = cleanOCR;
-    } else {
-      forLen = "";
+    function stopTTS() {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      speaking = false;
+      setStatus("TTS: 강제 중단");
     }
 
-    const effectiveLen = forLen.replace(/\s+/g, "").length;
-    if (!forLen || effectiveLen < 10) {
-      answerMain.textContent = "프롬프트 생성 실패";
-      answerProb.textContent = "";
-      answerDetail.textContent =
-        "OCR 텍스트가 너무 짧습니다.\n" +
-        "화면을 더 선명하게 찍고 지문 누적을 다시 시도한 뒤, 다시 눌러주세요.";
-      aiStatusLine.textContent = "프롬프트 생성 불가 (텍스트 길이 부족).";
-      return;
-    }
+    btnRead.addEventListener("click", speakAnswer);
+    btnStopTTS.addEventListener("click", stopTTS);
 
-    const promptText = buildPrompt(
-      currentSection,
-      latestOcrText,
-      sttText,
-      questionAccumText
-    );
-
-    answerMain.textContent =
-      `섹션: ${currentSection} · 아래 전체를 ChatGPT에 붙여넣으세요.`;
-    answerProb.textContent = "";
-    answerDetail.textContent = promptText;
-    aiStatusLine.textContent = "프롬프트 생성 완료. 이제 복사해서 ChatGPT에 붙여넣으세요.";
-  }
-
-  btnSolve.addEventListener("click", () => {
-    generatePrompt();
-  });
-
-  // --------------- 프롬프트 클립보드 복사 ---------------
-  btnCopyPrompt.addEventListener("click", async () => {
-    const text = (answerDetail.textContent || "").trim();
-    if (!text) {
-      aiStatusLine.textContent = "복사할 프롬프트가 없습니다. 먼저 프롬프트를 생성하세요.";
-      return;
-    }
-    if (!navigator.clipboard || !navigator.clipboard.writeText) {
-      aiStatusLine.textContent = "이 브라우저는 클립보드 API를 지원하지 않습니다. 수동으로 복사하세요.";
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      aiStatusLine.textContent = "프롬프트가 클립보드에 복사되었습니다. ChatGPT에 붙여넣으세요.";
-    } catch (e) {
-      console.warn("clipboard 오류:", e);
-      aiStatusLine.textContent = "클립보드 복사 실패. 텍스트를 길게 눌러 수동으로 복사하세요.";
-    }
-  });
-
-  // 초기 상태 반영: 모드 Firebase 동기화 + UI 초기화
-  setMode(currentSection);
-  updateDebugPanel();
-  updateSttButton();
-</script>
+    // --------- 초기 상태 ---------
+    setStatus("Firebase 연결 완료. 카메라 폰에서 index.html 열고 OCR을 시작하면 여기로 들어온다.");
+    setTag(solveTag, "풀이: 대기 중", "");
+  </script>
 </body>
 </html>
