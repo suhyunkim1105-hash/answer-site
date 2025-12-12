@@ -113,35 +113,31 @@
 <script>
 (() => {
   // =========================
-  // 0) 설정값 (너 요구 반영)
+  // 0) 설정값
   // =========================
-
-  // OCR 주기: 3초(권장)
   const OCR_INTERVAL_MS = 3000;
 
-  // "지문 충분" 판정 임시 threshold (나중에 바꿔도 됨)
-  // 너가 분석 안 끝냈으니, 일단 보수적으로 2200 추천.
+  // 임시 threshold(나중에 바꿔도 됨)
   const TEXT_THRESHOLD_EFFECTIVE = 2200;
 
-  // 부족 안내: 연속 1분 부족이면 안내
+  // 부족 안내: 연속 1분
   const INSUFFICIENT_WARN_MS = 60 * 1000;
 
-  // 최대 대기: 연속 3분 부족이면 그래도 풀이 시작
+  // 최대 대기: 연속 3분이면 부족해도 풀이
   const MAX_WAIT_MS = 180 * 1000;
 
   // solve 함수 URL (같은 사이트면 상대경로가 안정적)
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  // OCR 언어: 논술은 한국어가 메인. (영어 섞여도 kor+eng가 보통 유리)
-  // 주의: kor 데이터가 CDN에서 자동 다운로드 되며 첫 OCR이 느릴 수 있다.
+  // OCR 언어
   const OCR_LANG = "kor+eng";
 
-  // TTS 옵션
+  // TTS
   const TTS_ENABLED = true;
   const TTS_RATE = 1.05;
   const TTS_PITCH = 1.0;
 
-  // 상태 음성 안내 쿨다운(너무 자주 말하지 않게)
+  // 상태 음성 안내 쿨다운
   const TTS_STATUS_COOLDOWN_MS = 12000;
 
   // =========================
@@ -160,20 +156,28 @@
   let ocrRunning = false;
   let lastOcrAt = 0;
 
-  let bestText = "";           // 지금까지 가장 "좋은" OCR 텍스트
+  let bestText = "";
   let bestEffectiveLen = 0;
   let bestConfidence = 0;
 
-  let blocked = false;         // 가려짐
-  let tooNear = false;         // 너무 가까움(추정)
-  let tooFar = false;          // 너무 멂(추정)
+  let blocked = false;
+  let tooNear = false;
+  let tooFar = false;
 
-  let insufficientSince = null; // threshold 미달이 "연속"으로 시작된 시간
+  let insufficientSince = null;
   let solved = false;
   let solving = false;
 
   let lastStatusSpokenAt = 0;
   let audioUnlocked = false;
+
+  // ===== 자동 디지털 줌(크롭) 상태 =====
+  // cropFactor: 1.00 = 가장 넓게(줌아웃), 0.75 = 더 잘라서 확대(줌인)
+  let cropFactor = 0.90;
+  let lastCropAdjustAt = 0;
+  const CROP_MIN = 0.75;
+  const CROP_MAX = 1.00;
+  const CROP_ADJUST_COOLDOWN_MS = 6000;
 
   // 움직임/밝기 분석용 썸네일 캔버스
   const BW = 64, BH = 36;
@@ -184,19 +188,18 @@
   let prevThumb = null;
   let lastStableStart = 0;
 
-  // OCR 캡처용 캔버스(재사용)
+  // OCR 캡처용 캔버스
   const capCanvas = document.createElement("canvas");
   const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
 
   // =========================
-  // 3) iOS 음성 언락 (탭 1회)
+  // 3) iOS 음성 언락(탭 1회)
   // =========================
   function unlockAudioOnce() {
     if (audioUnlocked) return;
     audioUnlocked = true;
     if (!TTS_ENABLED) return;
     try {
-      // iOS는 사용자 제스처 후에만 speak가 되는 경우가 많음
       speak("음성이 활성화되었습니다.", true);
     } catch (e) {}
   }
@@ -207,10 +210,7 @@
   // 4) 유틸
   // =========================
   function now() { return Date.now(); }
-
-  function effectiveLenOf(text) {
-    return (text || "").replace(/\s/g, "").length;
-  }
+  function effectiveLenOf(text) { return (text || "").replace(/\s/g, "").length; }
 
   function setStatus(lines) {
     statusEl.textContent = lines.join("\n");
@@ -234,9 +234,7 @@
       u.pitch = TTS_PITCH;
       lastStatusSpokenAt = tNow;
       window.speechSynthesis.speak(u);
-    } catch (e) {
-      // 음성 실패는 조용히 무시
-    }
+    } catch (e) {}
   }
 
   // =========================
@@ -246,7 +244,7 @@
     try {
       setStatus([
         "카메라 요청 중...",
-        "iOS에서 권한 팝업이 뜨면 '허용'을 눌러야 함.",
+        "iOS에서 권한 팝업이 뜨면 '허용'을 눌러야 함."
       ]);
 
       const constraints = {
@@ -262,7 +260,6 @@
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
 
-      // iOS에서 metadata 로드 대기
       await new Promise((resolve) => {
         if (video.readyState >= 2) return resolve();
         video.onloadedmetadata = () => resolve();
@@ -270,21 +267,15 @@
 
       setStatus([
         "카메라 ON",
-        "자동 OCR 시작됨 (3초마다)",
-        "음성(TTS)이 필요하면 화면을 한 번 탭해보세요(아이폰 제한)."
+        "자동 OCR 시작됨 (3초마다, 화면이 안정될 때만)",
+        "음성(TTS)이 필요하면 화면을 한 번 탭해보세요(iOS 제한)."
       ]);
 
-      // 분석 루프 시작
       requestAnimationFrame(analyzeLoop);
-
-      // OCR 루프 시작
       scheduleOcrLoop();
     } catch (e) {
       console.error(e);
-      setStatus([
-        "카메라 접근 실패",
-        String(e)
-      ]);
+      setStatus(["카메라 접근 실패", String(e)]);
       speak("카메라 접근에 실패했습니다.", true);
     }
   }
@@ -318,10 +309,8 @@
     const diffAvg = prevThumb ? (diffSum / len) : 0;
     prevThumb = currThumb;
 
-    // 가려짐(아주 어두움)
     const isBlocked = avgBright < 20;
 
-    // 안정(움직임 적음)
     const tNow = now();
     let stable = false;
     if (diffAvg < 8) {
@@ -337,12 +326,11 @@
   function analyzeLoop() {
     const a = analyzeFrame();
     blocked = a.blocked;
-
     requestAnimationFrame(analyzeLoop);
   }
 
   // =========================
-  // 7) 캡처(영상 → 캔버스) + 중앙 크롭
+  // 7) 캡처(영상 → 캔버스) + 중앙 크롭(디지털 줌)
   // =========================
   function captureToCanvas() {
     const vw = video.videoWidth;
@@ -356,8 +344,8 @@
       return capCanvas;
     }
 
-    // 중앙 90% 크롭 → 최대 1600px로 다운스케일
-    const scaleCrop = 0.90;
+    // cropFactor 적용(자동 디지털 줌)
+    const scaleCrop = cropFactor; // 0.75~1.00
     const cropW = Math.floor(vw * scaleCrop);
     const cropH = Math.floor(vh * scaleCrop);
     const cropX = Math.floor((vw - cropW) / 2);
@@ -386,7 +374,6 @@
     const tNow = now();
     if (tNow - lastOcrAt < OCR_INTERVAL_MS) return false;
 
-    // 추가로 "움직임이 너무 크면" 실패가 많아서, analyzeFrame 다시 확인
     const a = analyzeFrame();
     if (!a.stable) return false;
 
@@ -400,7 +387,6 @@
 
     try {
       const canvas = captureToCanvas();
-
       setStatus(buildStatusLines("OCR 진행 중..."));
 
       const result = await Tesseract.recognize(canvas, OCR_LANG, {
@@ -420,18 +406,26 @@
       const text = rawText.replace(/\s+\n/g, "\n").trim();
       const effLen = effectiveLenOf(text);
 
-      // 거리 추정(추측이 아니라 "휴리스틱": 완벽하진 않음)
-      // - 너무 멂: 글자수/신뢰도 둘 다 낮은 케이스가 많음
-      // - 너무 가까움: 글자수는 나오는데 conf가 낮아지는 케이스가 자주 있음(흔들림/왜곡)
+      // 거리 추정(휴리스틱)
       tooFar = (effLen < 400 && conf < 35);
       tooNear = (effLen >= 800 && conf < 35);
 
-      // "베스트 텍스트" 업데이트 규칙:
-      // 1) effLen이 더 긴 것이 우선
-      // 2) 길이가 비슷하면 conf가 더 높은 것
-      const lenGain = effLen - bestEffectiveLen;
-      const confGain = conf - bestConfidence;
+      // ===== 자동 디지털 줌 조절 =====
+      const tNow2 = now();
+      if (tNow2 - lastCropAdjustAt >= CROP_ADJUST_COOLDOWN_MS) {
+        if (tooNear) {
+          // 너무 가까움 → 더 넓게(줌아웃)
+          cropFactor = Math.min(CROP_MAX, cropFactor + 0.05);
+          lastCropAdjustAt = tNow2;
+        } else if (tooFar) {
+          // 너무 멂 → 더 잘라서 확대(줌인)
+          cropFactor = Math.max(CROP_MIN, cropFactor - 0.05);
+          lastCropAdjustAt = tNow2;
+        }
+      }
 
+      // 베스트 텍스트 업데이트
+      const lenGain = effLen - bestEffectiveLen;
       const isBetter =
         (effLen > bestEffectiveLen + 80) ||
         (Math.abs(lenGain) <= 80 && conf > bestConfidence + 5);
@@ -442,10 +436,8 @@
         bestConfidence = conf;
       }
 
-      // 미리보기는 "베스트 텍스트" 기준으로 보여주기
       ocrPreviewEl.value = bestText || text;
 
-      // 부족 시간 누적 판단 (연속)
       const tNow = now();
       if (bestEffectiveLen < TEXT_THRESHOLD_EFFECTIVE) {
         if (!insufficientSince) insufficientSince = tNow;
@@ -453,7 +445,6 @@
         insufficientSince = null;
       }
 
-      // 상태 업데이트
       setStatus(buildStatusLines("OCR 완료"));
 
       // 자동 풀이 조건
@@ -461,20 +452,16 @@
         const enough = bestEffectiveLen >= TEXT_THRESHOLD_EFFECTIVE;
         const insufficientDuration = insufficientSince ? (tNow - insufficientSince) : 0;
 
-        // 1분 연속 부족이면 "정말 부족할 때만" 안내
         if (insufficientSince && insufficientDuration >= INSUFFICIENT_WARN_MS && insufficientDuration < MAX_WAIT_MS) {
-          // 가려짐/거리 원인 추정 포함
           const reason = buildInsufficientReason();
           speak(reason, false);
         }
 
-        // 충분하면 즉시 풀이
         if (enough) {
           await autoSolve("충분한 텍스트 확보");
           return;
         }
 
-        // 3분 넘으면 부족해도 풀이(너 요구)
         if (insufficientSince && insufficientDuration >= MAX_WAIT_MS) {
           await autoSolve("최대 대기시간 초과. 현재 인식된 내용으로 풀이");
           return;
@@ -490,10 +477,9 @@
   }
 
   // =========================
-  // 9) 상태 문구 구성
+  // 9) 상태 문구
   // =========================
   function buildInsufficientReason() {
-    // 가려짐이 제일 우선
     if (blocked) return "카메라가 가려졌습니다. 렌즈를 가리지 않게 해주세요.";
     if (tooFar) return "지문이 너무 멀어 보입니다. 종이를 화면에 더 크게 채워주세요.";
     if (tooNear) return "지문이 너무 가까워 보입니다. 5에서 10센티미터 정도만 멀리 두고 다시 비춰주세요.";
@@ -502,26 +488,19 @@
 
   function buildStatusLines(extraLine) {
     const lines = [];
+    lines.push("자동 OCR → 자동 풀이");
+    lines.push(`카메라 상태: ${blocked ? "가려짐" : "정상"}`);
 
-    const base = "자동 OCR → 자동 풀이";
-    lines.push(base);
-
-    // 카메라 상태
-    const camState = blocked ? "가려짐" : "정상";
-    lines.push(`카메라 상태: ${camState}`);
-
-    // 거리 상태(휴리스틱)
     let dist = "정상(추정)";
     if (tooFar) dist = "너무 멂(추정)";
     else if (tooNear) dist = "너무 가까움(추정)";
     lines.push(`거리 상태: ${dist}`);
 
-    // 텍스트 상태
-    const th = TEXT_THRESHOLD_EFFECTIVE;
-    lines.push(`베스트 OCR 길이(공백제외): ${bestEffectiveLen} / 기준 ${th}`);
+    lines.push(`자동 크롭(디지털 줌): ${cropFactor.toFixed(2)} (1.00=넓게, 0.75=확대)`);
+
+    lines.push(`베스트 OCR 길이(공백제외): ${bestEffectiveLen} / 기준 ${TEXT_THRESHOLD_EFFECTIVE}`);
     lines.push(`베스트 OCR 신뢰도: ${bestConfidence.toFixed(1)}%`);
 
-    // 부족 타이머
     if (insufficientSince && bestEffectiveLen < TEXT_THRESHOLD_EFFECTIVE) {
       const sec = Math.floor((now() - insufficientSince) / 1000);
       lines.push(`지문 부족 지속: ${sec}초 (1분부터 안내, 3분이면 자동 풀이)`);
@@ -530,7 +509,6 @@
     }
 
     if (extraLine) lines.push(String(extraLine));
-
     return lines;
   }
 
@@ -547,7 +525,6 @@
     setStatus(buildStatusLines(`풀이 요청 중... (${reason})`));
     answerBoxEl.textContent = "풀이 생성 중...";
 
-    // solve.js는 { ocrText } 를 기대함 (너가 준 코드 기준)
     const body = JSON.stringify({ ocrText: payloadText });
 
     try {
@@ -559,18 +536,13 @@
 
       const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-      // 네 solve.js는 text/plain을 돌려주므로 보통 여기로 옴
-      // 그래도 방어적으로 JSON도 처리
       let out = "";
       if (ct.includes("application/json")) {
         let data;
-        try {
-          data = await res.json();
-        } catch (e) {
-          out = "JSON 파싱 에러: " + String(e);
-        }
+        try { data = await res.json(); }
+        catch (e) { out = "JSON 파싱 에러: " + String(e); }
+
         if (!out) {
-          // 가능한 키들 방어 처리
           if (data && typeof data.answer === "string") out = data.answer;
           else if (data && typeof data.body === "string") out = data.body;
           else out = JSON.stringify(data);
@@ -586,19 +558,12 @@
         return;
       }
 
-      // 성공
       solved = true;
       answerBoxEl.textContent = out;
 
       setStatus(buildStatusLines(`풀이 완료 (사용 텍스트 길이 ${eff})`));
 
-      // 답안 TTS (너 요구)
-      // 너무 길면 전부 읽는 게 오래 걸리므로, 일단 그대로 읽되 iOS에서는 길이 제한이 있을 수 있음
-      // 필요하면 나중에 "요약만 읽기"로 바꿀 수 있음
       speak("답안이 생성되었습니다.", true);
-
-      // 답안 낭독
-      // iOS에서 긴 텍스트가 끊기는 경우가 있어 900자 단위로 분할 낭독
       speakLong(out);
 
     } catch (e) {
@@ -617,7 +582,6 @@
     const t = (text || "").trim();
     if (!t) return;
 
-    // iOS에서 너무 길면 중간에 끊길 수 있어 분할
     const chunkSize = 900;
     const chunks = [];
     for (let i = 0; i < t.length; i += chunkSize) {
@@ -646,15 +610,11 @@
   }
 
   // =========================
-  // 11) OCR 루프 스케줄
+  // 11) OCR 루프
   // =========================
   function scheduleOcrLoop() {
-    // 바로 한 번 시도(안정되면 돌아가고, 아니면 다음 주기에서 함)
     doOcrOnce();
-
-    setInterval(() => {
-      doOcrOnce();
-    }, OCR_INTERVAL_MS);
+    setInterval(() => { doOcrOnce(); }, OCR_INTERVAL_MS);
   }
 
   // =========================
