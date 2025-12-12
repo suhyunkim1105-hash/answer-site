@@ -3,8 +3,138 @@
 <head>
 <meta charset="UTF-8">
 <title>자동 OCR → 자동 풀이 → 음성 출력</title>
-<meta name="viewport" content="width
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
+<script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
 
+<style>
+body { margin:0; padding:12px; background:#000; color:#fff; font-family:sans-serif; }
+video { width:100%; max-height:45vh; background:#000; }
+textarea, pre {
+  width:100%; background:#000; color:#fff;
+  border:1px solid #444; padding:8px;
+  white-space:pre-wrap;
+}
+label { font-size:13px; }
+</style>
+</head>
 
+<body>
+
+<h3>📷 자동 OCR (누적) → 자동 풀이 → 음성</h3>
+
+<video id="video" autoplay playsinline></video>
+
+<label>
+OCR 줌아웃 배율 (0.8 = 가장 넓게):
+<input type="range" id="zoom" min="0.8" max="1.0" step="0.01" value="0.8">
+<span id="zoomVal">0.80</span>
+</label>
+
+<h4>누적 OCR</h4>
+<textarea id="ocrBox" rows="8" readonly></textarea>
+
+<h4>답안</h4>
+<pre id="answerBox"></pre>
+
+<canvas id="canvas" style="display:none;"></canvas>
+
+<script>
+/* ================== 설정 ================== */
+const OCR_INTERVAL = 3000;
+const SOLVE_LEN = 2000;
+const SOLVE_URL = "/.netlify/functions/solve";
+
+/* ================== 상태 ================== */
+let accumulated = "";
+let solved = false;
+let cropFactor = 0.8;
+let stream;
+
+/* ================== 카메라 ================== */
+async function startCamera(){
+  stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:"environment" }, audio:false
+  });
+  video.srcObject = stream;
+}
+startCamera();
+
+/* ================== OCR 정규화 ================== */
+function normalize(text){
+  let t = String(text||"");
+  t = t.replace(/[A-Za-z]/g,"");
+  t = t.replace(/[^가-힣0-9\u2460-\u2473\u2780-\u2789\u3260-\u327F\s]/g," ");
+  t = t.replace(/[ \t]{2,}/g," ");
+  return t.trim();
+}
+
+/* ================== OCR 캡처 ================== */
+function capture(){
+  const c = canvas, ctx = c.getContext("2d");
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const cw = Math.floor(vw * cropFactor);
+  const ch = Math.floor(vh * cropFactor);
+  const cx = (vw - cw)/2, cy = (vh - ch)/2;
+  c.width = cw; c.height = ch;
+  ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+  return c;
+}
+
+/* ================== 자동 OCR ================== */
+async function autoOCR(){
+  if (solved) return;
+
+  const c = capture();
+  const res = await Tesseract.recognize(c, "kor");
+  const clean = normalize(res.data.text);
+
+  if (clean.length > 20 && !accumulated.includes(clean)){
+    accumulated += "\n" + clean;
+    ocrBox.value = accumulated.trim();
+  }
+
+  if (!solved && accumulated.replace(/\s/g,"").length >= SOLVE_LEN){
+    solved = true;
+    autoSolve();
+  }
+}
+setInterval(autoOCR, OCR_INTERVAL);
+
+/* ================== 자동 풀이 ================== */
+async function autoSolve(){
+  answerBox.textContent = "풀이 생성 중…";
+
+  const r = await fetch(SOLVE_URL,{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ ocrText: accumulated.slice(0,8000) })
+  });
+
+  const txt = await r.text();
+  answerBox.textContent = txt;
+  speak(txt);
+}
+
+/* ================== TTS ================== */
+function speak(text){
+  if (!("speechSynthesis" in window)) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ko-KR";
+  speechSynthesis.speak(u);
+}
+
+/* ================== 줌 슬라이더 ================== */
+zoom.oninput = () => {
+  cropFactor = parseFloat(zoom.value);
+  zoomVal.textContent = cropFactor.toFixed(2);
+};
+
+/* iOS 음성 unlock */
+document.body.addEventListener("touchstart", ()=>speak(""), { once:true });
+</script>
+
+</body>
+</html>
 
