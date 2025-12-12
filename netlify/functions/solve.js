@@ -1,5 +1,10 @@
 // netlify/functions/solve.js
 
+let _fetch = globalThis.fetch;
+if (!_fetch) {
+  try { _fetch = require("node-fetch"); } catch (e) {}
+}
+
 const BASE_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
@@ -7,10 +12,6 @@ const BASE_HEADERS = {
 
 exports.handler = async (event) => {
   try {
-    // (선택) CORS가 필요하면 아래 2줄 추가 가능
-    // BASE_HEADERS["Access-Control-Allow-Origin"] = "*";
-    // BASE_HEADERS["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
-
     if (event.httpMethod === "OPTIONS") {
       return { statusCode: 204, headers: BASE_HEADERS, body: "" };
     }
@@ -34,7 +35,9 @@ exports.handler = async (event) => {
       };
     }
 
-    const ocrText = (body.ocrText || "").trim();
+    const mode = String(body.mode || body.MODE || "NONSUL").trim();
+    const ocrText = String(body.ocrText || body.ocr_text || "").trim();
+
     if (!ocrText) {
       return {
         statusCode: 400,
@@ -43,7 +46,24 @@ exports.handler = async (event) => {
       };
     }
 
-    // 타임아웃 방지: 입력 길이 제한
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return {
+        statusCode: 500,
+        headers: BASE_HEADERS,
+        body: JSON.stringify({ error: "OPENROUTER_API_KEY is not set in environment" }),
+      };
+    }
+
+    if (!_fetch) {
+      return {
+        statusCode: 500,
+        headers: BASE_HEADERS,
+        body: JSON.stringify({ error: "fetch is not available in this runtime" }),
+      };
+    }
+
+    // 타임아웃/지연 방지: 입력 길이 제한
     const MAX_CHARS = 8000;
     const trimmed = ocrText.length > MAX_CHARS ? ocrText.slice(0, MAX_CHARS) : ocrText;
 
@@ -69,7 +89,7 @@ exports.handler = async (event) => {
 과제: 문제의 요구에 맞는 [문제 1], [문제 2] 최종 답안만 작성하라.
 `.trim();
 
-    const userContent = `
+    const USER_PROMPT = `
 다음은 OCR로 인식한 고려대 인문계 편입 논술 시험지 전체이다.
 
 ${trimmed}
@@ -77,16 +97,17 @@ ${trimmed}
 위 시험지에 대해, 규칙을 지키면서 [문제 1], [문제 2] 최종 답안만 작성하라.
 `.trim();
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: BASE_HEADERS,
-        body: JSON.stringify({ error: "OPENROUTER_API_KEY is not set in environment" }),
-      };
-    }
+    const payload = {
+      model: "openrouter/auto",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: USER_PROMPT },
+      ],
+      temperature: 0.7,
+      max_tokens: 1800,
+    };
 
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const resp = await _fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -94,20 +115,11 @@ ${trimmed}
         "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
         "X-Title": "autononsul",
       },
-      body: JSON.stringify({
-        model: "openrouter/auto",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.7,
-        max_tokens: 1800, // 2048보다 살짝 줄여서 타임아웃/지연 리스크↓
-      }),
+      body: JSON.stringify(payload),
     });
 
     const raw = await resp.text();
 
-    // ✅ OpenRouter 자체 실패면 raw 그대로 반환(디버깅용)
     if (!resp.ok) {
       return {
         statusCode: resp.status,
@@ -115,6 +127,7 @@ ${trimmed}
         body: JSON.stringify({
           error: "OpenRouter request failed",
           status: resp.status,
+          mode,
           raw: raw.slice(0, 4000),
         }),
       };
@@ -124,12 +137,12 @@ ${trimmed}
     try {
       data = JSON.parse(raw);
     } catch {
-      // JSON이 아닌 HTML/텍스트 오류가 올 때 대비
       return {
         statusCode: 502,
         headers: BASE_HEADERS,
         body: JSON.stringify({
           error: "Non-JSON response from OpenRouter",
+          mode,
           raw: raw.slice(0, 4000),
         }),
       };
@@ -147,6 +160,7 @@ ${trimmed}
         headers: BASE_HEADERS,
         body: JSON.stringify({
           error: "No answer from model",
+          mode,
           raw: raw.slice(0, 2000),
         }),
       };
@@ -157,11 +171,15 @@ ${trimmed}
       headers: BASE_HEADERS,
       body: JSON.stringify({ answer }),
     };
+
   } catch (err) {
     return {
       statusCode: 500,
       headers: BASE_HEADERS,
-      body: JSON.stringify({ error: "Server error", message: String(err?.message || err) }),
+      body: JSON.stringify({
+        error: "Server error",
+        message: String(err?.message || err),
+      }),
     };
   }
 };
