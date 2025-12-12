@@ -13,7 +13,7 @@
     body { margin:0; padding:10px; background:#000; color:#fff; font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif; }
     .wrap { max-width:980px; margin:0 auto; }
     #videoBox { position:relative; width:100%; background:#000; border-radius:12px; overflow:hidden; border:1px solid rgba(0,255,0,0.35); }
-    #video { width:100%; height:auto; transform-origin:center center; transform:scale(0.8); } /* “0.8배율”은 iOS에서 카메라 zoom<1이 막히는 경우가 많아 표시만 0.8 */
+    #video { width:100%; height:auto; transform-origin:center center; transform:scale(0.8); } /* 표시용 0.8 */
     .btnRow { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0; }
     button { padding:10px 12px; border-radius:10px; border:1px solid #444; background:#111; color:#fff; font-size:14px; }
     button:active { transform:scale(0.98); }
@@ -57,18 +57,23 @@
   // =========================
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  const OCR_INTERVAL_MS = 3000;                  // 3초마다 OCR 시도
-  const INSUFFICIENT_WARN_MS = 60 * 1000;        // 1분 안내
-  const INSUFFICIENT_AUTO_SOLVE_MS = 8 * 60 * 1000; // 8분이면 부족이어도 자동풀이
-  const READY_LEN_TARGET = 2400;                 // 공백 제외 누적 길이 기준
-  const MAX_PREVIEW_CHARS = 16000;               // 화면 표시 최대
-  const MAX_SEND_CHARS = 9000;                   // solve 전송 최대(뒤에서 자름)
+  const OCR_INTERVAL_MS = 3000;                      // 3초마다 OCR 시도
+  const INSUFFICIENT_WARN_MS = 60 * 1000;            // 1분 안내
+  const INSUFFICIENT_AUTO_SOLVE_MS = 8 * 60 * 1000;  // 8분이면 부족이어도 자동풀이
+  const READY_LEN_TARGET = 2400;                     // 공백 제외 누적 길이 기준
+  const MAX_PREVIEW_CHARS = 16000;                   // 화면 표시 최대
+  const MAX_SEND_CHARS = 9000;                       // solve 전송 최대(뒤에서 자름)
 
-  // v4 언어데이터(이게 제일 중요: 여기 틀리면 “로딩 중” 무한)
   const OCR_LANG = "kor";
-  const LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0"; // kor.traineddata 있음(안정적)
 
-  // 숫자/기호 제거(요청사항)
+  // ✅ 핵심: kor 언어파일 CDN 3개를 순서대로 자동 재시도
+  const LANG_PATHS = [
+    "https://cdn.jsdelivr.net/npm/@tesseract.js-data/kor/4.0.0_best/",
+    "https://unpkg.com/@tesseract.js-data/kor@4.0.0_best/",
+    "https://tessdata.projectnaptha.com/4.0.0/"
+  ];
+
+  // 숫자/기호 제거(요청사항: OCR 결과에서 제거)
   function normalizeText(raw) {
     const s = (raw || "")
       .replace(/\r/g, "")
@@ -106,9 +111,9 @@
   // =========================
   let stream = null;
 
-  // createWorker로 “엔진 로딩”을 확실히 끝내고, 이후엔 recognize만
   let worker = null;
   let engineReady = false;
+  let engineError = "";
   let ocrBusy = false;
 
   let segments = []; // {text, conf, sig}
@@ -138,7 +143,7 @@
   btnTTS.addEventListener("click", () => {
     ttsUnlocked = true;
     btnTTS.textContent = "🔊 음성 연결됨";
-    speak("음성 연결 완료. 이제 답안이 나오면 자동으로 읽어줍니다.");
+    speak("음성 연결 완료. 답안이 나오면 자동으로 읽어줍니다.");
   });
 
   btnRestart.addEventListener("click", () => location.reload());
@@ -162,43 +167,77 @@
   }
 
   // =========================
-  // OCR 엔진 초기화 (v4 안정판)
+  // OCR 엔진 초기화 (CDN 3개 자동 재시도 + 타임아웃)
   // =========================
   async function initOcrEngine() {
     engineReady = false;
+    engineError = "";
 
-    // 기존 워커 종료
     if (worker) {
       try { await worker.terminate(); } catch (e) {}
       worker = null;
     }
 
-    try {
-      worker = Tesseract.createWorker({
-        logger: (m) => {
-          if (!m || !m.status) return;
-          if (m.status.includes("loading") || m.status.includes("initializing")) {
-            setStatus("카메라 ON\nOCR 엔진 로딩 중...\n" + m.status);
-          }
+    worker = Tesseract.createWorker({
+      logger: (m) => {
+        if (!m || !m.status) return;
+        const st = String(m.status);
+        if (st.includes("loading") || st.includes("initializing")) {
+          setStatus(buildStatusText("OCR 엔진 로딩 중...", st));
         }
-      });
+      }
+    });
 
-      await worker.load();
-      await worker.loadLanguage(OCR_LANG, LANG_PATH);
-      await worker.initialize(OCR_LANG);
+    // worker.load 자체도 멈출 수 있어서 타임아웃 걸기
+    const withTimeout = (p, ms, msg) =>
+      Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
 
-      // 숫자/기호 방해 줄이기(완벽 차단은 불가, 그래도 도움됨)
-      await worker.setParameters({
-        tessedit_pageseg_mode: "6",
-        preserve_interword_spaces: "1",
-        tessedit_char_blacklist: "0123456789@#$%^&*_=+<>|{}[]~`",
-      });
+    try {
+      await withTimeout(worker.load(), 25000, "worker.load timeout");
 
-      engineReady = true;
-      setStatus(buildStatusText("OCR 엔진 로딩 완료", ""));
+      // ✅ 언어파일 경로 3개 시도
+      let ok = false;
+      let lastErr = "";
+
+      for (let i = 0; i < LANG_PATHS.length; i++) {
+        const lp = LANG_PATHS[i];
+        setStatus(buildStatusText("OCR 언어파일 다운로드 시도", `langPath: ${lp}`));
+
+        try {
+          await withTimeout(worker.loadLanguage(OCR_LANG, lp), 35000, "loadLanguage timeout");
+          await withTimeout(worker.initialize(OCR_LANG), 25000, "initialize timeout");
+
+          // 숫자/기호 방해 줄이기(완벽 차단은 불가. + 결과 normalize로 2차 제거)
+          await worker.setParameters({
+            tessedit_pageseg_mode: "6",
+            preserve_interword_spaces: "1",
+            tessedit_char_blacklist: "0123456789@#$%^&*_=+<>|{}[]~`",
+          });
+
+          ok = true;
+          engineReady = true;
+          engineError = "";
+          setStatus(buildStatusText("OCR 엔진 로딩 완료", `사용 langPath: ${lp}`));
+          break;
+        } catch (e) {
+          lastErr = String(e && e.message ? e.message : e);
+          // 다음 CDN으로 재시도
+          try { await worker.terminate(); } catch (x) {}
+          worker = Tesseract.createWorker({ logger: () => {} });
+          await withTimeout(worker.load(), 25000, "worker.load timeout(redo)");
+        }
+      }
+
+      if (!ok) {
+        engineReady = false;
+        engineError = "언어파일 다운로드 실패(네트워크/CDN 차단 가능). 와이파이/핫스팟으로 변경 후 새로고침 필요.\n" + lastErr;
+        setStatus(buildStatusText("OCR 엔진 로딩 실패", engineError));
+      }
+
     } catch (e) {
       engineReady = false;
-      setStatus("OCR 엔진 로딩 실패: " + String(e && e.message ? e.message : e) + "\n\nLTE/와이파이 확인 후 새로고침");
+      engineError = String(e && e.message ? e.message : e);
+      setStatus(buildStatusText("OCR 엔진 로딩 실패", engineError));
     }
   }
 
@@ -225,10 +264,9 @@
     canvas.width = outW; canvas.height = outH;
     ctx.drawImage(video, 0, 0, outW, outH);
 
-    // 대비 약간 올리기
     const img = ctx.getImageData(0, 0, outW, outH);
     const d = img.data;
-    const contrast = 1.25;
+    const contrast = 1.28;
     const intercept = 128 * (1 - contrast);
 
     for (let i = 0; i < d.length; i += 4) {
@@ -245,12 +283,10 @@
   }
 
   // =========================
-  // 누적(“비슷한 문장 더 좋은 걸로 교체” 초간단 버전)
+  // 누적(비슷하면 더 좋은 걸로 교체)
   // =========================
   function makeSig(s) {
-    const t = (s || "").replace(/\s+/g, "").slice(0, 600);
-    // 초간단 시그니처: 앞부분 기준
-    return t;
+    return (s || "").replace(/\s+/g, "").slice(0, 600);
   }
 
   function mergeSegment(text, conf) {
@@ -258,7 +294,6 @@
     let best = -1;
 
     for (let i=0;i<segments.length;i++){
-      // 앞 200자 기준으로 겹치면 같은 세그먼트라고 보고 교체
       const a = segments[i].sig.slice(0, 200);
       const b = sig.slice(0, 200);
       if (a && b && a === b) { best = i; break; }
@@ -282,12 +317,12 @@
 
   function getAccumulatedText() {
     const joined = segments.map(s=>s.text).join("\n\n");
-    if (joined.length <= MAX_PREVIEW_CHARS) return joined;
-    return joined.slice(joined.length - MAX_PREVIEW_CHARS);
+    if (joined.length <= 16000) return joined;
+    return joined.slice(joined.length - 16000);
   }
 
   // =========================
-  // 지문 부족 타이머
+  // 지문 부족
   // =========================
   function markInsufficient() {
     const now = Date.now();
@@ -317,7 +352,8 @@
     lines.push("지문 부족 지속: " + (insufficientSince ? (sec + "초 (1분 안내, 8분 자동풀이)") : "0초"));
     lines.push("OCR 엔진: " + (engineReady ? "준비됨" : "로딩/불안정"));
     lines.push("마지막 메시지: " + (lastMsg || "-"));
-    if (extra) lines.push(extra);
+    if (!engineReady && engineError) lines.push("엔진 에러: " + engineError);
+    if (extra) lines.push(String(extra));
     return lines.join("\n");
   }
 
@@ -330,7 +366,6 @@
     if (!engineReady || !worker) return;
     if (ocrBusy) return;
 
-    // 비디오 준비 안 됐으면 부족 처리
     if (!video.videoWidth || !video.videoHeight) {
       markInsufficient();
       setStatus(buildStatusText("비디오 준비 대기", ""));
@@ -342,8 +377,8 @@
       setStatus(buildStatusText("OCR 진행 중...", ""));
 
       const canvas = buildOcrCanvas();
-
       const res = await worker.recognize(canvas);
+
       const conf = (res && res.data && typeof res.data.confidence === "number") ? res.data.confidence : 0;
       const raw = (res && res.data && res.data.text) ? res.data.text : "";
 
@@ -365,7 +400,6 @@
       if (accLen >= READY_LEN_TARGET) clearInsufficient();
       else markInsufficient();
 
-      // 자동 풀이 조건
       if (!solvedOnce) {
         if (accLen >= READY_LEN_TARGET) {
           await triggerSolve(false, "누적 지문이 충분해 자동 풀이합니다.", false);
@@ -386,12 +420,13 @@
 
       setStatus(buildStatusText("OCR 완료", `len=${len}, conf=${conf.toFixed(1)}%`));
     } catch (e) {
-      // 크래시/Aborted 등: 워커 재시작
       const msg = String(e && e.message ? e.message : e);
       setStatus(buildStatusText("OCR 에러 → 엔진 재시작", msg));
 
+      engineReady = false;
+      engineError = msg;
+
       try {
-        engineReady = false;
         if (worker) { try { await worker.terminate(); } catch (x) {} worker = null; }
         await initOcrEngine();
       } catch (x) {}
@@ -416,7 +451,6 @@
     if (!force && sendLen < 80) return;
 
     solvedOnce = true;
-
     answerOut.textContent = "풀이 생성 중...\n" + reason;
 
     try {
@@ -460,7 +494,6 @@
     await startCamera();
     await initOcrEngine();
 
-    // 자동 OCR: 절대 멈추지 않게 setInterval
     setInterval(() => {
       if (!engineReady) {
         setStatus(buildStatusText("OCR 엔진 로딩/불안정(네트워크 확인)", ""));
@@ -475,7 +508,3 @@
 </script>
 </body>
 </html>
-
-
-
-
