@@ -1,19 +1,16 @@
 // netlify/functions/solve.js
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-// 타임아웃(초 단위)
 const TIMEOUT_MS = 25000;
 
 exports.handler = async (event) => {
   try {
-    // CORS (같은 도메인이면 필요 없지만, 안전하게)
     if (event.httpMethod === "OPTIONS") {
       return {
         statusCode: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Headers": "Content-Type",
           "Access-Control-Allow-Methods": "POST, OPTIONS",
         },
         body: "",
@@ -45,7 +42,6 @@ exports.handler = async (event) => {
       };
     }
 
-    // 프론트가 ocrText / ocr_text 둘 다 보낼 수 있게 호환
     const ocrText = String(body.ocrText || body.ocr_text || "").trim();
     const mode = String(body.mode || "NONSUL").trim();
 
@@ -72,7 +68,6 @@ exports.handler = async (event) => {
       };
     }
 
-    // 너무 긴 텍스트로 타임아웃/비용 폭발 방지
     const MAX_CHARS = 9000;
     const trimmed = ocrText.length > MAX_CHARS ? ocrText.slice(ocrText.length - MAX_CHARS) : ocrText;
 
@@ -107,9 +102,9 @@ ${trimmed}
 `.trim();
 
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    let rawText = "";
+    let upstreamRaw = "";
     try {
       const resp = await fetch(OPENROUTER_URL, {
         method: "POST",
@@ -124,22 +119,21 @@ ${trimmed}
           model: "openrouter/auto",
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userContent }
+            { role: "user", content: userContent },
           ],
           temperature: 0.7,
           max_tokens: 2200,
         }),
       });
 
-      rawText = await resp.text();
+      upstreamRaw = await resp.text();
 
-      // JSON 파싱 실패(HTML 에러 등) 대비
       let data;
       try {
-        data = JSON.parse(rawText);
+        data = JSON.parse(upstreamRaw);
       } catch (e) {
         return {
-          statusCode: resp.status || 502,
+          statusCode: 502,
           headers: {
             "Access-Control-Allow-Origin": "*",
             "Content-Type": "application/json; charset=utf-8",
@@ -147,7 +141,7 @@ ${trimmed}
           body: JSON.stringify({
             error: "Upstream returned non-JSON",
             upstream_status: resp.status,
-            upstream_body: rawText.slice(0, 2000),
+            upstream_body: upstreamRaw.slice(0, 2000),
           }),
         };
       }
@@ -190,11 +184,11 @@ ${trimmed}
         },
         body: JSON.stringify({
           error: isAbort ? "Upstream timeout" : ("Server error: " + (err && err.message ? err.message : String(err))),
-          upstream_body: rawText ? rawText.slice(0, 1000) : "",
+          upstream_body: upstreamRaw ? upstreamRaw.slice(0, 1000) : "",
         }),
       };
     } finally {
-      clearTimeout(t);
+      clearTimeout(timer);
     }
   } catch (err) {
     return {
