@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site | Auto OCR → Auto Solve</title>
+  <title>Auto OCR (누적) → Auto Solve + TTS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 
   <!-- Tesseract v5 -->
@@ -26,12 +26,7 @@
       overflow: hidden;
       background: #000;
     }
-    #video {
-      width: 100%;
-      height: auto;
-      display: block;
-      transform-origin: center center;
-    }
+    #video { width: 100%; height: auto; display: block; }
     #overlay {
       position: absolute;
       inset: 0;
@@ -45,7 +40,7 @@
       border-radius: 10px;
       background: #111;
       font-size: 13px;
-      line-height: 1.4;
+      line-height: 1.45;
       white-space: pre-wrap;
     }
     .grid {
@@ -77,8 +72,8 @@
       padding: 10px;
       margin: 0;
     }
-    textarea { height: 200px; resize: vertical; }
-    pre { min-height: 220px; white-space: pre-wrap; }
+    textarea { height: 240px; resize: vertical; }
+    pre { min-height: 240px; white-space: pre-wrap; }
     .hint {
       margin-top: 6px;
       font-size: 12px;
@@ -98,9 +93,11 @@
 
     <div class="grid">
       <div class="panel">
-        <h3>실시간 OCR 미리보기</h3>
+        <h3>누적 OCR 미리보기</h3>
         <textarea id="ocrPreview" readonly></textarea>
-        <div class="hint">iOS에서 음성(TTS)이 안 나오면: 화면을 한 번 탭하면 음성이 활성화되는 경우가 많다.</div>
+        <div class="hint">
+          iOS 음성(TTS) 팁: 화면을 한 번 탭 + 무음모드 해제 + 볼륨 올리기.
+        </div>
       </div>
 
       <div class="panel">
@@ -117,28 +114,41 @@
   // =========================
   const OCR_INTERVAL_MS = 3000;
 
-  // 임시 threshold(나중에 바꿔도 됨)
+  // 글자수 기반 최소치(구조 인식이 우선이지만, 완전 짧은 건 막음)
+  const MIN_SOLVE_LEN_EFFECTIVE = 900;
+
+  // "충분" 임시 기준 (구조가 다 잡히면 이거보다 조금 작아도 풀 수 있게 설계)
   const TEXT_THRESHOLD_EFFECTIVE = 2200;
 
-  // 부족 안내: 연속 1분
-  const INSUFFICIENT_WARN_MS = 60 * 1000;
+  // 부족 안내: 연속 5분
+  const INSUFFICIENT_WARN_MS = 5 * 60 * 1000;
 
-  // 최대 대기: 연속 3분이면 부족해도 풀이
-  const MAX_WAIT_MS = 180 * 1000;
+  // 최대 대기: 연속 8분이면 부족해도 자동풀이
+  const MAX_WAIT_MS = 8 * 60 * 1000;
 
-  // solve 함수 URL (같은 사이트면 상대경로가 안정적)
+  // solve 함수 (solve.js는 {ocrText} 받는 버전 기준)
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  // OCR 언어
+  // OCR 언어 (한국어 위주 + 영어 섞임 대비)
   const OCR_LANG = "kor+eng";
 
   // TTS
   const TTS_ENABLED = true;
-  const TTS_RATE = 1.05;
+  const TTS_RATE = 1.03;
   const TTS_PITCH = 1.0;
+  const TTS_STATUS_COOLDOWN_MS = 15000;
 
-  // 상태 음성 안내 쿨다운
-  const TTS_STATUS_COOLDOWN_MS = 12000;
+  // 자동 디지털 줌(크롭)
+  // 1.00=넓게(줌아웃), 0.70~0.75=확대(줌인)
+  let cropFactor = 0.90;
+  let lastCropAdjustAt = 0;
+  const CROP_MIN = 0.72;
+  const CROP_MAX = 1.00;
+  const CROP_ADJUST_COOLDOWN_MS = 6000;
+
+  // 중복 판정(같은 페이지를 계속 OCR하는 걸 흡수)
+  // similarity >= 0.75면 "거의 같은 내용"으로 보고 더 좋은 걸로 교체
+  const DUP_SIMILARITY = 0.75;
 
   // =========================
   // 1) DOM
@@ -149,59 +159,58 @@
   const answerBoxEl = document.getElementById("answerBox");
 
   // =========================
-  // 2) 내부 상태
+  // 2) 상태
   // =========================
   let stream = null;
-
   let ocrRunning = false;
   let lastOcrAt = 0;
 
-  let bestText = "";
-  let bestEffectiveLen = 0;
-  let bestConfidence = 0;
+  // 누적 OCR
+  let segments = []; // { text, effLen, conf }
+  let accText = "";
+  let accEffectiveLen = 0;
+  let accBestConf = 0;
 
+  // 카메라 상태
   let blocked = false;
   let tooNear = false;
   let tooFar = false;
 
-  let insufficientSince = null;
+  // "아직 완성 아님" 연속 시간
+  let notReadySince = null;
+
+  // solve 상태
   let solved = false;
   let solving = false;
 
+  // TTS 상태
   let lastStatusSpokenAt = 0;
   let audioUnlocked = false;
-
-  // ===== 자동 디지털 줌(크롭) 상태 =====
-  // cropFactor: 1.00 = 가장 넓게(줌아웃), 0.75 = 더 잘라서 확대(줌인)
-  let cropFactor = 0.90;
-  let lastCropAdjustAt = 0;
-  const CROP_MIN = 0.75;
-  const CROP_MAX = 1.00;
-  const CROP_ADJUST_COOLDOWN_MS = 6000;
-
-  // 움직임/밝기 분석용 썸네일 캔버스
-  const BW = 64, BH = 36;
-  const bCanvas = document.createElement("canvas");
-  bCanvas.width = BW;
-  bCanvas.height = BH;
-  const bCtx = bCanvas.getContext("2d", { willReadFrequently: true });
-  let prevThumb = null;
-  let lastStableStart = 0;
-
-  // OCR 캡처용 캔버스
-  const capCanvas = document.createElement("canvas");
-  const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
+  let voicesReady = false;
 
   // =========================
-  // 3) iOS 음성 언락(탭 1회)
+  // 3) iOS 음성 언락 + voice 로딩 대기
   // =========================
+  function initVoices() {
+    if (!("speechSynthesis" in window)) return;
+    const tryLoad = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length) voicesReady = true;
+    };
+    tryLoad();
+    window.speechSynthesis.onvoiceschanged = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length) voicesReady = true;
+    };
+  }
+  initVoices();
+
   function unlockAudioOnce() {
     if (audioUnlocked) return;
     audioUnlocked = true;
     if (!TTS_ENABLED) return;
-    try {
-      speak("음성이 활성화되었습니다.", true);
-    } catch (e) {}
+    // 탭 직후 "짧은 음성"을 한 번 성공시키면 이후가 잘 됨
+    speak("음성이 활성화되었습니다.", true);
   }
   document.addEventListener("click", unlockAudioOnce, { passive: true, once: true });
   document.addEventListener("touchstart", unlockAudioOnce, { passive: true, once: true });
@@ -216,6 +225,16 @@
     statusEl.textContent = lines.join("\n");
   }
 
+  function chooseKoreanVoice() {
+    if (!("speechSynthesis" in window)) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    // ko-KR 우선
+    let v = voices.find(x => (x.lang || "").toLowerCase().startsWith("ko"));
+    if (v) return v;
+    // fallback: 첫 번째
+    return voices.length ? voices[0] : null;
+  }
+
   function speak(text, force = false) {
     if (!TTS_ENABLED) return;
     if (!("speechSynthesis" in window)) return;
@@ -226,15 +245,85 @@
     const tNow = now();
     if (!force && tNow - lastStatusSpokenAt < TTS_STATUS_COOLDOWN_MS) return;
 
+    // voices가 아직 안 로드된 경우: 그래도 시도는 하되, 약간 지연
+    const doSpeak = () => {
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(t);
+        u.lang = "ko-KR";
+        u.rate = TTS_RATE;
+        u.pitch = TTS_PITCH;
+
+        const v = chooseKoreanVoice();
+        if (v) u.voice = v;
+
+        lastStatusSpokenAt = tNow;
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+    };
+
+    if (!voicesReady) {
+      setTimeout(doSpeak, 250);
+    } else {
+      doSpeak();
+    }
+  }
+
+  function speakLong(text) {
+    if (!TTS_ENABLED) return;
+    if (!("speechSynthesis" in window)) return;
+
+    const t = (text || "").trim();
+    if (!t) return;
+
+    // iOS에서 길면 끊기는 경우가 있어 분할
+    const chunkSize = 900;
+    const chunks = [];
+    for (let i = 0; i < t.length; i += chunkSize) chunks.push(t.slice(i, i + chunkSize));
+
     try {
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(t);
-      u.lang = "ko-KR";
-      u.rate = TTS_RATE;
-      u.pitch = TTS_PITCH;
-      lastStatusSpokenAt = tNow;
-      window.speechSynthesis.speak(u);
+      let idx = 0;
+      const v = chooseKoreanVoice();
+
+      const speakNext = () => {
+        if (idx >= chunks.length) return;
+        const u = new SpeechSynthesisUtterance(chunks[idx]);
+        u.lang = "ko-KR";
+        u.rate = TTS_RATE;
+        u.pitch = TTS_PITCH;
+        if (v) u.voice = v;
+        u.onend = () => { idx += 1; speakNext(); };
+        window.speechSynthesis.speak(u);
+      };
+
+      // voices 아직 로드 중이면 약간 대기
+      setTimeout(speakNext, voicesReady ? 0 : 300);
     } catch (e) {}
+  }
+
+  function normalizeOcrText(text) {
+    // 너무 공격적인 "오타수정"은 위험해서,
+    // 안전한 정리(줄바꿈/공백/하이픈 줄끊김/이상문자 정리)만 함.
+    let t = String(text || "");
+
+    // 하이픈 줄바꿈(영문) 제거: "exam-\nple" -> "example"
+    t = t.replace(/-\s*\n\s*/g, "");
+
+    // 줄바꿈 주변 공백 정리
+    t = t.replace(/[ \t]+\n/g, "\n");
+    t = t.replace(/\n[ \t]+/g, "\n");
+
+    // 연속 공백 축소
+    t = t.replace(/[ \t]{2,}/g, " ");
+
+    // 이상한 제어문자 제거
+    t = t.replace(/[\u0000-\u001F\u007F]/g, "");
+
+    // 너무 많은 특수기호 줄이기(완전 삭제는 X)
+    t = t.replace(/[■□▢●◆◇]{2,}/g, " ");
+
+    return t.trim();
   }
 
   // =========================
@@ -244,7 +333,7 @@
     try {
       setStatus([
         "카메라 요청 중...",
-        "iOS에서 권한 팝업이 뜨면 '허용'을 눌러야 함."
+        "iOS 권한 팝업이 뜨면 '허용'을 눌러야 함."
       ]);
 
       const constraints = {
@@ -268,7 +357,7 @@
       setStatus([
         "카메라 ON",
         "자동 OCR 시작됨 (3초마다, 화면이 안정될 때만)",
-        "음성(TTS)이 필요하면 화면을 한 번 탭해보세요(iOS 제한)."
+        "음성(TTS)이 안 나오면: 화면 탭 + 무음모드 해제 + 볼륨 올리기"
       ]);
 
       requestAnimationFrame(analyzeLoop);
@@ -281,8 +370,15 @@
   }
 
   // =========================
-  // 6) 밝기/움직임/가려짐 판정
+  // 6) 밝기/움직임/가려짐
   // =========================
+  const BW = 64, BH = 36;
+  const bCanvas = document.createElement("canvas");
+  bCanvas.width = BW; bCanvas.height = BH;
+  const bCtx = bCanvas.getContext("2d", { willReadFrequently: true });
+  let prevThumb = null;
+  let lastStableStart = 0;
+
   function analyzeFrame() {
     if (!video.videoWidth || !video.videoHeight) {
       return { blocked: false, stable: false, avgBright: 255, diffAvg: 0 };
@@ -330,8 +426,11 @@
   }
 
   // =========================
-  // 7) 캡처(영상 → 캔버스) + 중앙 크롭(디지털 줌)
+  // 7) 캡처(영상 → 캔버스) + 중앙 크롭
   // =========================
+  const capCanvas = document.createElement("canvas");
+  const capCtx = capCanvas.getContext("2d", { willReadFrequently: true });
+
   function captureToCanvas() {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
@@ -344,16 +443,15 @@
       return capCanvas;
     }
 
-    // cropFactor 적용(자동 디지털 줌)
-    const scaleCrop = cropFactor; // 0.75~1.00
+    const scaleCrop = cropFactor; // 0.72~1.00
     const cropW = Math.floor(vw * scaleCrop);
     const cropH = Math.floor(vh * scaleCrop);
     const cropX = Math.floor((vw - cropW) / 2);
     const cropY = Math.floor((vh - cropH) / 2);
 
-    const maxW = 1600;
+    const maxW = 1920; // 글자 픽셀 확보를 위해 1600→1920
     const scale = Math.min(1, maxW / cropW);
-    const outW = Math.max(320, Math.floor(cropW * scale));
+    const outW = Math.max(360, Math.floor(cropW * scale));
     const outH = Math.max(240, Math.floor(cropH * scale));
 
     capCanvas.width = outW;
@@ -364,7 +462,172 @@
   }
 
   // =========================
-  // 8) OCR 1회
+  // 8) 중복/유사도(단순) + 누적 merge
+  // =========================
+  function tokenize(text) {
+    // 너무 길면 비용 커서 앞부분 위주로
+    const t = (text || "").slice(0, 1500);
+    // 공백 기준 토큰 (한글도 대부분 띄어쓰기 존재)
+    const arr = t.split(/\s+/).filter(Boolean);
+    // 너무 많으면 제한
+    return arr.slice(0, 220);
+  }
+
+  function jaccardSimilarity(a, b) {
+    const A = tokenize(a);
+    const B = tokenize(b);
+    if (!A.length || !B.length) return 0;
+
+    const setA = new Set(A);
+    const setB = new Set(B);
+
+    let inter = 0;
+    for (const x of setA) if (setB.has(x)) inter++;
+
+    const union = setA.size + setB.size - inter;
+    return union ? (inter / union) : 0;
+  }
+
+  function updateAccumulation(newText, newConf) {
+    const cleaned = normalizeOcrText(newText);
+    const effLen = effectiveLenOf(cleaned);
+    if (effLen < 20) return { changed: false, action: "ignore_too_short" };
+
+    // 너무 낮은 confidence는 버리되, 완전 0~5만 버림(한글은 conf가 들쑥날쑥)
+    if (newConf < 5) return { changed: false, action: "ignore_low_conf" };
+
+    // 첫 세그먼트
+    if (segments.length === 0) {
+      segments.push({ text: cleaned, effLen, conf: newConf });
+      rebuildAccumulated();
+      return { changed: true, action: "append_first" };
+    }
+
+    const last = segments[segments.length - 1];
+    const sim = jaccardSimilarity(last.text, cleaned);
+
+    if (sim >= DUP_SIMILARITY) {
+      // 같은 페이지/비슷한 내용으로 보고 더 좋은 쪽으로 교체
+      const better =
+        (effLen > last.effLen + 60) ||
+        (Math.abs(effLen - last.effLen) <= 60 && newConf > last.conf + 4);
+
+      if (better) {
+        segments[segments.length - 1] = { text: cleaned, effLen, conf: newConf };
+        rebuildAccumulated();
+        return { changed: true, action: `replace_last(sim=${sim.toFixed(2)})` };
+      } else {
+        return { changed: false, action: `dup_keep_last(sim=${sim.toFixed(2)})` };
+      }
+    }
+
+    // 새 페이지/새 구간으로 append
+    segments.push({ text: cleaned, effLen, conf: newConf });
+
+    // 세그먼트가 너무 쌓이면 앞쪽 일부만 유지(너무 길어지면 solve 타임아웃 위험)
+    // solve.js는 8000자로 잘라 쓰니, 여기서도 과도한 누적은 관리
+    if (segments.length > 12) segments = segments.slice(segments.length - 12);
+
+    rebuildAccumulated();
+    return { changed: true, action: `append_new(sim=${sim.toFixed(2)})` };
+  }
+
+  function rebuildAccumulated() {
+    // 그냥 문단 구분만 넣고 합침 (모델에 불필요한 라벨 넣지 않음)
+    accText = segments.map(s => s.text).join("\n\n");
+    accEffectiveLen = effectiveLenOf(accText);
+
+    // conf는 "가장 좋은 세그먼트" 기준으로 참고
+    accBestConf = 0;
+    for (const s of segments) {
+      if (typeof s.conf === "number" && s.conf > accBestConf) accBestConf = s.conf;
+    }
+
+    // 미리보기는 너무 길면 끝부분을 보여주는 게 “누적되고 있다” 느낌이 더 좋음
+    const maxPreview = 8000;
+    if (accText.length <= maxPreview) {
+      ocrPreviewEl.value = accText;
+    } else {
+      ocrPreviewEl.value = accText.slice(-maxPreview);
+    }
+  }
+
+  // =========================
+  // 9) “완성” 구조 판단 (문제/제시문 인식)
+  // =========================
+  function hasProblemStructure(text) {
+    // 다양한 표기 대응
+    const t = text || "";
+    const hasQ1 = /(\[?\s*문제\s*1\s*\]?)/.test(t) || /(1\)\s*)/.test(t);
+    const hasQ2 = /(\[?\s*문제\s*2\s*\]?)/.test(t) || /(2\)\s*)/.test(t);
+    return hasQ1 && hasQ2;
+  }
+
+  function hasPassageHint(text) {
+    const t = text || "";
+    // “제시문”, “보기”, “다음 글”, “자료” 등 신호
+    return /(제시문\s*\d*|보기|다음\s*글|다음은|자료\s*\d*)/.test(t);
+  }
+
+  function isReadyToSolve() {
+    // 최소한 너무 짧으면 금지
+    if (accEffectiveLen < MIN_SOLVE_LEN_EFFECTIVE) return false;
+
+    // 1순위: 문제 1/2 구조가 잡히면 거의 준비된 것
+    const structure = hasProblemStructure(accText);
+
+    // 제시문 신호까지 있으면 더 확실
+    const passage = hasPassageHint(accText);
+
+    // 구조 + (제시문 신호 또는 충분한 길이)면 ready
+    if (structure && (passage || accEffectiveLen >= TEXT_THRESHOLD_EFFECTIVE)) return true;
+
+    // 구조가 없더라도 길이가 매우 길면(사용자 최종 fallback) ready로 보긴 하지만,
+    // 너가 “문제까지 다 인식했을 때” 원하니 여기서는 false 유지.
+    return false;
+  }
+
+  function buildInsufficientReason() {
+    if (blocked) return "카메라가 가려졌습니다. 렌즈를 가리지 않게 해주세요.";
+    if (tooFar) return "지문이 너무 멀어 보입니다. 종이를 화면에 더 크게 채워주세요.";
+    if (tooNear) return "지문이 너무 가까워 보입니다. 5에서 10센티미터 정도만 멀리 두고 다시 비춰주세요.";
+    // 구조 기반 안내
+    const structure = hasProblemStructure(accText);
+    if (!structure) return "문제 1과 문제 2가 아직 충분히 인식되지 않았습니다. 문제 부분을 화면에 크게 비춰주세요.";
+    return "아직 제시문이나 일부 문장이 부족합니다. 페이지를 조금 더 오래, 흔들림 없이 비춰주세요.";
+  }
+
+  function buildStatusLines(extraLine) {
+    const lines = [];
+    lines.push("자동 OCR(누적) → 자동 풀이");
+    lines.push(`카메라 상태: ${blocked ? "가려짐" : "정상"}`);
+
+    let dist = "정상(추정)";
+    if (tooFar) dist = "너무 멂(추정)";
+    else if (tooNear) dist = "너무 가까움(추정)";
+    lines.push(`거리 상태: ${dist}`);
+
+    lines.push(`자동 크롭(디지털 줌): ${cropFactor.toFixed(2)} (1.00=넓게, 0.72=확대)`);
+    lines.push(`누적 세그먼트 수: ${segments.length}`);
+    lines.push(`누적 길이(공백제외): ${accEffectiveLen}`);
+    lines.push(`OCR 참고 신뢰도(최대): ${accBestConf.toFixed(1)}%`);
+
+    const ready = isReadyToSolve();
+    lines.push(`완성 판정(문제1·2/제시문): ${ready ? "OK" : "아직 부족"}`);
+
+    if (notReadySince && !ready) {
+      const sec = Math.floor((now() - notReadySince) / 1000);
+      lines.push(`부족 지속: ${sec}초 (5분 안내 / 8분 자동풀이)`);
+    } else {
+      lines.push("부족 지속: 0초");
+    }
+
+    if (extraLine) lines.push(String(extraLine));
+    return lines;
+  }
+
+  // =========================
+  // 10) OCR 1회
   // =========================
   function shouldTryOcr() {
     if (solved || solving) return false;
@@ -403,68 +666,60 @@
         ? result.data.confidence
         : 0;
 
-      const text = rawText.replace(/\s+\n/g, "\n").trim();
-      const effLen = effectiveLenOf(text);
+      const cleaned = normalizeOcrText(rawText);
+      const effLen = effectiveLenOf(cleaned);
 
       // 거리 추정(휴리스틱)
       tooFar = (effLen < 400 && conf < 35);
       tooNear = (effLen >= 800 && conf < 35);
 
-      // ===== 자동 디지털 줌 조절 =====
+      // 자동 디지털 줌 조절
       const tNow2 = now();
       if (tNow2 - lastCropAdjustAt >= CROP_ADJUST_COOLDOWN_MS) {
         if (tooNear) {
-          // 너무 가까움 → 더 넓게(줌아웃)
-          cropFactor = Math.min(CROP_MAX, cropFactor + 0.05);
+          cropFactor = Math.min(CROP_MAX, cropFactor + 0.05); // 줌아웃
           lastCropAdjustAt = tNow2;
         } else if (tooFar) {
-          // 너무 멂 → 더 잘라서 확대(줌인)
-          cropFactor = Math.max(CROP_MIN, cropFactor - 0.05);
+          cropFactor = Math.max(CROP_MIN, cropFactor - 0.05); // 확대
           lastCropAdjustAt = tNow2;
         }
       }
 
-      // 베스트 텍스트 업데이트
-      const lenGain = effLen - bestEffectiveLen;
-      const isBetter =
-        (effLen > bestEffectiveLen + 80) ||
-        (Math.abs(lenGain) <= 80 && conf > bestConfidence + 5);
+      // 누적 업데이트(중복이면 교체, 아니면 append)
+      const mergeInfo = updateAccumulation(cleaned, conf);
 
-      if (isBetter && effLen >= 20) {
-        bestText = text;
-        bestEffectiveLen = effLen;
-        bestConfidence = conf;
-      }
-
-      ocrPreviewEl.value = bestText || text;
-
+      // ready/타이머
+      const ready = isReadyToSolve();
       const tNow = now();
-      if (bestEffectiveLen < TEXT_THRESHOLD_EFFECTIVE) {
-        if (!insufficientSince) insufficientSince = tNow;
+
+      if (!ready) {
+        if (!notReadySince) notReadySince = tNow;
       } else {
-        insufficientSince = null;
+        notReadySince = null;
       }
 
-      setStatus(buildStatusLines("OCR 완료"));
+      setStatus(buildStatusLines(`OCR 완료 · 누적:${mergeInfo.action}`));
 
-      // 자동 풀이 조건
+      // 자동풀이 조건
       if (!solved && !solving) {
-        const enough = bestEffectiveLen >= TEXT_THRESHOLD_EFFECTIVE;
-        const insufficientDuration = insufficientSince ? (tNow - insufficientSince) : 0;
-
-        if (insufficientSince && insufficientDuration >= INSUFFICIENT_WARN_MS && insufficientDuration < MAX_WAIT_MS) {
-          const reason = buildInsufficientReason();
-          speak(reason, false);
-        }
-
-        if (enough) {
-          await autoSolve("충분한 텍스트 확보");
+        if (ready) {
+          await autoSolve("문제/제시문 구조 인식 완료");
           return;
         }
 
-        if (insufficientSince && insufficientDuration >= MAX_WAIT_MS) {
-          await autoSolve("최대 대기시간 초과. 현재 인식된 내용으로 풀이");
-          return;
+        if (notReadySince) {
+          const dur = tNow - notReadySince;
+
+          // 5분 연속 부족이면 “진짜 부족할 때만” 안내
+          if (dur >= INSUFFICIENT_WARN_MS && dur < MAX_WAIT_MS) {
+            speak(buildInsufficientReason(), false);
+          }
+
+          // 8분이면 부족해도 자동풀이(너 요구)
+          if (dur >= MAX_WAIT_MS) {
+            await autoSolve("8분 경과. 현재 인식된 내용으로 풀이");
+            return;
+          }
         }
       }
 
@@ -477,66 +732,29 @@
   }
 
   // =========================
-  // 9) 상태 문구
-  // =========================
-  function buildInsufficientReason() {
-    if (blocked) return "카메라가 가려졌습니다. 렌즈를 가리지 않게 해주세요.";
-    if (tooFar) return "지문이 너무 멀어 보입니다. 종이를 화면에 더 크게 채워주세요.";
-    if (tooNear) return "지문이 너무 가까워 보입니다. 5에서 10센티미터 정도만 멀리 두고 다시 비춰주세요.";
-    return "아직 지문이 부족합니다. 페이지를 조금 더 오래, 흔들림 없이 비춰주세요.";
-  }
-
-  function buildStatusLines(extraLine) {
-    const lines = [];
-    lines.push("자동 OCR → 자동 풀이");
-    lines.push(`카메라 상태: ${blocked ? "가려짐" : "정상"}`);
-
-    let dist = "정상(추정)";
-    if (tooFar) dist = "너무 멂(추정)";
-    else if (tooNear) dist = "너무 가까움(추정)";
-    lines.push(`거리 상태: ${dist}`);
-
-    lines.push(`자동 크롭(디지털 줌): ${cropFactor.toFixed(2)} (1.00=넓게, 0.75=확대)`);
-
-    lines.push(`베스트 OCR 길이(공백제외): ${bestEffectiveLen} / 기준 ${TEXT_THRESHOLD_EFFECTIVE}`);
-    lines.push(`베스트 OCR 신뢰도: ${bestConfidence.toFixed(1)}%`);
-
-    if (insufficientSince && bestEffectiveLen < TEXT_THRESHOLD_EFFECTIVE) {
-      const sec = Math.floor((now() - insufficientSince) / 1000);
-      lines.push(`지문 부족 지속: ${sec}초 (1분부터 안내, 3분이면 자동 풀이)`);
-    } else {
-      lines.push("지문 부족 지속: 0초");
-    }
-
-    if (extraLine) lines.push(String(extraLine));
-    return lines;
-  }
-
-  // =========================
-  // 10) 자동 풀이(solve 호출)
+  // 11) solve 호출
   // =========================
   async function autoSolve(reason) {
     if (solved || solving) return;
     solving = true;
 
-    const payloadText = (bestText || "").trim();
-    const eff = bestEffectiveLen;
+    // solve.js 내부에서 8000자로 자르니, 여기서도 너무 길면 미리 자름
+    let payloadText = (accText || "").trim();
+    if (payloadText.length > 8000) payloadText = payloadText.slice(0, 8000);
 
     setStatus(buildStatusLines(`풀이 요청 중... (${reason})`));
     answerBoxEl.textContent = "풀이 생성 중...";
-
-    const body = JSON.stringify({ ocrText: payloadText });
 
     try {
       const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body
+        body: JSON.stringify({ ocrText: payloadText })
       });
 
       const ct = (res.headers.get("content-type") || "").toLowerCase();
-
       let out = "";
+
       if (ct.includes("application/json")) {
         let data;
         try { data = await res.json(); }
@@ -561,8 +779,7 @@
       solved = true;
       answerBoxEl.textContent = out;
 
-      setStatus(buildStatusLines(`풀이 완료 (사용 텍스트 길이 ${eff})`));
-
+      setStatus(buildStatusLines("풀이 완료"));
       speak("답안이 생성되었습니다.", true);
       speakLong(out);
 
@@ -575,42 +792,8 @@
     }
   }
 
-  function speakLong(text) {
-    if (!TTS_ENABLED) return;
-    if (!("speechSynthesis" in window)) return;
-
-    const t = (text || "").trim();
-    if (!t) return;
-
-    const chunkSize = 900;
-    const chunks = [];
-    for (let i = 0; i < t.length; i += chunkSize) {
-      chunks.push(t.slice(i, i + chunkSize));
-    }
-
-    try {
-      window.speechSynthesis.cancel();
-      let idx = 0;
-
-      const speakNext = () => {
-        if (idx >= chunks.length) return;
-        const u = new SpeechSynthesisUtterance(chunks[idx]);
-        u.lang = "ko-KR";
-        u.rate = TTS_RATE;
-        u.pitch = TTS_PITCH;
-        u.onend = () => {
-          idx += 1;
-          speakNext();
-        };
-        window.speechSynthesis.speak(u);
-      };
-
-      speakNext();
-    } catch (e) {}
-  }
-
   // =========================
-  // 11) OCR 루프
+  // 12) OCR 루프
   // =========================
   function scheduleOcrLoop() {
     doOcrOnce();
@@ -618,9 +801,10 @@
   }
 
   // =========================
-  // 12) 시작
+  // 13) 시작
   // =========================
   startCamera();
+
 })();
 </script>
 </body>
