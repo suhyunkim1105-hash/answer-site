@@ -1,3 +1,5 @@
+
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -91,15 +93,16 @@
 
     <div id="status">초기화 중...</div>
 
-    <!-- 배율(디지털 줌) 슬라이더 -->
+    <!-- 배율(디지털 줌) 슬라이더: 줌 아웃 중심 (0.85 ~ 1.00) -->
     <div style="margin-top:10px; padding:10px; border:1px solid #333; border-radius:10px; background:#111;">
       <div style="font-size:13px; margin-bottom:6px; color:#cfcfcf;">배율(디지털 줌)</div>
       <div style="display:flex; gap:10px; align-items:center;">
-        <input id="zoomRange" type="range" min="0.72" max="1.00" step="0.01" value="0.90" style="flex:1;">
-        <div id="zoomLabel" style="width:90px; font-size:12px; color:#aaa; text-align:right;">0.90</div>
+        <!-- 기본값 1.00 = 최대 줌 아웃(종이 전체 보이게) -->
+        <input id="zoomRange" type="range" min="0.85" max="1.00" step="0.01" value="1.00" style="flex:1;">
+        <div id="zoomLabel" style="width:90px; font-size:12px; color:#aaa; text-align:right;">1.00</div>
       </div>
       <div style="margin-top:6px; font-size:12px; color:#888;">
-        1.00 = 넓게(줌아웃), 0.72 = 확대(줌인). 글자가 선명하고 화면을 크게 채우는 쪽이 유리.
+        1.00 = 최대 줌 아웃(종이 전체), 0.85 = 살짝 확대. 기본은 1.00에 두고 시작한 뒤, 필요하면 0.90~0.95 정도로만 조절.
       </div>
     </div>
 
@@ -150,9 +153,9 @@
   const TTS_PITCH = 1.0;
   const TTS_STATUS_COOLDOWN_MS = 15000;
 
-  // 디지털 줌(크롭) - 사용자 슬라이더로만 조절(자동 조절 OFF)
-  let cropFactor = 0.90;
-  const CROP_MIN = 0.72;
+  // 디지털 줌(크롭) - 줌 아웃 중심: 0.85 ~ 1.00
+  let cropFactor = 1.00;  // 기본: 최대 줌 아웃(전체 프레임)
+  const CROP_MIN = 0.85;
   const CROP_MAX = 1.00;
 
   // 중복 판정(같은 페이지 반복 OCR 흡수)
@@ -173,18 +176,15 @@
     const num = Number(v);
     if (!Number.isFinite(num)) return;
 
-    // cropFactor = 캡처에 쓸 중앙 크롭 비율 (0.72~1.00)
     cropFactor = Math.min(CROP_MAX, Math.max(CROP_MIN, num));
 
-    // 라벨 표시
     if (zoomLabelEl) {
       zoomLabelEl.textContent = cropFactor.toFixed(2);
     }
 
-    // 화면 미리보기(비디오) 확대/축소
     if (video) {
       video.style.transformOrigin = "center center";
-      const scale = 1 / cropFactor; // cropFactor 작을수록 화면을 더 확대해서 보여줌
+      const scale = 1 / cropFactor; // cropFactor 작을수록(0.85) 화면 확대, 1.00이면 원본
       video.style.transform = `scale(${scale})`;
     }
   }
@@ -598,7 +598,7 @@
     else if (tooNear) dist = "너무 가까움(추정)";
     lines.push(`거리 상태: ${dist}`);
 
-    lines.push(`배율(디지털 줌): ${cropFactor.toFixed(2)} (1.00=넓게, 0.72=확대)`);
+    lines.push(`배율(디지털 줌): ${cropFactor.toFixed(2)} (1.00=최대 줌 아웃, 0.85=살짝 확대)`);
     lines.push(`누적 세그먼트 수: ${segments.length}`);
     lines.push(`누적 길이(공백제외): ${accEffectiveLen}`);
     lines.push(`OCR 참고 신뢰도(최대): ${accBestConf.toFixed(1)}%`);
@@ -811,5 +811,3 @@
 </script>
 </body>
 </html>
-
-
