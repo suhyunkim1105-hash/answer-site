@@ -109,6 +109,23 @@
   </div>
 </div>
 
+<!-- 🔹 논술 자동 풀이 테스트 UI (여기 추가) -->
+<div style="max-width: 960px; margin: 16px auto; padding: 10px; border: 1px solid #444; background:#111; border-radius:8px;">
+  <h3 style="margin-top:0;">논술 자동 풀이 테스트 (Netlify Functions → solve)</h3>
+  <p style="font-size:13px; color:#ccc;">
+    OCR로 인식된 <strong>전체 제시문 + [문제 1], [문제 2] 텍스트</strong>를 아래 칸에 붙여 넣고, [풀이 요청]을 눌러 봐.
+  </p>
+  <textarea id="ocrTextInput" rows="8"
+            style="width:100%; box-sizing:border-box; font-size:12px; font-family:monospace; background:#000; color:#fff; border-radius:4px; padding:6px;"></textarea>
+  <button id="solveButton"
+          style="margin-top:8px; padding:6px 10px; font-size:12px; border-radius:6px; border:1px solid #666; background:#222; color:#fff; cursor:pointer;">
+    풀이 요청
+  </button>
+  <h4 style="margin-top:14px;">답안</h4>
+  <pre id="answerOutput"
+       style="white-space:pre-wrap; border:1px solid #333; padding:8px; min-height:100px; background:#000; color:#fff; border-radius:4px; font-size:12px;"></pre>
+</div>
+
 <script>
   // ---------------- Firebase ----------------
   const firebaseConfig = {
@@ -175,7 +192,7 @@
     doOCROnce(true);
   });
 
-  // ---------- 카메라 시작 (아이폰14 + 갤럭시용 공통 튜닝) ----------
+  // ---------- 카메라 시작 ----------
   async function startCamera() {
     try {
       const constraints = {
@@ -198,7 +215,6 @@
 
       const track = stream.getVideoTracks()[0];
       if (track) {
-        // 텍스트에 유리한 디테일 모드 요청
         if ("contentHint" in track) {
           try {
             track.contentHint = "detail";
@@ -207,7 +223,6 @@
           }
         }
 
-        // 실제 해상도 표시
         const s = track.getSettings ? track.getSettings() : {};
         const resInfo =
           s.width && s.height ? ` (${s.width}x${s.height}) ` : " ";
@@ -215,7 +230,6 @@
         statusLine.textContent =
           `카메라 ON${resInfo}– 모드: ${currentMode} (화면 안정되면 자동 인식)`;
 
-        // 고해상도 스틸 캡처 준비
         if ("ImageCapture" in window) {
           try {
             imageCapture = new ImageCapture(track);
@@ -262,7 +276,6 @@
     const avgBright = sumBright / len;
     const diffAvg   = prevThumb ? (diffSum / len) : 0;
 
-    // 너무 어두우면 가려진 것으로 간주
     const blocked = avgBright < 20;
 
     const now = Date.now();
@@ -301,7 +314,6 @@
           : `${base} · 카메라 상태: 정상`;
       }
 
-      // 8초마다, 화면 안정 + 안 가려짐 + OCR 안 돌고 있으면 한 번 인식
       if (!blocked && stable && !ocrRunning && now - lastOcrTime > 8000) {
         lastOcrTime = now;
         doOCROnce(false);
@@ -314,7 +326,6 @@
 
   // ---------- 스틸 캡처 ----------
   async function captureToCanvas(canvas, ctx) {
-    // 1순위: takePhoto()
     if (imageCapture && typeof imageCapture.takePhoto === "function") {
       try {
         const blob = await imageCapture.takePhoto();
@@ -326,7 +337,6 @@
       }
     }
 
-    // 2순위: grabFrame()
     if (imageCapture && typeof imageCapture.grabFrame === "function") {
       try {
         const bitmap = await imageCapture.grabFrame();
@@ -337,11 +347,9 @@
       }
     }
 
-    // 3순위: video 프레임
     fillCanvasFromVideoCenter(canvas, ctx);
   }
 
-  // 중앙 90% 크롭 + 가로 최대 1600px
   function drawCroppedScaled(source, canvas, ctx) {
     const fullW = source.width;
     const fullH = source.height;
@@ -366,7 +374,6 @@
     );
   }
 
-  // 비디오 프레임에서 중앙 90% 캡처 (iOS 등 폴백)
   function fillCanvasFromVideoCenter(canvas, ctx) {
     if (!video.videoWidth || !video.videoHeight) {
       canvas.width = 640;
@@ -435,7 +442,6 @@
         return;
       }
 
-      // 신뢰도 5% 미만이면 버림 (AI 호출 안 함)
       if (conf < 5) {
         statusLine.textContent =
           `OCR 완료 (신뢰도 ${conf.toFixed(1)}%로 너무 낮아서 무시함)`;
@@ -470,6 +476,48 @@
   }
 
   startCamera();
+</script>
+
+<!-- 🔹 solve 함수 직접 호출 JS -->
+<script>
+  async function callSolve() {
+    const inputEl = document.getElementById("ocrTextInput");
+    const outputEl = document.getElementById("answerOutput");
+
+    const ocrText = (inputEl.value || "").trim();
+    if (!ocrText) {
+      alert("OCR로 인식된 제시문 + [문제 1], [문제 2] 텍스트를 먼저 입력해 줘.");
+      return;
+    }
+
+    outputEl.textContent = "풀이 생성 중...";
+
+    try {
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ocrText })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.answer) {
+        outputEl.textContent = data.answer;
+      } else {
+        outputEl.textContent =
+          "에러 발생\n" +
+          "status: " + res.status + "\n" +
+          "message: " + (data.error || JSON.stringify(data));
+      }
+    } catch (err) {
+      outputEl.textContent = "요청 실패: " + (err.message || String(err));
+    }
+  }
+
+  document.getElementById("solveButton")
+    .addEventListener("click", callSolve);
 </script>
 </body>
 </html>
