@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>논술 자동풀이 (아이폰 카메라)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 12px;
+      background: #111;
+      color: #eee;
+    }
+    h1 {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      margin: 0 auto 8px auto;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: auto;
+    }
+    button {
+      width: 100%;
+      padding: 10px 14px;
+      margin: 4px 0;
+      border-radius: 8px;
+      border: none;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    #captureBtn {
+      background: #4caf50;
+      color: #fff;
+    }
+    #solveBtn {
+      background: #2196f3;
+      color: #fff;
+    }
+    #status {
+      font-size: 13px;
+      margin: 6px 0;
+      min-height: 18px;
+      white-space: pre-line;
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      background: #000;
+      color: #eee;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      background: #000;
+      border-radius: 6px;
+      padding: 8px;
+      border: 1px solid #444;
+      font-size: 13px;
+    }
+    .section-title {
+      margin-top: 10px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+  </style>
+  <!-- Tesseract.js (브라우저용 OCR 라이브러리) -->
+  <script src="https://unpkg.com/tesseract.js@2.1.0/dist/tesseract.min.js"></script>
+</head>
+<body>
+  <h1>논술 자동풀이 (아이폰 14 카메라)</h1>
+
+  <div class="video-wrapper">
+    <video id="video" autoplay playsinline></video>
+  </div>
+
+  <button id="captureBtn">① 현재 화면 캡처 + OCR</button>
+  <button id="solveBtn">② OCR 텍스트로 논술 자동 풀이</button>
+
+  <div id="status"></div>
+
+  <div class="section-title">OCR 결과 (문제 전체 텍스트)</div>
+  <textarea id="ocrText" placeholder="여기에 OCR 텍스트가 자동으로 채워진다. 필요하면 직접 수정해도 됨."></textarea>
+
+  <div class="section-title">AI 논술 답안</div>
+  <pre id="answer"></pre>
+
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const captureBtn = document.getElementById("captureBtn");
+    const solveBtn = document.getElementById("solveBtn");
+    const statusEl = document.getElementById("status");
+    const ocrTextArea = document.getElementById("ocrText");
+    const answerEl = document.getElementById("answer");
+
+    // 1) 아이폰 카메라 시작
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "environment" // 후면 카메라
+          },
+          audio: false
+        });
+        video.srcObject = stream;
+        statusEl.textContent = "카메라 준비 완료. 시험지를 화면 대부분 차게 맞춘 후 ① 버튼을 눌러.";
+      } catch (err) {
+        console.error(err);
+        alert("카메라 접근 실패: " + err.message);
+      }
+    }
+
+    // 2) 현재 프레임 캡처 + Tesseract로 OCR
+    captureBtn.addEventListener("click", async () => {
+      try {
+        statusEl.textContent = "이미지 캡처 중...";
+        answerEl.textContent = "";
+
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (!w || !h) {
+          alert("카메라가 아직 준비 안 됐어. 1~2초 후에 다시 눌러줘.");
+          return;
+        }
+
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, w, h);
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+
+        statusEl.textContent = "OCR 진행 중... (조금 기다려 줘)";
+        const result = await Tesseract.recognize(dataUrl, "kor+eng", {
+          logger: m => console.log(m)
+        });
+
+        const text = (result && result.data && result.data.text) ? result.data.text.trim() : "";
+        if (!text) {
+          statusEl.textContent = "OCR 결과가 비어 있어. 초점/조명/거리 조정해서 다시 시도해줘.";
+          return;
+        }
+
+        ocrTextArea.value = text;
+        statusEl.textContent = "OCR 완료. 필요하면 텍스트 조금 고친 뒤 ② 버튼을 눌러.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "OCR 중 오류 발생: " + err.message;
+      }
+    });
+
+    // 3) OCR 텍스트 → Netlify 함수로 보내서 논술 답안 받기
+    solveBtn.addEventListener("click", async () => {
+      try {
+        const text = ocrTextArea.value.trim();
+        if (!text) {
+          alert("먼저 ①로 OCR을 하거나, 텍스트를 직접 붙여 넣어줘.");
+          return;
+        }
+
+        statusEl.textContent = "논술 답안 생성 중... (수십 초 걸릴 수 있음)";
+        answerEl.textContent = "";
+
+        const res = await fetch("/.netlify/functions/solve", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ ocrText: text })
+        });
+
+        const bodyText = await res.text();
+        if (!res.ok) {
+          statusEl.textContent = "서버 오류: " + res.status;
+          answerEl.textContent = bodyText;
+          return;
+        }
+
+        answerEl.textContent = bodyText;
+        statusEl.textContent = "완료. 위 답안을 보고 수기로 옮길 연습을 하면 돼.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "요청 중 오류: " + err.message;
+      }
+    });
+
+    startCamera();
+  </script>
+</body>
+</html>
