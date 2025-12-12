@@ -109,7 +109,7 @@
   </div>
 </div>
 
-<!-- 🔹 논술 자동 풀이 테스트 UI (여기 추가) -->
+<!-- 🔹 논술 자동 풀이 테스트 UI -->
 <div style="max-width: 960px; margin: 16px auto; padding: 10px; border: 1px solid #444; background:#111; border-radius:8px;">
   <h3 style="margin-top:0;">논술 자동 풀이 테스트 (Netlify Functions → solve)</h3>
   <p style="font-size:13px; color:#ccc;">
@@ -478,8 +478,10 @@
   startCamera();
 </script>
 
-<!-- 🔹 solve 함수 직접 호출 JS -->
+<!-- 🔹 solve 함수 직접 호출 JS (절대 URL + JSON/HTML 안전 처리) -->
 <script>
+  const SOLVE_URL = "https://beamish-alpaca-e3df59.netlify.app/.netlify/functions/solve";
+
   async function callSolve() {
     const inputEl = document.getElementById("ocrTextInput");
     const outputEl = document.getElementById("answerOutput");
@@ -493,7 +495,7 @@
     outputEl.textContent = "풀이 생성 중...";
 
     try {
-      const res = await fetch("/.netlify/functions/solve", {
+      const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -501,16 +503,32 @@
         body: JSON.stringify({ ocrText })
       });
 
-      const data = await res.json();
+      const contentType = res.headers.get("content-type") || "";
 
-      if (res.ok && data.answer) {
-        outputEl.textContent = data.answer;
-      } else {
-        outputEl.textContent =
-          "에러 발생\n" +
-          "status: " + res.status + "\n" +
-          "message: " + (data.error || JSON.stringify(data));
+      if (contentType.includes("application/json")) {
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          outputEl.textContent = "JSON 파싱 에러: " + (e.message || String(e));
+          return;
+        }
+
+        if (res.ok && data.answer) {
+          outputEl.textContent = data.answer;
+        } else {
+          outputEl.textContent =
+            "에러 발생\n" +
+            "status: " + res.status + "\n" +
+            "message: " + (data.error || JSON.stringify(data));
+        }
+        return;
       }
+
+      const text = await res.text();
+      outputEl.textContent =
+        "서버가 JSON이 아니라 HTML/text를 돌려줌.\n\n" +
+        text.slice(0, 1000);
     } catch (err) {
       outputEl.textContent = "요청 실패: " + (err.message || String(err));
     }
