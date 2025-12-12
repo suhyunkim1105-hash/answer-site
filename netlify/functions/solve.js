@@ -1,48 +1,62 @@
 // netlify/functions/solve.js
 
-let _fetch = globalThis.fetch;
-if (!_fetch) {
-  try { _fetch = require("node-fetch"); } catch (e) {}
-}
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const BASE_HEADERS = {
-  "Content-Type": "application/json; charset=utf-8",
-  "Cache-Control": "no-store",
-};
+// 타임아웃(초 단위)
+const TIMEOUT_MS = 25000;
 
 exports.handler = async (event) => {
   try {
+    // CORS (같은 도메인이면 필요 없지만, 안전하게)
     if (event.httpMethod === "OPTIONS") {
-      return { statusCode: 204, headers: BASE_HEADERS, body: "" };
+      return {
+        statusCode: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+        },
+        body: "",
+      };
     }
 
     if (event.httpMethod !== "POST") {
       return {
         statusCode: 405,
-        headers: BASE_HEADERS,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
         body: JSON.stringify({ error: "Method Not Allowed" }),
       };
     }
 
-    let body;
+    let body = {};
     try {
       body = JSON.parse(event.body || "{}");
-    } catch {
+    } catch (e) {
       return {
         statusCode: 400,
-        headers: BASE_HEADERS,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
         body: JSON.stringify({ error: "Invalid JSON in request body" }),
       };
     }
 
-    const mode = String(body.mode || body.MODE || "NONSUL").trim();
+    // 프론트가 ocrText / ocr_text 둘 다 보낼 수 있게 호환
     const ocrText = String(body.ocrText || body.ocr_text || "").trim();
+    const mode = String(body.mode || "NONSUL").trim();
 
     if (!ocrText) {
       return {
         statusCode: 400,
-        headers: BASE_HEADERS,
-        body: JSON.stringify({ error: "ocrText is required" }),
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({ error: "ocrText (or ocr_text) is required" }),
       };
     }
 
@@ -50,22 +64,17 @@ exports.handler = async (event) => {
     if (!apiKey) {
       return {
         statusCode: 500,
-        headers: BASE_HEADERS,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
         body: JSON.stringify({ error: "OPENROUTER_API_KEY is not set in environment" }),
       };
     }
 
-    if (!_fetch) {
-      return {
-        statusCode: 500,
-        headers: BASE_HEADERS,
-        body: JSON.stringify({ error: "fetch is not available in this runtime" }),
-      };
-    }
-
-    // 타임아웃/지연 방지: 입력 길이 제한
-    const MAX_CHARS = 8000;
-    const trimmed = ocrText.length > MAX_CHARS ? ocrText.slice(0, MAX_CHARS) : ocrText;
+    // 너무 긴 텍스트로 타임아웃/비용 폭발 방지
+    const MAX_CHARS = 9000;
+    const trimmed = ocrText.length > MAX_CHARS ? ocrText.slice(ocrText.length - MAX_CHARS) : ocrText;
 
     const SYSTEM_PROMPT = `
 너는 "고려대 인문계 일반편입 인문논술 상위 1% 답안만 쓰는 AI"다.
@@ -89,7 +98,7 @@ exports.handler = async (event) => {
 과제: 문제의 요구에 맞는 [문제 1], [문제 2] 최종 답안만 작성하라.
 `.trim();
 
-    const USER_PROMPT = `
+    const userContent = `
 다음은 OCR로 인식한 고려대 인문계 편입 논술 시험지 전체이다.
 
 ${trimmed}
@@ -97,89 +106,104 @@ ${trimmed}
 위 시험지에 대해, 규칙을 지키면서 [문제 1], [문제 2] 최종 답안만 작성하라.
 `.trim();
 
-    const payload = {
-      model: "openrouter/auto",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: USER_PROMPT },
-      ],
-      temperature: 0.7,
-      max_tokens: 1800,
-    };
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    const resp = await _fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "autononsul",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const raw = await resp.text();
-
-    if (!resp.ok) {
-      return {
-        statusCode: resp.status,
-        headers: BASE_HEADERS,
-        body: JSON.stringify({
-          error: "OpenRouter request failed",
-          status: resp.status,
-          mode,
-          raw: raw.slice(0, 4000),
-        }),
-      };
-    }
-
-    let data;
+    let rawText = "";
     try {
-      data = JSON.parse(raw);
-    } catch {
-      return {
-        statusCode: 502,
-        headers: BASE_HEADERS,
+      const resp = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+          "X-Title": "autononsul",
+        },
         body: JSON.stringify({
-          error: "Non-JSON response from OpenRouter",
-          mode,
-          raw: raw.slice(0, 4000),
+          model: "openrouter/auto",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userContent }
+          ],
+          temperature: 0.7,
+          max_tokens: 2200,
+        }),
+      });
+
+      rawText = await resp.text();
+
+      // JSON 파싱 실패(HTML 에러 등) 대비
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        return {
+          statusCode: resp.status || 502,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            error: "Upstream returned non-JSON",
+            upstream_status: resp.status,
+            upstream_body: rawText.slice(0, 2000),
+          }),
+        };
+      }
+
+      const answer =
+        data &&
+        data.choices &&
+        data.choices[0] &&
+        data.choices[0].message &&
+        typeof data.choices[0].message.content === "string"
+          ? data.choices[0].message.content.trim()
+          : "";
+
+      if (!answer) {
+        return {
+          statusCode: 500,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({ error: "No answer from model", debug: data }),
+        };
+      }
+
+      return {
+        statusCode: 200,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({ mode, answer }),
+      };
+    } catch (err) {
+      const isAbort = String(err && err.name) === "AbortError";
+      return {
+        statusCode: 504,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          error: isAbort ? "Upstream timeout" : ("Server error: " + (err && err.message ? err.message : String(err))),
+          upstream_body: rawText ? rawText.slice(0, 1000) : "",
         }),
       };
+    } finally {
+      clearTimeout(t);
     }
-
-    const answer =
-      data?.choices?.[0]?.message?.content &&
-      typeof data.choices[0].message.content === "string"
-        ? data.choices[0].message.content.trim()
-        : "";
-
-    if (!answer) {
-      return {
-        statusCode: 500,
-        headers: BASE_HEADERS,
-        body: JSON.stringify({
-          error: "No answer from model",
-          mode,
-          raw: raw.slice(0, 2000),
-        }),
-      };
-    }
-
-    return {
-      statusCode: 200,
-      headers: BASE_HEADERS,
-      body: JSON.stringify({ answer }),
-    };
-
   } catch (err) {
     return {
       statusCode: 500,
-      headers: BASE_HEADERS,
-      body: JSON.stringify({
-        error: "Server error",
-        message: String(err?.message || err),
-      }),
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ error: "Server error: " + (err && err.message ? err.message : String(err)) }),
     };
   }
 };
