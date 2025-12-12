@@ -5,7 +5,7 @@
   <title>Auto OCR(누적) → Auto Solve (KOR)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 
-  <!-- Tesseract v5 -->
+  <!-- Tesseract.js v5 -->
   <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
@@ -59,8 +59,8 @@
         <h3>실시간 OCR(누적)</h3>
         <textarea id="ocrPreview" readonly></textarea>
         <div class="hint">
-          숫자/특수문자는 표시(출력)에서 제거됨.<br/>
-          답안 음성은 “음성 테스트”를 한 번 눌러서 언락해야 iOS에서 확실히 나옴.
+          숫자/특수문자는 화면 표시에서 제거됨(방해 최소화).<br/>
+          iOS는 답안 TTS가 자동으로 안 나올 수 있으니 “음성 테스트”를 한 번 눌러서 언락해줘야 함.
         </div>
       </div>
 
@@ -76,31 +76,32 @@
   // =========================
   // 설정
   // =========================
-  const OCR_INTERVAL_MS = 5000;
+  const OCR_INTERVAL_MS = 6000;                 // 너무 짧으면 iOS에서 메모리/발열로 Aborted(-1) 확률↑
   const OCR_LANG = "kor";
-  const TEXT_THRESHOLD_EFFECTIVE = 2400;
-  const INSUFFICIENT_WARN_MS = 60 * 1000;
-  const MAX_WAIT_MS = 8 * 60 * 1000;
+
+  const TEXT_THRESHOLD_EFFECTIVE = 2400;        // 공백 제외 누적 길이 기준
+  const INSUFFICIENT_WARN_MS = 60 * 1000;       // 1분 지나면 “지문 부족” 안내
+  const MAX_WAIT_MS = 8 * 60 * 1000;            // 8분이면 “지문 부족 자동풀이”
+  const NO_NEW_SEGMENT_SOLVE_MS = 20000;        // 새 페이지(세그먼트) 변화가 20초 없으면 자동 풀이
+
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  const CAP_MAX_W = 1600;
-  const PREVIEW_SCALE = 0.8;
-  const REQUESTED_CAMERA_ZOOM = 0.8;
-
-  const NO_NEW_SEGMENT_SOLVE_MS = 20000;
+  const CAP_MAX_W = 1280;                       // 1600보다 낮춰서 iOS 안정성↑
+  const PREVIEW_SCALE = 0.8;                    // 화면 프리뷰 배율(사용자 요청)
+  const REQUESTED_CAMERA_ZOOM = 0.8;            // 지원되는 기기면 카메라 줌 적용 시도
 
   const TTS_ENABLED = true;
   const TTS_RATE = 1.05;
   const TTS_PITCH = 1.0;
   const TTS_STATUS_COOLDOWN_MS = 12000;
 
-  // ✅ “로딩 중 무한” 방지용 타임아웃/재시도
+  // ✅ OCR 엔진 무한 로딩 방지: 타임아웃/재시도
   const WORKER_INIT_TIMEOUT_MS = 35000;
   const WORKER_RETRY_MAX = 2;
 
-  // ✅ 한국어 데이터 다운로드 경로(핵심)
-  // kor.traineddata(.gz)를 이 경로에서 찾음
-  const LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0";
+  // ✅ 한국어 traineddata 로딩 경로(가장 안정적인 CDN)
+  // 아래 경로에 kor.traineddata(.gz)가 있어야 함
+  const LANG_PATH = "https://cdn.jsdelivr.net/npm/@tesseract.js-data/kor/4.0.0_best_int";
 
   // =========================
   // DOM
@@ -145,7 +146,7 @@
 
   let ocrFailCount = 0;
 
-  // 분석(가려짐)
+  // 분석(가려짐/안정도)
   const BW = 64, BH = 36;
   const bCanvas = document.createElement("canvas");
   bCanvas.width = BW; bCanvas.height = BH;
@@ -197,14 +198,17 @@
   // =========================
   function cleanOcrText(raw) {
     let t = (raw || "").replace(/\r/g, "").replace(/\s+\n/g, "\n").trim();
+
+    // 한글(자모 포함) + 공백/개행만 남김
     t = t.replace(/[^ \n\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/g, "");
+
     t = t.replace(/[ \t]{2,}/g, " ");
     t = t.replace(/\n{3,}/g, "\n\n");
     return t.trim();
   }
 
   // =========================
-  // 비슷한 줄 “더 맞는 걸로” 교정(라인 병합)
+  // 비슷한 문장 교정(라인 병합)
   // =========================
   function mergeLinewise(oldText, newText, oldConf, newConf) {
     const oldLines = (oldText || "").split("\n").map(s => s.trim());
@@ -307,7 +311,6 @@
     } catch (e) {}
   }
 
-  // ✅ 답안도 읽어주기(긴 텍스트 분할)
   async function speakLong(text) {
     if (!TTS_ENABLED) return;
     if (!("speechSynthesis" in window)) return;
@@ -362,15 +365,15 @@
   document.addEventListener("touchstart", unlockAudioOnce, { passive: true, once: true });
 
   // =========================
-  // iOS Aborted(-1) 대응
+  // “Aborted(-1)” 대응: OCR 엔진 재초기화/최종 새로고침
   // =========================
   async function hardResetOcrEngine() {
-    try { await speak("OCR 엔진이 오류로 중단되어 새로고침합니다.", true); } catch (e) {}
+    try { await speak("OCR 엔진이 중단되어 새로고침합니다.", true); } catch (e) {}
     setTimeout(() => { location.reload(); }, 600);
   }
 
   // =========================
-  // Worker init timeout helper
+  // Timeout helper
   // =========================
   async function withTimeout(promise, ms, label) {
     let timer;
@@ -416,10 +419,9 @@
       setStatus(buildStatusLines("카메라 ON · OCR 준비"));
       requestAnimationFrame(analyzeLoop);
 
-      // ✅ OCR 엔진 로딩(타임아웃/재시도 포함)
       const ok = await initOcrWorkerWithRetry();
       if (!ok) {
-        setStatus(buildStatusLines("OCR 엔진 로딩 실패(네트워크/차단 가능). Wi-Fi로 접속 후 새로고침."));
+        setStatus(buildStatusLines("OCR 엔진 로딩 실패. Wi-Fi로 접속 후 새로고침."));
         speak("OCR 엔진 로딩에 실패했습니다. 와이파이로 접속 후 새로고침 해주세요.", true);
         return;
       }
@@ -456,7 +458,7 @@
   // =========================
   function analyzeFrame() {
     if (!video.videoWidth || !video.videoHeight) {
-      return { blocked:false, stable:false, avgBright:255, diffAvg:0 };
+      return { blocked:false, stable:false };
     }
 
     bCtx.drawImage(video, 0, 0, BW, BH);
@@ -491,7 +493,7 @@
       lastStableStart = 0;
     }
 
-    return { blocked:isBlocked, stable, avgBright, diffAvg };
+    return { blocked:isBlocked, stable };
   }
 
   function analyzeLoop() {
@@ -536,7 +538,6 @@
     for (let attempt = 1; attempt <= WORKER_RETRY_MAX; attempt++) {
       const ok = await initOcrWorkerOnce(attempt);
       if (ok) return true;
-      // 실패 시 정리 후 재시도
       try { if (worker) await worker.terminate(); } catch (e) {}
       worker = null;
       workerReady = false;
@@ -552,21 +553,16 @@
         langPath: LANG_PATH,
         logger: (m) => {
           if (!m || !m.status) return;
-          // 로딩/다운로드 진행 상황 표시
           const p = (typeof m.progress === "number") ? Math.round(m.progress * 100) : null;
-          if (p !== null) {
-            setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}] ${p}%`));
-          } else {
-            setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}]`));
-          }
+          if (p !== null) setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}] ${p}%`));
+          else setStatus(buildStatusLines(`OCR 엔진 로딩 중... [${m.status}]`));
         }
       });
 
-      // ✅ 여기서 멈추면 대부분 “kor 데이터 로딩” 문제라 timeout으로 탈출
       await withTimeout(worker.loadLanguage(OCR_LANG), WORKER_INIT_TIMEOUT_MS, "loadLanguage");
       await withTimeout(worker.initialize(OCR_LANG), WORKER_INIT_TIMEOUT_MS, "initialize");
 
-      // ✅ 숫자/기호 인식 억제(완전 제거는 cleanOcrText가 담당, 여기선 OCR 노이즈 감소 목적)
+      // 숫자/기호를 OCR 단계에서 덜 보이게 (최종 제거는 cleanOcrText에서)
       await worker.setParameters({
         tessedit_char_blacklist: "0123456789~`!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?·•※℃℉©®™"
       });
@@ -666,6 +662,7 @@
       const msg = String(e || "");
       setStatus(buildStatusLines("OCR 에러: " + msg));
 
+      // iOS에서 종종 뜨는 “RuntimeError: Aborted(-1)” 계열 대응
       if (msg.includes("Aborted") || msg.includes("RuntimeError")) {
         ocrFailCount += 1;
         workerReady = false;
@@ -709,7 +706,13 @@
         (Math.abs(mergedEff - prev.effLen) <= 30 && conf > prev.conf + 3);
 
       if (better) {
-        segments[bestIdx] = { text: merged, effLen: mergedEff, conf: Math.max(prev.conf, conf), updatedAt: now(), sig: signatureOf(merged) };
+        segments[bestIdx] = {
+          text: merged,
+          effLen: mergedEff,
+          conf: Math.max(prev.conf, conf),
+          updatedAt: now(),
+          sig: signatureOf(merged)
+        };
       } else {
         segments[bestIdx].updatedAt = now();
       }
@@ -809,9 +812,11 @@
         let data;
         try { data = await res.json(); }
         catch (e) { out = "JSON 파싱 에러: " + String(e); }
+
         if (!out) {
           if (data && typeof data.answer === "string") out = data.answer;
-          else if (data && typeof data.body === "string") out = data.body;
+          else if (data && typeof data.raw === "string") out = data.raw;
+          else if (data && typeof data.error === "string") out = "에러: " + data.error;
           else out = JSON.stringify(data);
         }
       } else {
@@ -839,12 +844,13 @@
       answerBoxEl.textContent = prefix + out;
       setStatus(buildStatusLines("풀이 완료"));
 
-      // ✅ 답안도 음성으로 읽기
       if (isInsufficientSolve) {
         speak("지문이 부족하여 현재까지 인식된 내용으로 자동 풀이를 시작합니다.", true);
       } else {
         speak("답안이 생성되었습니다.", true);
       }
+
+      // ✅ 답안도 음성으로 낭독
       speakLong(prefix + out);
 
     } catch (e) {
