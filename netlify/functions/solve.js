@@ -3,149 +3,112 @@
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
-      return {
-        statusCode: 405,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: "Method Not Allowed",
-      };
+      return { statusCode: 405, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Method Not Allowed" };
     }
 
     let body = {};
     try {
       body = JSON.parse(event.body || "{}");
-    } catch (e) {
-      return {
-        statusCode: 400,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: "Invalid JSON in request body",
-      };
+    } catch {
+      return { statusCode: 400, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Invalid JSON" };
     }
 
-    // ✅ 둘 다 허용
-    const ocrText = String((body.ocrText || body.ocr_text || "")).trim();
-    const mode = String(body.mode || "NONSUL").trim();
-
+    const ocrText = String(body.ocrText || body.ocr_text || "").trim();
     if (!ocrText) {
-      return {
-        statusCode: 400,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: "ocrText is required",
-      };
+      return { statusCode: 400, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "ocrText is required" };
     }
 
-    // 너무 긴 텍스트 방지
-    const MAX_CHARS = 8000;
-    let trimmed = ocrText;
-    if (trimmed.length > MAX_CHARS) trimmed = trimmed.slice(trimmed.length - MAX_CHARS);
+    // ✅ 입력을 줄여서 속도 확보 (너무 길면 무조건 타임아웃 위험)
+    const MAX_CHARS = 3500;
+    const trimmed = ocrText.length > MAX_CHARS ? ocrText.slice(0, MAX_CHARS) : ocrText;
 
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: "OPENROUTER_API_KEY is not set in environment",
-      };
+      return { statusCode: 500, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "OPENROUTER_API_KEY is not set" };
     }
 
+    // ✅ “무조건 빨리” 나오는 프롬프트 (분량도 줄임)
     const SYSTEM_PROMPT = `
-너는 "고려대 인문계 일반편입 인문논술 상위 1% 답안만 쓰는 AI"다.
-
+너는 고려대 인문계 일반편입 인문논술 답안을 빠르게 작성하는 AI다.
 규칙:
-1) 한국어만 사용한다. 마크다운, 불릿, 번호 목록, 코드블록을 쓰지 않는다.
-2) 출력은 정확히 아래 두 블록만 포함한다.
+- 한국어만.
+- 목록/불릿/번호/마크다운/메타코멘트 금지.
+- 출력은 딱 두 블록만.
 
 [문제 1]
-(1번 답안 문단)
+(250~330자)
 
 [문제 2]
-(2번 답안 문단)
-
-3) [문제 1]은 400±50자(350~450자),
-   [문제 2]는 1400±100자(1300~1500자) 분량으로 쓴다.
-4) 개요, 해설, 구조 설명, 채점, 자기 언급, 프롬프트/모델 언급,
-   "이 글에서는 ~을 하겠다", "먼저 ~을 살펴보자" 같은 메타 코멘트는 절대 쓰지 않는다.
-
-입력은 OCR된 시험지 전체 텍스트(제시문, 문제 포함)다.
-과제: 문제의 요구에 맞는 [문제 1], [문제 2] 최종 답안만 작성하라.
+(700~900자)
 `.trim();
 
-    const userContent = `
-다음은 OCR로 인식한 고려대 인문계 편입 논술 시험지 전체이다.
+    const USER_PROMPT = `
+다음은 OCR로 인식된 시험지 텍스트이다.
 
 ${trimmed}
 
-위 시험지에 대해, 규칙을 지키면서 [문제 1], [문제 2] 최종 답안만 작성하라.
+위 텍스트를 바탕으로 규칙을 지키며 [문제 1], [문제 2] 답안만 작성하라.
 `.trim();
 
-    // ✅ 타임아웃 보호
+    // ✅ OpenRouter 요청 타임아웃 강제 (무한 대기 방지)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    const timeoutMs = 14000; // 14초 안에 끝내기
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "autononsul",
-      },
-      body: JSON.stringify({
-        model: "openrouter/auto",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.7,
-        max_tokens: 1800,
-      }),
-    });
-
-    clearTimeout(timeout);
+    let resp;
+    try {
+      resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+          "X-Title": "autononsul-fast"
+        },
+        body: JSON.stringify({
+          model: "openrouter/auto",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: USER_PROMPT }
+          ],
+          temperature: 0.4,
+          max_tokens: 900
+        })
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      const msg = (e && e.name === "AbortError")
+        ? "모델 응답이 늦어서 타임아웃(입력을 더 줄이거나 다시 시도)"
+        : ("요청 실패: " + String(e && e.message ? e.message : e));
+      return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: msg };
+    } finally {
+      clearTimeout(timer);
+    }
 
     const raw = await resp.text();
 
+    // ✅ JSON 아닐 수도 있으니 그대로 방어
     let data;
     try {
       data = JSON.parse(raw);
-    } catch (e) {
-      // OpenRouter/프록시가 HTML 에러를 뱉어도 안전 처리
-      return {
-        statusCode: resp.status || 502,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: raw,
-      };
+    } catch {
+      return { statusCode: resp.status || 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: raw };
     }
 
     const answer =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message &&
-      typeof data.choices[0].message.content === "string"
+      data?.choices?.[0]?.message?.content && typeof data.choices[0].message.content === "string"
         ? data.choices[0].message.content.trim()
         : "";
 
     if (!answer) {
-      return {
-        statusCode: 500,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "No answer from model", raw: data }),
-      };
+      return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "No answer (모델 응답 비어있음). 입력을 더 줄여서 다시 시도." };
     }
 
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ answer }),
-    };
+    return { statusCode: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: answer };
 
   } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: "Server error: " + msg,
-    };
+    return { statusCode: 500, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "Server error: " + String(err && err.message ? err.message : err) };
   }
 };
+
