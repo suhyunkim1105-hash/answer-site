@@ -52,6 +52,10 @@ const CORS_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
 };
 
+// 🔹 오늘 밤 MVP용: 빠른 모델로 고정 (openai/gpt-4o-mini-2024-07-18)
+//   → Netlify 환경변수 OPENROUTER_MODEL은 무시하고, 여기 값만 사용.
+const OPENROUTER_MODEL = "openai/gpt-4o-mini-2024-07-18";
+
 // Netlify Functions 엔트리포인트
 exports.handler = async function (event, context) {
   // Preflight
@@ -92,9 +96,9 @@ exports.handler = async function (event, context) {
     };
   }
 
-  // 🔹 긴 제시문 → 처리 시간 줄이려고 강제 길이 제한 (오늘 밤 MVP 우회용)
-  //  - 뒤쪽에 [문제 1], [문제 2]가 있는 경우가 많으므로 "뒤에서부터" 자른다.
-  const MAX_INPUT_CHARS = 6000; // 필요하면 8000 정도까지 올릴 수 있음
+  // 🔹 긴 제시문 → 처리 시간 줄이기용 길이 제한
+  //   이 기출은 3,296자 정도라서 사실 잘리지도 않을 거야.
+  const MAX_INPUT_CHARS = 4500;
   let ocrText = rawOcrText;
   let truncated = false;
   if (rawOcrText.length > MAX_INPUT_CHARS) {
@@ -103,9 +107,6 @@ exports.handler = async function (event, context) {
   }
 
   const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-  const OPENROUTER_MODEL =
-    process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini-2024-07-18";
-
   if (!OPENROUTER_API_KEY) {
     return {
       statusCode: 500,
@@ -116,17 +117,14 @@ exports.handler = async function (event, context) {
     };
   }
 
-  // 🔹 OpenRouter 호출 payload
+  // 🔹 OpenRouter 호출 payload (빠르게 끝나도록 max_tokens 조금 줄임)
   const payload = {
     model: OPENROUTER_MODEL,
-    max_tokens: 1900, // Q1+Q2 합산 충분 + 과한 토큰 방지
+    max_tokens: 1500,
     temperature: 0.3,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: ocrText,
-      },
+      { role: "user", content: ocrText },
     ],
   };
 
@@ -145,7 +143,6 @@ exports.handler = async function (event, context) {
     const text = await res.text();
 
     if (!res.ok) {
-      // OpenRouter 쪽 에러를 그대로 보여줘서 디버깅에 쓰기
       return {
         statusCode: 500,
         headers: CORS_HEADERS,
@@ -196,7 +193,7 @@ exports.handler = async function (event, context) {
       headers: CORS_HEADERS,
       body: JSON.stringify({
         answer,
-        truncated,          // 길이 잘랐는지 여부 (디버깅용)
+        truncated,
         inputLength: rawOcrText.length,
         usedLength: ocrText.length,
         model: OPENROUTER_MODEL,
