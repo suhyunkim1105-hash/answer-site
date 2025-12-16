@@ -1,164 +1,93 @@
-// netlify/functions/solve.js
-// 안정성 우선: 짧은 프롬프트 + 빠른 모델 고정 + 입력 길이 제한 + 타임아웃/재시도
-
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-function cleanText(s) {
-  return (s || "")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function smartTrim(s, maxChars) {
-  if (s.length <= maxChars) return s;
-  // 앞+뒤만 남겨서 문제/논제(끝부분에 많음)도 살린다
-  const head = s.slice(0, Math.floor(maxChars * 0.55));
-  const tail = s.slice(-Math.floor(maxChars * 0.35));
-  return `${head}\n...\n${tail}`;
-}
-
-exports.handler = async (event) => {
+export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method Not Allowed" };
+      return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
     }
 
-    let body;
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      return { statusCode: 400, body: "Invalid JSON" };
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) {
+      return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENROUTER_API_KEY in Netlify env" }) };
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return { statusCode: 500, body: "OPENROUTER_API_KEY is not set (Netlify env var required)" };
+    const body = JSON.parse(event.body || "{}");
+    const text = (body.text || "").toString().trim();
+
+    if (!text) {
+      return { statusCode: 400, body: JSON.stringify({ error: "Empty text" }) };
     }
 
-    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+    // 타임아웃 방지: 입력 너무 길면 뒤쪽만 사용
+    const MAX_CHARS = 8500;
+    const input = text.length > MAX_CHARS ? text.slice(-MAX_CHARS) : text;
 
-    const rawOcr = (body.ocrText || "").toString();
-    const ocrText = cleanText(rawOcr);
-    if (!ocrText) return { statusCode: 400, body: "ocrText is required" };
+    const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 
-    // 504 방지: 입력 줄이기(너무 길면 100% 터진다)
-    const MAX_CHARS_1 = 4200;
-    const MAX_CHARS_2 = 3000; // 재시도 시 더 줄임
-
-    const systemPrompt = cleanText(`
+    const SYSTEM_PROMPT = `
 너는 “고려대 인문계 일반편입 인문논술 상위 1% 답안만 쓰는 전용 작성자”다.
+
 규칙:
-- 한국어만 사용한다.
-- 출력은 정확히 아래 두 블록만 포함한다.
+- 한국어만 사용.
+- 출력은 아래 두 블록만. 그 외 문장/해설/메타 금지.
 [문제 1]
 (답안)
 [문제 2]
 (답안)
-- 두 블록 밖의 문장, 해설/분석/메타 멘트, 목록/번호/마크다운 금지.
-- [문제 1]은 350~450자, [문제 2]는 1300~1500자 분량을 목표로 한다.
-- 과한 수사 없이 논리/개념/구조 중심으로 실제 시험 답안처럼 쓴다.
-`.trim());
 
-    // userPrompt도 길이 최소화(여기 길면 504 확률↑)
-    const makeUserPrompt = (trimmed) => cleanText(`
-다음은 OCR로 인식한 “제시문+문제” 텍스트다. 이를 바탕으로 답안을 작성하라.
+- 마크다운/불릿/번호목록 금지. 순수 문단.
+- “AI/모델/프롬프트/시스템” 같은 단어 금지.
+- [문제 1] 350~450자, [문제 2] 1300~1500자 분량 감각으로.
+- 제시문/논제의 요구를 빠짐없이 수행(요약·비교·평가·견해 포함 여부).
+- 논리: 개념→사례→판단, 각 대상은 장점+한계의 양면 평가 기본.
+`.trim();
 
-[OCR]
-${trimmed}
+    const USER_PROMPT = `
+아래는 OCR로 인식된 고려대 인문논술 “제시문+논제” 전체 텍스트다.
+텍스트가 다소 깨져도, 문맥을 최대한 복원해 논제 요구를 충족하는 답안을 작성하라.
 
-출력은 반드시:
-[문제 1]
-...
-[문제 2]
-...
-만 포함하라.
-`.trim());
+[OCR_TEXT]
+${input}
+`.trim();
 
-    async function callOnce(trimmed, maxTokens) {
-      const controller = new AbortController();
-      const timeoutMs = 9000; // Netlify 환경에서 길게 잡아봐야 소용없음(안정성 우선)
-      const t = setTimeout(() => controller.abort(), timeoutMs);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 22000); // 22초 내에 끝내기
 
-      try {
-        const resp = await fetch(OPENROUTER_URL, {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-            "X-Title": "autononsul",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: makeUserPrompt(trimmed) },
-            ],
-            temperature: 0.2,
-            max_tokens: maxTokens,
-          }),
-        });
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site"
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.3,
+        max_tokens: 1100,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: USER_PROMPT }
+        ]
+      })
+    });
 
-        const text = await resp.text();
+    clearTimeout(timeout);
 
-        // HTML(Timeout) 등 그대로 반환
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          return { ok: false, status: resp.status, raw: text };
-        }
-
-        const answer =
-          data?.choices?.[0]?.message?.content &&
-          typeof data.choices[0].message.content === "string"
-            ? data.choices[0].message.content.trim()
-            : "";
-
-        if (!answer) {
-          return { ok: false, status: resp.status, raw: "No answer from model" };
-        }
-
-        return { ok: true, status: 200, raw: answer };
-      } finally {
-        clearTimeout(t);
-      }
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return { statusCode: resp.status, body: JSON.stringify({ error: "Upstream error", detail: data }) };
     }
 
-    // 1차 시도
-    const trimmed1 = smartTrim(ocrText, MAX_CHARS_1);
-    let r = await callOnce(trimmed1, 1400);
-
-    // 실패하면 2차(더 줄여서)
-    if (!r.ok) {
-      const trimmed2 = smartTrim(ocrText, MAX_CHARS_2);
-      r = await callOnce(trimmed2, 1100);
-    }
-
-    if (!r.ok) {
-      return {
-        statusCode: 504,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body:
-          typeof r.raw === "string"
-            ? r.raw
-            : "Upstream error / timeout. Try reducing OCR text.",
-      };
-    }
-
+    const answer = (data?.choices?.[0]?.message?.content || "").trim();
     return {
       statusCode: 200,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: r.raw,
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ answer })
     };
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: "Server error: " + (err?.message || String(err)),
-    };
+
+  } catch (e) {
+    // AbortError(타임아웃)도 여기로 온다
+    return { statusCode: 504, body: JSON.stringify({ error: "Server error", detail: String(e) }) };
   }
-};
+}
+
