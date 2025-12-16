@@ -1,93 +1,108 @@
-export async function handler(event) {
+export default async (request, context) => {
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
+    if (request.method !== "POST") {
+      return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
     }
 
     const key = process.env.OPENROUTER_API_KEY;
     if (!key) {
-      return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENROUTER_API_KEY in Netlify env" }) };
+      return new Response(JSON.stringify({ error: "Missing OPENROUTER_API_KEY in Netlify env" }), { status: 500 });
     }
 
-    const body = JSON.parse(event.body || "{}");
-    const text = (body.text || "").toString().trim();
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini"; // 빠르고 안정 쪽(기본값)
+    const body = await request.json().catch(() => ({}));
+    let text = (body && body.text) ? String(body.text) : "";
 
-    if (!text) {
-      return { statusCode: 400, body: JSON.stringify({ error: "Empty text" }) };
+    // 너무 길면 타임아웃 확률 폭증 → 뒤쪽 위주로 자르기
+    const MAX = 6500;
+    if (text.length > MAX) text = text.slice(text.length - MAX);
+
+    // 빈 입력 방지
+    if (!text.trim()) {
+      return new Response(JSON.stringify({ answer: "OCR 텍스트가 비어있음" }), { status: 200 });
     }
 
-    // 타임아웃 방지: 입력 너무 길면 뒤쪽만 사용
-    const MAX_CHARS = 8500;
-    const input = text.length > MAX_CHARS ? text.slice(-MAX_CHARS) : text;
-
-    const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
-
-    const SYSTEM_PROMPT = `
-너는 “고려대 인문계 일반편입 인문논술 상위 1% 답안만 쓰는 전용 작성자”다.
-
+    // 프롬프트(짧게 + 강제 형식)
+    const system = `
+너는 “고려대 인문계 일반편입 인문논술 상위 1% 답안만 쓰는 전용 AI”다.
 규칙:
-- 한국어만 사용.
-- 출력은 아래 두 블록만. 그 외 문장/해설/메타 금지.
+1) 한국어만.
+2) 출력은 아래 두 블록만. 그 외 문장 금지.
 [문제 1]
 (답안)
 [문제 2]
 (답안)
-
-- 마크다운/불릿/번호목록 금지. 순수 문단.
-- “AI/모델/프롬프트/시스템” 같은 단어 금지.
-- [문제 1] 350~450자, [문제 2] 1300~1500자 분량 감각으로.
-- 제시문/논제의 요구를 빠짐없이 수행(요약·비교·평가·견해 포함 여부).
-- 논리: 개념→사례→판단, 각 대상은 장점+한계의 양면 평가 기본.
+3) 해설/메타/목차/불릿/마크다운/AI 언급 금지.
+4) 가능한 한 현실적인 분량:
+[문제 1] 350~450자, [문제 2] 1300~1500자.
 `.trim();
 
-    const USER_PROMPT = `
-아래는 OCR로 인식된 고려대 인문논술 “제시문+논제” 전체 텍스트다.
-텍스트가 다소 깨져도, 문맥을 최대한 복원해 논제 요구를 충족하는 답안을 작성하라.
+    const user = `다음 OCR 텍스트는 논술 시험지(제시문+문제)다. 그대로 읽고 규칙대로 답안만 출력하라.\n\n${text}`;
 
-[OCR_TEXT]
-${input}
-`.trim();
-
+    // OpenRouter 호출(타임아웃 방어)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 22000); // 22초 내에 끝내기
+    const timeoutMs = 25000; // 너무 길면 Netlify/중간망에서 끊김 ↑
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      signal: controller.signal,
       headers: {
         "Authorization": `Bearer ${key}`,
         "Content-Type": "application/json",
+        // 있으면 도움됨(권장)
         "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
         "X-Title": "answer-site"
       },
       body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.3,
-        max_tokens: 1100,
+        model,
+        temperature: 0.2,
+        max_tokens: 1400,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: USER_PROMPT }
+          { role: "system", content: system },
+          { role: "user", content: user }
         ]
-      })
-    });
+      }),
+      signal: controller.signal
+    }).finally(() => clearTimeout(timer));
 
-    clearTimeout(timeout);
+    const ct = resp.headers.get("content-type") || "";
+    const raw = ct.includes("application/json") ? await resp.json() : { _text: await resp.text() };
 
-    const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      return { statusCode: resp.status, body: JSON.stringify({ error: "Upstream error", detail: data }) };
+      return new Response(JSON.stringify({
+        error: "Upstream error",
+        status: resp.status,
+        detail: raw
+      }), { status: 502 });
     }
 
-    const answer = (data?.choices?.[0]?.message?.content || "").trim();
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ answer })
-    };
+    const answer =
+      raw?.choices?.[0]?.message?.content?.trim?.() ||
+      "";
 
+    if (!answer) {
+      return new Response(JSON.stringify({
+        answer: "No answer (모델 응답 비어있음). 입력을 더 줄여서 다시 시도"
+      }), { status: 200 });
+    }
+
+    // HTML이 섞여 들어오는 경우 방어
+    if (answer.includes("<HTML") || answer.includes("Inactivity Timeout")) {
+      return new Response(JSON.stringify({
+        answer: "서버 타임아웃/HTML 응답 감지. 입력을 더 줄이거나 OPENROUTER_MODEL을 빠른 모델로 바꿔."
+      }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ answer }), {
+      status: 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" }
+    });
   } catch (e) {
-    // AbortError(타임아웃)도 여기로 온다
-    return { statusCode: 504, body: JSON.stringify({ error: "Server error", detail: String(e) }) };
+    const msg = (e && e.name === "AbortError")
+      ? "Upstream timeout (AbortError)"
+      : String(e && e.message ? e.message : e);
+
+    return new Response(JSON.stringify({ error: "Server error", detail: msg }), { status: 500 });
   }
-}
+};
 
