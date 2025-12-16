@@ -1,7 +1,15 @@
 [build]
   publish = "."
-  command = ""
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "18"
 
 [functions]
-  directory = "netlify/functions"
   node_bundler = "esbuild"
+
+# (선택) 캐시/보안 헤더 최소
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-store"
