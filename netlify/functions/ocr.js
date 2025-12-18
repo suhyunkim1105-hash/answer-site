@@ -1,98 +1,83 @@
-// netlify/functions/ocr.js
-// 서버 OCR: OCR.Space 사용 (한국어 Engine 2)
-// 필요 env: OCRSPACE_API_KEY
+exports.handler = async function handler(event) {
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST,OPTIONS",
+    "Content-Type": "application/json; charset=utf-8",
+  };
 
-exports.handler = async (event) => {
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+  }
+
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, headers, body: JSON.stringify({ ok: false, error: "POST only" }) };
+  }
+
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: "Method Not Allowed" };
-    }
-
     const apiKey = process.env.OCRSPACE_API_KEY;
     if (!apiKey) {
-      return { statusCode: 500, body: JSON.stringify({ error: "OCRSPACE_API_KEY is not set" }) };
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ ok: false, error: "OCRSPACE_API_KEY 환경변수가 없음" }),
+      };
     }
 
     let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch (e) {}
-
-    const imageBase64 = (body.imageBase64 || "").trim();
-    if (!imageBase64) {
-      return { statusCode: 400, body: JSON.stringify({ error: "imageBase64 is required" }) };
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return { statusCode: 400, headers, body: JSON.stringify({ ok: false, error: "JSON 파싱 실패" }) };
     }
 
-    // OCR.Space는 form-data를 기대
-    const params = new URLSearchParams();
-    params.set("apikey", apiKey);
-    params.set("language", "kor");        // 한국어
-    params.set("ocrengine", "2");         // Engine 2 (Korean 지원 안내)
-    params.set("isOverlayRequired", "true");
-    params.set("detectOrientation", "true");
-    params.set("scale", "true");
-    params.set("base64Image", "data:image/jpeg;base64," + imageBase64);
+    const imageDataUrl = body.imageDataUrl;
+    const language = (body.language || "kor").toString();
+
+    if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
+      return { statusCode: 400, headers, body: JSON.stringify({ ok: false, error: "imageDataUrl(data:image/... base64) 필요" }) };
+    }
+
+    const form = new URLSearchParams();
+    form.set("apikey", apiKey);
+    form.set("language", language);
+    form.set("isOverlayRequired", "false");
+    form.set("detectOrientation", "true");
+    form.set("scale", "true");
+    form.set("OCREngine", "2");
+    form.set("base64Image", imageDataUrl);
 
     const resp = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString(),
+      body: form.toString(),
     });
 
-    const raw = await resp.text();
-
-    let data;
-    try { data = JSON.parse(raw); }
-    catch (e) {
+    const ct = (resp.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("application/json")) {
+      const t = await resp.text();
       return {
         statusCode: 502,
-        headers: { "Content-Type":"application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "OCR response not JSON", raw: raw.slice(0, 500) })
+        headers,
+        body: JSON.stringify({ ok: false, error: "OCR.Space 응답이 JSON이 아님", detail: t.slice(0, 300) }),
       };
     }
 
+    const data = await resp.json();
+
     if (data.IsErroredOnProcessing) {
-      return {
-        statusCode: 502,
-        headers: { "Content-Type":"application/json; charset=utf-8" },
-        body: JSON.stringify({ error: (data.ErrorMessage && data.ErrorMessage.join(" / ")) || "OCR error", raw: data })
-      };
+      const errMsg =
+        (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(" / ") : data.ErrorMessage) ||
+        data.ErrorDetails ||
+        "OCR.Space 처리 오류";
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: errMsg }) };
     }
 
     const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
     const text = parsed && parsed.ParsedText ? parsed.ParsedText : "";
-    const overlay = parsed && parsed.TextOverlay ? parsed.TextOverlay : null;
 
-    // 대충 confidence 계산(단어 confidence 평균)
-    let conf = 0;
-    let cnt = 0;
-    try {
-      if (overlay && overlay.Lines) {
-        for (const line of overlay.Lines) {
-          if (!line.Words) continue;
-          for (const w of line.Words) {
-            const c = Number(w.WordConfidence);
-            if (!Number.isNaN(c)) { conf += c; cnt++; }
-          }
-        }
-      }
-    } catch(e) {}
-
-    const avgConf = cnt > 0 ? (conf / cnt) : 0;
-
-    return {
-      statusCode: 200,
-      headers: { "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify({
-        text,
-        conf: avgConf, // 0~100(대충)
-        note: "OCR OK"
-      })
-    };
-
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers: { "Content-Type":"application/json; charset=utf-8" },
-      body: JSON.stringify({ error: "Server error", message: err.message || String(err) })
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, text }) };
+  } catch (e) {
+    return { statusCode: 500, headers, body: JSON.stringify({ ok: false, error: String(e?.message || e) }) };
   }
 };
