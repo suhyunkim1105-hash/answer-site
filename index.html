@@ -4,23 +4,17 @@
   <meta charset="UTF-8" />
   <title>autononsul | Phone OCR</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-
-  <!-- Firebase (결과 저장/수신용) -->
-  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-database-compat.js"></script>
-
   <style>
     * { box-sizing: border-box; }
     body { margin:0; padding:10px; background:#000; color:#fff; font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif; }
     h3 { margin:8px 0; }
     #topStatus { font-size:13px; color:#c4f1ff; white-space:pre-wrap; }
     #videoBox { position:relative; width:100%; border:1px solid #333; border-radius:10px; overflow:hidden; background:#000; }
-    #video { width:100%; height:auto; transform:scale(0.8); transform-origin:center center; } /* 표시용 0.8배율 */
-    #frame { position:absolute; inset:0; border:2px solid rgba(0,255,0,0.35); pointer-events:none; border-radius:10px; }
-    .row { display:flex; gap:8px; margin-top:10px; }
+    #video { width:100%; height:auto; } /* 표시용 */
+    #frame { position:absolute; inset:0; border:2px solid rgba(0,255,0,0.25); pointer-events:none; border-radius:10px; }
+    .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
     button { padding:10px 12px; font-size:14px; border-radius:10px; border:1px solid #666; background:#111; color:#fff; }
     button:active { transform: scale(0.98); }
-
     textarea, pre {
       width:100%;
       background:#050505; color:#fff;
@@ -30,6 +24,9 @@
     }
     pre { min-height:140px; }
     .small { font-size:12px; color:#bbb; }
+    .warn { color:#ffd36a; }
+    .err { color:#ff7a7a; }
+    .ok { color:#8dff9f; }
   </style>
 </head>
 
@@ -42,65 +39,55 @@
   </div>
 
   <div class="row">
-    <button id="btnStart">자동 OCR 시작</button>
-    <button id="btnStop">자동 OCR 정지</button>
-    <button id="btnSpeakTest">음성 테스트</button>
+    <button id="btnCamera">카메라 시작(필수 탭)</button>
+    <button id="btnVoice">음성 연결/테스트(필수 탭)</button>
+    <button id="btnSolve">지금까지로 풀이(수동)</button>
+    <button id="btnReset">리셋</button>
   </div>
 
   <h3 style="margin-top:14px;">실시간 OCR(누적)</h3>
-  <div class="small">OCR은 서버에서 처리됨(폰은 사진만 보냄). 네트워크가 느리면 5초 주기가 밀릴 수 있음.</div>
+  <div class="small">
+    OCR은 서버(OCR.Space)에서 처리됨. 무료 키면 너무 빠른 주기에서 막힐 수 있음.
+  </div>
   <textarea id="ocrBox" rows="10" placeholder="여기에 누적 텍스트가 쌓임"></textarea>
 
   <h3>답안</h3>
   <pre id="answerBox"></pre>
 
 <script>
-  // ---------- Firebase ----------
-  const firebaseConfig = {
-    apiKey: "AIzaSyAvjpHfmbuHQq3ZeV6mNKQFI9LsnX-vf68",
-    authDomain: "answer-site-p2p.firebaseapp.com",
-    databaseURL: "https://answer-site-p2p-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "answer-site-p2p",
-    storageBucket: "answer-site-p2p.firebasestorage.app",
-    messagingSenderId: "364227113735",
-    appId: "1:364227113735:web:b18355cf0b16454663cba2",
-    measurementId: "G-C8MRHK5ZGS"
-  };
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
-
   // ---------- UI ----------
   const topStatus = document.getElementById("topStatus");
   const video = document.getElementById("video");
   const ocrBox = document.getElementById("ocrBox");
   const answerBox = document.getElementById("answerBox");
-  const btnStart = document.getElementById("btnStart");
-  const btnStop = document.getElementById("btnStop");
-  const btnSpeakTest = document.getElementById("btnSpeakTest");
+  const btnCamera = document.getElementById("btnCamera");
+  const btnVoice = document.getElementById("btnVoice");
+  const btnSolve = document.getElementById("btnSolve");
+  const btnReset = document.getElementById("btnReset");
 
-  // ---------- Settings ----------
+  // ---------- Endpoints ----------
   const OCR_URL = "/.netlify/functions/ocr";
-  const SOLVE_BG_URL = "/.netlify/functions/solve-background";
-  const OCR_INTERVAL_MS = 5000;
+  const SOLVE_URL = "/.netlify/functions/solve";
 
-  const MIN_LEN = 2400;              // 공백제외 누적 길이 기준
-  const MIN_CONF = 55;               // 평균 신뢰도 기준(대충)
-  const LACK_TRIGGER_SEC = 8 * 60;   // 지문 부족 8분이면 강제 풀이
-  const LACK_START_SEC = 60;         // 지문 부족 판단 시작(1분)
+  // ---------- Settings (안정성 우선) ----------
+  let OCR_INTERVAL_MS = 7000;      // 무료키면 2~5초는 막힐 수 있음 → 기본 7초
+  const MIN_LEN = 2400;            // 공백제외 누적 길이 기준
+  const LACK_START_SEC = 60;       // 1분 이상 진전 없으면 "지문 부족" 표시
+  const LACK_TRIGGER_SEC = 8 * 60; // 8분 지나도 기준 미달이면 강제 풀이
+  const MAX_SEND_CHARS = 8000;     // solve로 보낼 최대(초과 시 뒤쪽 유지)
+  const MIN_APPEND_CORELEN = 6;    // 찌꺼기 제거
 
   // ---------- State ----------
   let stream = null;
   let ocrTimer = null;
   let ocrBusy = false;
+  let solveBusy = false;
 
-  let lines = [];            // 누적 라인 배열
-  let seen = new Set();      // 중복 방지(간단 키)
-  let avgConf = 0;
-  let confCount = 0;
-
-  let lastGoodAt = Date.now(); // 최근에 “의미있는 OCR”이 들어온 시간
-  let autoSolveStarted = false;
-  let currentJobId = null;
+  let lines = [];            // 누적 라인
+  let seen = new Set();      // 중복 방지
+  let lastGoodAt = Date.now();
+  let startedAt = 0;
+  let voiceReady = false;
 
   // ---------- TTS ----------
   function speak(text) {
@@ -115,8 +102,10 @@
     } catch (e) {}
   }
 
-  btnSpeakTest.addEventListener("click", () => {
-    speak("음성 테스트입니다.");
+  btnVoice.addEventListener("click", () => {
+    voiceReady = true;
+    speak("음성 연결 완료.");
+    renderStatus("음성: 준비됨", "ok");
   });
 
   // ---------- Camera ----------
@@ -131,6 +120,7 @@
     };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
+    startedAt = Date.now();
   }
 
   function stopCamera() {
@@ -141,8 +131,8 @@
     } catch (e) {}
   }
 
-  // ---------- Capture frame -> JPEG base64 ----------
-  async function captureJpegBase64() {
+  // ---------- Capture frame -> imageDataUrl (JPEG) ----------
+  function captureImageDataUrl() {
     const w = video.videoWidth || 1280;
     const h = video.videoHeight || 720;
 
@@ -163,24 +153,17 @@
     canvas.height = oh;
     const ctx = canvas.getContext("2d");
 
-    // 약간 선명하게(지원되는 브라우저만)
     try {
       ctx.filter = "contrast(1.25) brightness(1.05)";
     } catch(e) {}
 
     ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
 
-    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.72));
-    const arrBuf = await blob.arrayBuffer();
-    const bytes = new Uint8Array(arrBuf);
-
-    // base64
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
+    // ✅ data:image/jpeg;base64,... 형태로 반환
+    return canvas.toDataURL("image/jpeg", 0.72);
   }
 
-  // ---------- Merge OCR text (간단 누적/교정 느낌) ----------
+  // ---------- Merge OCR text ----------
   function normalizeLine(s) {
     return (s || "")
       .replace(/\u00A0/g, " ")
@@ -193,11 +176,9 @@
 
     let added = 0;
     for (const ln of raw) {
-      // 너무 짧은 찌꺼기 제거
       const coreLen = ln.replace(/\s/g, "").length;
-      if (coreLen < 6) continue;
+      if (coreLen < MIN_APPEND_CORELEN) continue;
 
-      // 중복키(앞 22자)
       const key = ln.replace(/\s/g,"").slice(0, 22);
       if (seen.has(key)) continue;
 
@@ -210,6 +191,7 @@
       lastGoodAt = Date.now();
       ocrBox.value = lines.join("\n");
     }
+    return added;
   }
 
   function effectiveLen() {
@@ -220,153 +202,183 @@
     return Math.floor((Date.now() - lastGoodAt) / 1000);
   }
 
-  // ---------- Auto solve (background) ----------
-  function makeJobId() {
-    return String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+  function renderStatus(extra, level) {
+    const len = effectiveLen();
+    const lack = lackSeconds();
+    const elapsed = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+
+    const lackMsg =
+      (len < MIN_LEN && lack >= LACK_START_SEC)
+        ? `지문 부족: ${lack}초 (진전 없음)`
+        : "지문 부족: -";
+
+    topStatus.textContent =
+      "자동 OCR(누적) → 자동 풀이 → TTS\n" +
+      "누적 OCR 길이(공백제외): " + len + " / 기준 " + MIN_LEN + "\n" +
+      lackMsg + "\n" +
+      "경과: " + elapsed + "초\n" +
+      "카메라: " + (stream ? "연결됨" : "대기") + " | 음성: " + (voiceReady ? "준비됨" : "대기") + "\n" +
+      (extra ? ("메시지: " + extra) : "");
   }
 
-  async function startSolve(reasonLabel) {
-    if (autoSolveStarted) return;
-    autoSolveStarted = true;
+  // ---------- Solve ----------
+  async function startSolve(force) {
+    if (solveBusy) return;
+    solveBusy = true;
 
-    const text = (ocrBox.value || "").trim();
-    answerBox.textContent = reasonLabel + "\n\n답안 생성 중...";
-
-    // job 생성 + Firebase 리스너
-    currentJobId = makeJobId();
-    const jobRef = db.ref("p2p/jobs/" + currentJobId);
-
-    jobRef.on("value", snap => {
-      const v = snap.val();
-      if (!v) return;
-      if (v.status === "done" && v.answer) {
-        answerBox.textContent = v.answer;
-        speak(v.answer);
-        jobRef.off();
-      } else if (v.status === "error") {
-        answerBox.textContent = (v.message || "오류") + "";
-        jobRef.off();
-      }
-    });
-
-    // 백그라운드 함수 호출(바로 202 리턴됨)
     try {
-      await fetch(SOLVE_BG_URL, {
+      let text = (ocrBox.value || "").trim();
+      if (!text) {
+        answerBox.textContent = "OCR 텍스트가 비어있음";
+        return;
+      }
+
+      if (text.length > MAX_SEND_CHARS) text = text.slice(-MAX_SEND_CHARS);
+
+      const prefix = force ? "지문 부족으로 자동 풀이합니다.\n" : "";
+      answerBox.textContent = prefix + "\n답안 생성 중...";
+
+      const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: { "Content-Type":"application/json" },
         body: JSON.stringify({
-          jobId: currentJobId,
-          ocrText: text
+          text,
+          force: !!force,
+          prefix
         })
-      });
-    } catch (e) {
-      answerBox.textContent = "solve 호출 실패: " + (e.message || String(e));
-    }
-  }
-
-  // ---------- OCR loop ----------
-  async function runOnce() {
-    if (ocrBusy) return;
-    if (!video.videoWidth) return;
-    ocrBusy = true;
-
-    try {
-      const b64 = await captureJpegBase64();
-      const res = await fetch(OCR_URL, {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({ imageBase64: b64 })
       });
 
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const t = await res.text();
-        topStatus.textContent = "OCR 응답이 JSON이 아님:\n" + t.slice(0, 300);
+        answerBox.textContent = "solve 응답이 JSON이 아님:\n" + t.slice(0, 300);
         return;
       }
 
       const data = await res.json();
-      if (!res.ok) {
-        topStatus.textContent = "OCR 실패: " + (data.error || res.status);
+      if (!data.ok) {
+        answerBox.textContent = "solve 실패: " + (data.error || "unknown");
+        return;
+      }
+
+      answerBox.textContent = data.answer || "";
+      if (voiceReady) speak(data.answer || "");
+      renderStatus(force ? "solve 완료(강제)" : "solve 완료", "ok");
+
+    } catch (e) {
+      answerBox.textContent = "solve 에러: " + (e.message || String(e));
+    } finally {
+      solveBusy = false;
+    }
+  }
+
+  // ---------- OCR loop ----------
+  async function runOnce() {
+    if (ocrBusy || solveBusy) return;
+    if (!stream || !video.videoWidth) return;
+
+    ocrBusy = true;
+    try {
+      const imageDataUrl = captureImageDataUrl();
+
+      const res = await fetch(OCR_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({ imageDataUrl, language: "kor" })
+      });
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const t = await res.text();
+        renderStatus("OCR 응답이 JSON이 아님: " + t.slice(0, 160), "err");
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.ok) {
+        // OCR.Space가 막을 때 대비: 간격 조금 늘림
+        OCR_INTERVAL_MS = Math.min(15000, OCR_INTERVAL_MS + 2000);
+        restartOcrTimer();
+        renderStatus("OCR 실패: " + (data.error || "unknown") + ` | 간격 ${OCR_INTERVAL_MS}ms로 증가`, "warn");
         return;
       }
 
       const text = (data.text || "").trim();
-      const conf = typeof data.conf === "number" ? data.conf : 0;
-
-      // 평균 신뢰도 업데이트(대충)
-      confCount++;
-      avgConf = avgConf + (conf - avgConf) / confCount;
-
-      addLinesFromText(text);
+      const added = addLinesFromText(text);
 
       const len = effectiveLen();
       const lack = lackSeconds();
-
-      topStatus.textContent =
-        "자동 OCR(누적) → 자동 풀이\n" +
-        "누적 OCR 길이(공백제외): " + len + " / 기준 " + MIN_LEN + "\n" +
-        "평균 OCR 신뢰도(대략): " + avgConf.toFixed(1) + "%\n" +
-        "지문 부족 지속: " + lack + "초\n" +
-        "카메라: 연결됨 | 음성: 준비됨\n" +
-        "마지막 메시지: " + (data.note || "OK");
+      renderStatus(added > 0 ? `OCR OK (+${added}라인)` : "OCR OK (추가 없음)", "ok");
 
       // 자동 풀이 트리거
-      if (!autoSolveStarted) {
-        if (len >= MIN_LEN && avgConf >= MIN_CONF) {
-          startSolve("충분한 지문 인식으로 자동 풀이합니다.");
-        } else if (lack >= LACK_TRIGGER_SEC) {
-          startSolve("지문 부족으로 자동 풀이합니다.\n(8분 동안 충분히 누적되지 않음)");
-        }
+      if (len >= MIN_LEN) {
+        await startSolve(false);
+      } else if (lack >= LACK_TRIGGER_SEC) {
+        await startSolve(true);
       }
 
-      // “지문 부족”이 1분 넘으면 음성 안내(너무 자주 말하지 않게)
-      if (!autoSolveStarted && lack >= LACK_START_SEC && (lack % 30 === 0)) {
+      // 지문 부족 안내(너무 자주 말하지 않게)
+      if (!solveBusy && len < MIN_LEN && lack >= LACK_START_SEC && (lack % 30 === 0) && voiceReady) {
         speak("지문이 부족합니다. 종이를 화면에 더 꽉 차게 보여 주세요.");
       }
 
     } catch (e) {
-      topStatus.textContent = "OCR 에러: " + (e.message || String(e));
+      renderStatus("OCR 에러: " + (e.message || String(e)), "err");
     } finally {
       ocrBusy = false;
     }
   }
 
+  function restartOcrTimer() {
+    if (ocrTimer) clearInterval(ocrTimer);
+    ocrTimer = setInterval(runOnce, OCR_INTERVAL_MS);
+  }
+
   function startAutoOCR() {
     if (ocrTimer) return;
-    autoSolveStarted = false;
-    currentJobId = null;
-    topStatus.textContent = "자동 OCR 시작...";
+    lastGoodAt = Date.now();
+    restartOcrTimer();
     runOnce();
-    ocrTimer = setInterval(runOnce, OCR_INTERVAL_MS);
   }
 
   function stopAutoOCR() {
     if (ocrTimer) clearInterval(ocrTimer);
     ocrTimer = null;
-    topStatus.textContent = "자동 OCR 정지됨";
   }
 
-  btnStart.addEventListener("click", startAutoOCR);
-  btnStop.addEventListener("click", stopAutoOCR);
+  // ---------- Buttons ----------
+  btnCamera.addEventListener("click", async () => {
+    try {
+      await startCamera();
+      renderStatus("카메라 시작됨. OCR 자동 실행 중...", "ok");
+      startAutoOCR();
+    } catch (e) {
+      topStatus.textContent = "카메라 실패: " + (e.message || String(e));
+    }
+  });
 
-  // iOS에서 백그라운드로 가면 멈추는 걸 방지하려고, 숨겨지면 정지
+  btnSolve.addEventListener("click", () => startSolve(true));
+
+  btnReset.addEventListener("click", () => {
+    stopAutoOCR();
+    stopCamera();
+    lines = [];
+    seen.clear();
+    ocrBox.value = "";
+    answerBox.textContent = "";
+    lastGoodAt = Date.now();
+    startedAt = 0;
+    solveBusy = false;
+    ocrBusy = false;
+    renderStatus("리셋됨. 카메라 시작을 다시 누르세요.", "warn");
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopAutoOCR();
   });
 
   // ---------- Boot ----------
-  (async () => {
-    try {
-      await startCamera();
-      topStatus.textContent =
-        "준비됨\n" +
-        "1) 자동 OCR 시작을 누르세요.\n" +
-        "2) 처음 페이지부터 마지막 문제까지 5~10초씩 꽉 차게 보여 주세요.";
-    } catch (e) {
-      topStatus.textContent = "카메라 실패: " + (e.message || String(e));
-    }
-  })();
+  renderStatus("카메라 시작(필수 탭)부터 누르세요.", "warn");
 </script>
 </body>
 </html>
