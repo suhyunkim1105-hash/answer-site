@@ -199,6 +199,7 @@
       resetBtn.disabled = disabled;
     }
 
+    // ★ 해상도 올린 버전 (아이폰에서 글자 크게 찍히도록)
     async function initCamera() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setStatus("이 브라우저는 카메라 API를 지원하지 않습니다.", true);
@@ -206,12 +207,16 @@
       }
       try {
         currentStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
           audio: false,
         });
         video.srcObject = currentStream;
         await video.play();
-        setStatus("카메라 준비 완료. 문제지가 화면에 꽉 차게 보이도록 맞춘 뒤 촬영하세요.");
+        setStatus("카메라 준비 완료. 시험지가 화면 대부분을 차지하도록 맞춘 뒤 촬영하세요.");
       } catch (err) {
         console.error(err);
         setStatus("카메라 접근 실패: " + err.message, true);
