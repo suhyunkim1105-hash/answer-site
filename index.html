@@ -10,7 +10,7 @@
     h3 { margin:8px 0; }
     #topStatus { font-size:13px; color:#c4f1ff; white-space:pre-wrap; }
     #videoBox { position:relative; width:100%; border:1px solid #333; border-radius:10px; overflow:hidden; background:#000; }
-    #video { width:100%; height:auto; } /* 표시용 */
+    #video { width:100%; height:auto; }
     #frame { position:absolute; inset:0; border:2px solid rgba(0,255,0,0.25); pointer-events:none; border-radius:10px; }
     .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
     button { padding:10px 12px; font-size:14px; border-radius:10px; border:1px solid #666; background:#111; color:#fff; }
@@ -24,9 +24,6 @@
     }
     pre { min-height:140px; }
     .small { font-size:12px; color:#bbb; }
-    .warn { color:#ffd36a; }
-    .err { color:#ff7a7a; }
-    .ok { color:#8dff9f; }
   </style>
 </head>
 
@@ -41,13 +38,15 @@
   <div class="row">
     <button id="btnCamera">카메라 시작(필수 탭)</button>
     <button id="btnVoice">음성 연결/테스트(필수 탭)</button>
+    <button id="btnStopVoice">읽기 중지</button>
     <button id="btnSolve">지금까지로 풀이(수동)</button>
     <button id="btnReset">리셋</button>
   </div>
 
   <h3 style="margin-top:14px;">실시간 OCR(누적)</h3>
   <div class="small">
-    OCR은 서버(OCR.Space)에서 처리됨. 무료 키면 너무 빠른 주기에서 막힐 수 있음.
+    안정성 우선: OCR은 7초 간격(무료 OCR.Space는 빠르면 막힐 수 있음).<br>
+    답안은 “OCR이 잠깐 멈춰서 안정될 때”만 자동 갱신됨(읽기 끊김 방지).
   </div>
   <textarea id="ocrBox" rows="10" placeholder="여기에 누적 텍스트가 쌓임"></textarea>
 
@@ -62,6 +61,7 @@
   const answerBox = document.getElementById("answerBox");
   const btnCamera = document.getElementById("btnCamera");
   const btnVoice = document.getElementById("btnVoice");
+  const btnStopVoice = document.getElementById("btnStopVoice");
   const btnSolve = document.getElementById("btnSolve");
   const btnReset = document.getElementById("btnReset");
 
@@ -69,13 +69,31 @@
   const OCR_URL = "/.netlify/functions/ocr";
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  // ---------- Settings (안정성 우선) ----------
-  let OCR_INTERVAL_MS = 7000;      // 무료키면 2~5초는 막힐 수 있음 → 기본 7초
-  const MIN_LEN = 2400;            // 공백제외 누적 길이 기준
-  const LACK_START_SEC = 60;       // 1분 이상 진전 없으면 "지문 부족" 표시
-  const LACK_TRIGGER_SEC = 8 * 60; // 8분 지나도 기준 미달이면 강제 풀이
-  const MAX_SEND_CHARS = 8000;     // solve로 보낼 최대(초과 시 뒤쪽 유지)
-  const MIN_APPEND_CORELEN = 6;    // 찌꺼기 제거
+  // ---------- Settings ----------
+  let OCR_INTERVAL_MS = 7000;
+
+  const MIN_LEN = 2400;               // 공백제외 누적 길이 기준
+  const LACK_START_SEC = 60;          // 1분 이상 진전 없으면 "지문 부족" 표시
+  const LACK_TRIGGER_SEC = 8 * 60;    // 8분 지나도 기준 미달이면 강제 풀이
+
+  const MAX_SEND_CHARS = 8000;        // solve로 보낼 최대(초과 시 뒤쪽 유지)
+  const MIN_APPEND_CORELEN = 6;       // 찌꺼기 제거
+
+  // ✅ solve 남발 방지(답안 계속 바뀌는 문제 해결)
+  const SOLVE_COOLDOWN_MS = 60_000;   // solve 최소 60초 간격
+  const SOLVE_MIN_DELTA = 250;        // 누적이 이만큼 늘어야 다시 solve
+  const SOLVE_STABLE_MS = 12_000;     // OCR 누적이 "12초간 추가 없음"일 때만 자동 solve
+
+  // ✅ 좋은 답안만 읽기(휴리스틱)
+  const MIN_GOOD_ANSWER_NONSPACE = 900;   // 너무 짧은 답안은 읽지 않음
+
+  // ✅ TTS 속도 (느리게)
+  const TTS_RATE = 0.88;   // 0.88~0.95 사이로 취향 조절
+  const TTS_PITCH = 1.0;
+
+  // ✅ “베스트 답안 반복”
+  const REPEAT_BEST = true;        // 정말 좋은 답안은 계속 읽어주기
+  const REPEAT_BEST_MS = 90_000;   // 90초마다 한 번 반복 (너무 시끄러우면 늘려)
 
   // ---------- State ----------
   let stream = null;
@@ -83,44 +101,186 @@
   let ocrBusy = false;
   let solveBusy = false;
 
-  let lines = [];            // 누적 라인
-  let seen = new Set();      // 중복 방지
-  let lastGoodAt = Date.now();
+  let lines = [];
+  let seen = new Set();
+  let lastGoodAt = Date.now();     // 마지막으로 의미있는 OCR 추가된 시점
   let startedAt = 0;
+
+  // solve 디바운스
+  let lastSolveAt = 0;
+  let lastSolvedLen = 0;
+
+  // TTS 상태
   let voiceReady = false;
+  let speaking = false;
+  let ttsQueue = [];
+  let repeatTimer = null;
+
+  // “베스트 답안”
+  let bestAnswer = "";
+  let bestScore = 0; // non-space length 기준
+  let lastEnqueuedKey = "";
+
+  // ---------- Helpers ----------
+  function effectiveLen() {
+    return (ocrBox.value || "").replace(/\s/g, "").length;
+  }
+  function lackSeconds() {
+    return Math.floor((Date.now() - lastGoodAt) / 1000);
+  }
+  function elapsedSeconds() {
+    return startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+  }
+  function shortKey(s) {
+    return (s || "").replace(/\s/g, "").slice(0, 800); // 중복 판정용
+  }
+
+  function renderStatus(extra) {
+    const len = effectiveLen();
+    const lack = lackSeconds();
+    const elapsed = elapsedSeconds();
+    const lackMsg =
+      (len < MIN_LEN && lack >= LACK_START_SEC)
+        ? `지문 부족: ${lack}초 (진전 없음)`
+        : "지문 부족: -";
+
+    const ttsMsg =
+      !voiceReady ? "음성: 대기" :
+      speaking ? `음성: 읽는 중(대기열 ${ttsQueue.length})` :
+      `음성: 준비됨(대기열 ${ttsQueue.length})`;
+
+    topStatus.textContent =
+      "자동 OCR(누적) → (안정되면) 자동 풀이 → (좋은 답안만) TTS\n" +
+      `누적 OCR 길이(공백제외): ${len} / 기준 ${MIN_LEN}\n` +
+      `${lackMsg}\n` +
+      `경과: ${elapsed}초\n` +
+      `카메라: ${stream ? "연결됨" : "대기"} | ${ttsMsg}\n` +
+      `베스트 점수: ${bestScore}\n` +
+      (extra ? ("메시지: " + extra) : "");
+  }
 
   // ---------- TTS ----------
-  function speak(text) {
+  function clearRepeatTimer() {
+    if (repeatTimer) clearTimeout(repeatTimer);
+    repeatTimer = null;
+  }
+
+  function stopTtsAll() {
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    speaking = false;
+    ttsQueue = [];
+    clearRepeatTimer();
+    renderStatus("읽기 중지됨");
+  }
+
+  function isGoodAnswer(answer) {
+    if (!answer) return false;
+    const a = answer.trim();
+    if (!a.includes("[문제 1]")) return false;
+    if (!a.includes("[문제 2]")) return false;
+    const score = a.replace(/\s/g, "").length;
+    if (score < MIN_GOOD_ANSWER_NONSPACE) return false;
+    return true;
+  }
+
+  function enqueueSpeak(answer) {
+    if (!voiceReady) return;
+    if (!isGoodAnswer(answer)) {
+      renderStatus("답안이 아직 짧거나 형식 미흡 → 읽지 않음");
+      return;
+    }
+
+    // 중복 읽기 방지(같은 답 계속 enqueue 금지)
+    const key = shortKey(answer);
+    if (key && key === lastEnqueuedKey) return;
+    lastEnqueuedKey = key;
+
+    // “읽는 중엔 끊지 말기” → 큐에 넣고 기다림
+    ttsQueue.push(answer);
+
+    // 베스트 반복 예약은 새 답이 들어오면 취소 (더 좋은 답안 읽고 나서 다시 예약)
+    clearRepeatTimer();
+
+    // 지금 안 읽고 있으면 바로 시작
+    if (!speaking) speakNext();
+    renderStatus("좋은 답안 감지 → 읽기 대기열에 추가");
+  }
+
+  function speakNext() {
+    if (!voiceReady) return;
+    if (speaking) return;
+    if (!ttsQueue.length) {
+      // 큐가 비었고 베스트가 있으면 반복
+      if (REPEAT_BEST && bestAnswer && isGoodAnswer(bestAnswer)) {
+        clearRepeatTimer();
+        repeatTimer = setTimeout(() => {
+          // 반복도 중복 enqueue가 막히지 않게 key 갱신
+          lastEnqueuedKey = "";
+          ttsQueue.push(bestAnswer);
+          speakNext();
+        }, REPEAT_BEST_MS);
+      }
+      return;
+    }
+
+    const text = ttsQueue.shift();
+    if (!text) return;
+
     try {
-      if (!text) return;
-      window.speechSynthesis.cancel();
+      window.speechSynthesis.cancel(); // 혹시 남은 거 있으면 정리
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "ko-KR";
-      u.rate = 1.0;
-      u.pitch = 1.0;
+      u.rate = TTS_RATE;
+      u.pitch = TTS_PITCH;
+
+      speaking = true;
+
+      u.onend = () => {
+        speaking = false;
+        renderStatus("읽기 완료");
+        // 다음 대기열이 있으면 이어서
+        speakNext();
+      };
+      u.onerror = () => {
+        speaking = false;
+        renderStatus("TTS 오류 발생");
+        speakNext();
+      };
+
       window.speechSynthesis.speak(u);
-    } catch (e) {}
+      renderStatus("좋은 답안 읽는 중...");
+    } catch (e) {
+      speaking = false;
+      renderStatus("TTS 실패: " + (e.message || String(e)));
+    }
   }
 
   btnVoice.addEventListener("click", () => {
     voiceReady = true;
-    speak("음성 연결 완료.");
-    renderStatus("음성: 준비됨", "ok");
+    stopTtsAll(); // 상태 정리
+    // iOS는 제스처에서 한 번 말하게 하는 게 중요
+    try {
+      const u = new SpeechSynthesisUtterance("음성 연결 완료.");
+      u.lang = "ko-KR";
+      u.rate = TTS_RATE;
+      u.pitch = TTS_PITCH;
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+    renderStatus("음성 연결 완료");
   });
+
+  btnStopVoice.addEventListener("click", () => stopTtsAll());
 
   // ---------- Camera ----------
   async function startCamera() {
     const constraints = {
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false
     };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
     startedAt = Date.now();
+    lastGoodAt = Date.now();
   }
 
   function stopCamera() {
@@ -131,12 +291,11 @@
     } catch (e) {}
   }
 
-  // ---------- Capture frame -> imageDataUrl (JPEG) ----------
+  // ---------- Capture -> imageDataUrl ----------
   function captureImageDataUrl() {
     const w = video.videoWidth || 1280;
     const h = video.videoHeight || 720;
 
-    // 중앙 크롭(90%) + 축소(최대 1600폭)
     const cropScale = 0.90;
     const cw = Math.floor(w * cropScale);
     const ch = Math.floor(h * cropScale);
@@ -153,13 +312,9 @@
     canvas.height = oh;
     const ctx = canvas.getContext("2d");
 
-    try {
-      ctx.filter = "contrast(1.25) brightness(1.05)";
-    } catch(e) {}
-
+    try { ctx.filter = "contrast(1.25) brightness(1.05)"; } catch(e) {}
     ctx.drawImage(video, cx, cy, cw, ch, 0, 0, ow, oh);
 
-    // ✅ data:image/jpeg;base64,... 형태로 반환
     return canvas.toDataURL("image/jpeg", 0.72);
   }
 
@@ -173,8 +328,8 @@
 
   function addLinesFromText(text) {
     const raw = (text || "").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-
     let added = 0;
+
     for (const ln of raw) {
       const coreLen = ln.replace(/\s/g, "").length;
       if (coreLen < MIN_APPEND_CORELEN) continue;
@@ -190,39 +345,32 @@
     if (added > 0) {
       lastGoodAt = Date.now();
       ocrBox.value = lines.join("\n");
+      // 너무 길어지면 뒤쪽 유지
+      if (ocrBox.value.length > 20000) {
+        ocrBox.value = ocrBox.value.slice(-20000);
+      }
     }
     return added;
   }
 
-  function effectiveLen() {
-    return (ocrBox.value || "").replace(/\s/g, "").length;
-  }
-
-  function lackSeconds() {
-    return Math.floor((Date.now() - lastGoodAt) / 1000);
-  }
-
-  function renderStatus(extra, level) {
+  // ---------- Solve (디바운스 + 안정 후 호출) ----------
+  function canAutoSolveNow() {
     const len = effectiveLen();
-    const lack = lackSeconds();
-    const elapsed = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+    if (len < MIN_LEN) return false;
 
-    const lackMsg =
-      (len < MIN_LEN && lack >= LACK_START_SEC)
-        ? `지문 부족: ${lack}초 (진전 없음)`
-        : "지문 부족: -";
+    const now = Date.now();
+    if (now - lastSolveAt < SOLVE_COOLDOWN_MS) return false;
 
-    topStatus.textContent =
-      "자동 OCR(누적) → 자동 풀이 → TTS\n" +
-      "누적 OCR 길이(공백제외): " + len + " / 기준 " + MIN_LEN + "\n" +
-      lackMsg + "\n" +
-      "경과: " + elapsed + "초\n" +
-      "카메라: " + (stream ? "연결됨" : "대기") + " | 음성: " + (voiceReady ? "준비됨" : "대기") + "\n" +
-      (extra ? ("메시지: " + extra) : "");
+    // OCR이 “조금 멈춰서” 안정된 상태일 때만 solve
+    if (now - lastGoodAt < SOLVE_STABLE_MS) return false;
+
+    // 누적이 크게 늘었을 때만 다시 solve (답안 흔들림 방지)
+    if (len - lastSolvedLen < SOLVE_MIN_DELTA && lastSolvedLen > 0) return false;
+
+    return true;
   }
 
-  // ---------- Solve ----------
-  async function startSolve(force) {
+  async function callSolve(force) {
     if (solveBusy) return;
     solveBusy = true;
 
@@ -232,7 +380,6 @@
         answerBox.textContent = "OCR 텍스트가 비어있음";
         return;
       }
-
       if (text.length > MAX_SEND_CHARS) text = text.slice(-MAX_SEND_CHARS);
 
       const prefix = force ? "지문 부족으로 자동 풀이합니다.\n" : "";
@@ -241,11 +388,7 @@
       const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({
-          text,
-          force: !!force,
-          prefix
-        })
+        body: JSON.stringify({ text, force: !!force, prefix })
       });
 
       const ct = res.headers.get("content-type") || "";
@@ -261,12 +404,29 @@
         return;
       }
 
-      answerBox.textContent = data.answer || "";
-      if (voiceReady) speak(data.answer || "");
-      renderStatus(force ? "solve 완료(강제)" : "solve 완료", "ok");
+      const answer = (data.answer || "").trim();
+      answerBox.textContent = answer;
+
+      // solve 기록 업데이트
+      lastSolveAt = Date.now();
+      lastSolvedLen = effectiveLen();
+
+      // 베스트 갱신(점수=공백제외 길이)
+      const score = answer.replace(/\s/g, "").length;
+      if (isGoodAnswer(answer) && score > bestScore + 80) {
+        bestScore = score;
+        bestAnswer = answer;
+        renderStatus("베스트 답안 갱신됨 → 읽기 예약");
+        enqueueSpeak(answer);
+      } else {
+        renderStatus("답안 갱신(베스트 아님 or 짧음 → 읽기 안 함/대기)");
+        // 베스트는 아니어도 “좋은 답안”이면 읽기 대기열에 넣고 싶다면 아래 주석을 해제
+        // enqueueSpeak(answer);
+      }
 
     } catch (e) {
       answerBox.textContent = "solve 에러: " + (e.message || String(e));
+      renderStatus("solve 에러");
     } finally {
       solveBusy = false;
     }
@@ -290,40 +450,38 @@
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) {
         const t = await res.text();
-        renderStatus("OCR 응답이 JSON이 아님: " + t.slice(0, 160), "err");
+        renderStatus("OCR 응답이 JSON이 아님: " + t.slice(0, 160));
         return;
       }
 
       const data = await res.json();
       if (!data.ok) {
-        // OCR.Space가 막을 때 대비: 간격 조금 늘림
+        // 막힐 때 간격 증가
         OCR_INTERVAL_MS = Math.min(15000, OCR_INTERVAL_MS + 2000);
         restartOcrTimer();
-        renderStatus("OCR 실패: " + (data.error || "unknown") + ` | 간격 ${OCR_INTERVAL_MS}ms로 증가`, "warn");
+        renderStatus("OCR 실패: " + (data.error || "unknown") + ` | OCR 간격 ${OCR_INTERVAL_MS}ms로 증가`);
         return;
       }
 
       const text = (data.text || "").trim();
       const added = addLinesFromText(text);
 
-      const len = effectiveLen();
-      const lack = lackSeconds();
-      renderStatus(added > 0 ? `OCR OK (+${added}라인)` : "OCR OK (추가 없음)", "ok");
+      renderStatus(added > 0 ? `OCR OK (+${added}라인)` : "OCR OK (추가 없음)");
 
-      // 자동 풀이 트리거
-      if (len >= MIN_LEN) {
-        await startSolve(false);
-      } else if (lack >= LACK_TRIGGER_SEC) {
-        await startSolve(true);
-      }
-
-      // 지문 부족 안내(너무 자주 말하지 않게)
-      if (!solveBusy && len < MIN_LEN && lack >= LACK_START_SEC && (lack % 30 === 0) && voiceReady) {
-        speak("지문이 부족합니다. 종이를 화면에 더 꽉 차게 보여 주세요.");
+      // 자동 풀이 트리거 (안정 상태일 때만)
+      if (canAutoSolveNow()) {
+        await callSolve(false);
+      } else {
+        // 강제 조건(8분)
+        const len = effectiveLen();
+        const lack = lackSeconds();
+        if (len < MIN_LEN && lack >= LACK_TRIGGER_SEC) {
+          await callSolve(true);
+        }
       }
 
     } catch (e) {
-      renderStatus("OCR 에러: " + (e.message || String(e)), "err");
+      renderStatus("OCR 에러: " + (e.message || String(e)));
     } finally {
       ocrBusy = false;
     }
@@ -336,7 +494,6 @@
 
   function startAutoOCR() {
     if (ocrTimer) return;
-    lastGoodAt = Date.now();
     restartOcrTimer();
     runOnce();
   }
@@ -350,27 +507,39 @@
   btnCamera.addEventListener("click", async () => {
     try {
       await startCamera();
-      renderStatus("카메라 시작됨. OCR 자동 실행 중...", "ok");
+      renderStatus("카메라 시작됨. OCR 자동 실행 중...");
       startAutoOCR();
     } catch (e) {
       topStatus.textContent = "카메라 실패: " + (e.message || String(e));
     }
   });
 
-  btnSolve.addEventListener("click", () => startSolve(true));
+  btnSolve.addEventListener("click", () => callSolve(true));
 
   btnReset.addEventListener("click", () => {
     stopAutoOCR();
     stopCamera();
+    stopTtsAll();
+
     lines = [];
     seen.clear();
     ocrBox.value = "";
     answerBox.textContent = "";
+
     lastGoodAt = Date.now();
     startedAt = 0;
-    solveBusy = false;
+
+    lastSolveAt = 0;
+    lastSolvedLen = 0;
+
+    bestAnswer = "";
+    bestScore = 0;
+    lastEnqueuedKey = "";
+
     ocrBusy = false;
-    renderStatus("리셋됨. 카메라 시작을 다시 누르세요.", "warn");
+    solveBusy = false;
+
+    renderStatus("리셋됨. 카메라 시작을 다시 누르세요.");
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -378,9 +547,10 @@
   });
 
   // ---------- Boot ----------
-  renderStatus("카메라 시작(필수 탭)부터 누르세요.", "warn");
+  renderStatus("카메라 시작(필수 탭) → 음성 연결/테스트(필수 탭)");
 </script>
 </body>
 </html>
+
 
 
