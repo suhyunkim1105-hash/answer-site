@@ -26,17 +26,18 @@
       background:#080808;
       white-space:pre-wrap;
       min-height:36px;
+      margin-top:8px;
     }
     .btnCol {
       margin-top:8px;
       display:flex;
       flex-direction:column;
-      gap:8px;
+      gap:6px; /* 버튼 간격 조금 줄임 */
     }
     button {
       width:100%;
-      padding:12px 10px;
-      font-size:15px;
+      padding:9px 10px;           /* 세로 길이 얇게 */
+      font-size:14px;             /* 약간 작게 */
       border-radius:12px;
       border:1px solid #555;
       background:#151515;
@@ -99,11 +100,14 @@
 
   <h1>연세대 논술 OCR → 복붙 → TTS</h1>
 
-  <!-- 버튼 두 개만: 자동 OCR / 공유(텍스트 복사) -->
+  <!-- 버튼 두 개만: 자동 OCR / 공유 -->
   <div class="btnCol">
     <button id="btnAuto">📸 자동 OCR 시작/정지</button>
-    <button id="btnShare">🚀 ChatGPT로 공유(텍스트 복사)</button>
+    <button id="btnShare">🔗 ChatGPT로 공유(텍스트)</button>
   </div>
+
+  <!-- ✅ 버튼 바로 아래 TTS 박스 -->
+  <textarea id="ttsBox" placeholder="여기에 ChatGPT 최종 답안을 붙여넣으면 0.9배속으로 계속 반복 재생된다."></textarea>
 
   <div id="status">카메라 준비 중...</div>
   <div class="smallHint">※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라.</div>
@@ -112,8 +116,7 @@
     <video id="video" autoplay playsinline muted></video>
   </div>
 
-  <textarea id="ocrBox" placeholder="여기에 자동 OCR로 누적된 시험지 텍스트가 들어온다. (도표 페이지 위에는 직접 '도표입니다 제시문 (라)'처럼 크게 써 두면 좋음.)"></textarea>
-  <textarea id="ttsBox" placeholder="여기에 ChatGPT 최종 답안을 붙여넣으면 TTS로 계속 반복 재생된다."></textarea>
+  <textarea id="ocrBox" placeholder="자동 OCR로 누적된 시험지 텍스트가 여기 쌓인다. (도표 페이지 위에는 직접 '도표입니다 제시문 (라)' + 해설 메모, 마지막 페이지에는 '풀이 시작'이라고 크게 써 두면 자동 종료 인식에 도움됨.)"></textarea>
 
 <script>
 (function(){
@@ -196,7 +199,6 @@
 
   // 페이지별 best 결과
   const pageResults = [];  // [{pageIndex, bestText, bestConf}]
-  const shots = [];        // [{pageIndex, imageDataUrl, text, conf, hasGraphMark, isLastPageHint}]
 
   function delay(ms){
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -215,10 +217,12 @@
       });
       const json = await res.json().catch(() => null);
       if(!json){
+        statusEl.textContent = "OCR 응답 파싱 실패";
         return { ok:false, text:"", conf:0 };
       }
       if(!json.ok){
-        return { ok:false, text:"", conf:0, error: json.error || json.message || "OCR 실패" };
+        statusEl.textContent = "OCR 실패: " + (json.message || json.error || "알 수 없음");
+        return { ok:false, text:"", conf:0 };
       }
       return {
         ok:true,
@@ -226,8 +230,8 @@
         conf: typeof json.conf === "number" ? json.conf : 0
       };
     }catch(e){
-      console.error(e);
-      return { ok:false, text:"", conf:0, error: e.message || String(e) };
+      statusEl.textContent = "OCR 네트워크 오류: " + (e.message || String(e));
+      return { ok:false, text:"", conf:0 };
     }
   }
 
@@ -242,7 +246,10 @@
   function setPageBestResult(pageIndex, text, conf){
     const idx = pageResults.findIndex(p => p.pageIndex === pageIndex);
     if(idx >= 0){
-      if(conf > (pageResults[idx].bestConf || 0)){
+      const prev = pageResults[idx];
+      const prevScore = (prev.bestConf || 0) + (prev.bestText ? prev.bestText.length / 1000 : 0);
+      const newScore  = (conf || 0) + (text ? text.length / 1000 : 0);
+      if(newScore > prevScore){
         pageResults[idx].bestText = text;
         pageResults[idx].bestConf = conf;
       }
@@ -251,14 +258,12 @@
     }
   }
 
+  // “풀이 시작” / “이제 풀이를 시작하시오” 문구 감지 → 마지막 페이지로 인식
   function hasLastPageHint(text){
     if(!text) return false;
-    return text.indexOf("이제 풀이를 시작하시오") !== -1;
-  }
-
-  function hasGraphMark(text){
-    if(!text) return false;
-    return text.indexOf("도표입니다") !== -1;
+    if (text.indexOf("풀이 시작") !== -1) return true;
+    if (text.indexOf("이제 풀이를 시작하시오") !== -1) return true;
+    return false;
   }
 
   async function ocrOnePage(pageIndex){
@@ -278,23 +283,13 @@
 
       const result = await callOcrApi(dataUrl, pageIndex);
       if(!result.ok){
-        // 실패한 샷은 건너뛰고 다음 샷 시도
         continue;
       }
 
       const text = (result.text || "").trim();
       const conf = result.conf || 0;
 
-      shots.push({
-        pageIndex,
-        imageDataUrl: dataUrl,
-        text,
-        conf,
-        hasGraphMark: hasGraphMark(text),
-        isLastPageHint: hasLastPageHint(text)
-      });
-
-      if(text && (conf > bestConf || !bestText)){
+      if(text && (conf > bestConf || !bestText || text.length > bestText.length)){
         bestText = text;
         bestConf  = conf;
       }
@@ -315,7 +310,7 @@
     return lastPageFlag;
   }
 
-  // ★ 5초 카운트다운으로 변경
+  // === 5초 카운트다운 (페이지 넘길 때) ===
   async function speakCountdown5(){
     primeTts();
     simpleSpeak("다음 페이지를 보여주세요. 5초 뒤에 다시 촬영합니다.");
@@ -332,7 +327,6 @@
     autoLoopBusy = true;
     primeTts();
 
-    // 1분 대기 안내
     statusEl.textContent = "1분 뒤에 자동 OCR을 시작합니다. 시험지를 미리 세팅하세요.";
     simpleSpeak("1분 뒤에 자동 오 씨 알을 시작합니다.");
     await delay(60000);
@@ -341,7 +335,6 @@
       return;
     }
 
-    // 10초 전 안내
     statusEl.textContent = "10초 뒤에 자동 OCR을 시작합니다. 첫 페이지를 카메라에 맞추세요.";
     simpleSpeak("10초 뒤에 시작합니다.");
     await delay(10000);
@@ -350,7 +343,6 @@
       return;
     }
 
-    // 실제 OCR 시작
     statusEl.textContent = "자동 OCR 시작.";
     simpleSpeak("자동 오 씨 알을 시작합니다.");
     currentPage = 1;
@@ -360,12 +352,11 @@
       if(!autoRunning) break;
 
       if(isLast){
-        statusEl.textContent = "이제 풀이를 시작하시오 문구가 감지되어 OCR을 종료합니다.";
+        statusEl.textContent = "'풀이 시작' 문구가 감지되어 OCR을 종료합니다.";
         simpleSpeak("모든 페이지 오 씨 알이 끝났습니다. 이제 채찍지 피티로 복사해서 풀이를 시작하세요.");
         break;
       }
 
-      // 다음 페이지로 넘어가기
       currentPage++;
       if(currentPage > MAX_PAGES){
         statusEl.textContent = "최대 페이지 수에 도달하여 OCR을 종료합니다.";
@@ -408,7 +399,7 @@
   }
 
   let ttsRunning = false;
-  const ANSWER_RATE = 0.9;   // ✅ 답안 읽기 0.9배속
+  const ANSWER_RATE = 0.9;   // 답안 읽기 0.9배속
 
   function speakAnswerLoop(){
     if(!ttsRunning) return;
@@ -427,7 +418,6 @@
 
       u.onend = () => {
         if(ttsRunning){
-          // 약간의 텀을 두고 다시 전체 반복
           setTimeout(speakAnswerLoop, 400);
         }
       };
@@ -470,7 +460,7 @@
     }
   });
 
-  // 공유 버튼: OCR 텍스트를 ChatGPT에 붙이기 쉬운 형식으로 복사
+  // 공유 버튼: Web Share API 우선 → 안 되면 클립보드 복사
   btnShare.addEventListener("click", async () => {
     try{
       const raw = (ocrBox.value || "").trim();
@@ -481,23 +471,24 @@
 
       const shareText =
         "[연세대 사회 편입 논술 OCR TEXT]\n\n" +
-        "※ 위 텍스트 전체를 그대로 붙여넣고, 첨부한 문제/도표 이미지를 함께 참고하여 [문제 1], [문제 2] 답안을 작성하라.\n\n" +
+        "※ 아래 텍스트 전체를 그대로 ChatGPT에 붙여넣고, 따로 찍은 문제/도표 스크린샷 이미지를 함께 첨부한 뒤 [문제 1], [문제 2] 답안을 요청하라.\n\n" +
         "[OCR TEXT START]\n" +
         raw +
         "\n[OCR TEXT END]\n";
 
-      // 1순위: Web Share API
       if (navigator.share && typeof navigator.share === "function") {
         try{
-          await navigator.share({ text: shareText });
-          statusEl.textContent = "공유 시트로 텍스트를 보냈습니다. ChatGPT를 선택해서 붙여넣으면 됩니다.";
+          await navigator.share({
+            title: "연세대 사회논술 OCR 텍스트",
+            text: shareText
+          });
+          statusEl.textContent = "iOS 공유 시트로 텍스트를 보냈습니다. ChatGPT를 선택해서 사용하세요.";
           return;
         }catch(e){
-          // 사용자가 취소했거나, 공유 실패 → 클립보드 복사로 폴백
+          // 사용자가 취소했거나 오류 → 클립보드 복사로 폴백
         }
       }
 
-      // 2순위: 클립보드 복사
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(shareText);
         statusEl.textContent = "OCR 텍스트를 클립보드에 복사했습니다. ChatGPT에 붙여넣으세요.";
