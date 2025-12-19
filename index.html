@@ -192,7 +192,6 @@
   <h1>연세대 논술 OCR → 복붙 → TTS</h1>
   <div id="status">카메라 준비 중...</div>
 
-  <!-- 맨 위 버튼 2개 -->
   <div class="btn-col">
     <button id="btnAuto">📸 자동 OCR 시작/정지</button>
     <button id="btnShare">🔗 ChatGPT로 공유 (텍스트+도표 샷)</button>
@@ -409,7 +408,6 @@
     updateShotsInfo();
     updateShotsGallery();
 
-    // ★ 여기 수정: "풀이 시작" 대신 "문제 1 / 문제 2"가 보이면 마지막 페이지로 판단
     const isLastPage =
       /문제\s*1/.test(clean) ||
       /문제\s*2/.test(clean);
@@ -417,16 +415,14 @@
     return { isChart, isLastPage };
   }
 
-  /* ===== 답안 TTS (단어 사이 3초, 기호 말로 읽기) ===== */
-
   let ttsPrimed = false;
   const ANSWER_RATE = 0.9;
   let answerTtsStop = false;
 
   function primeTTS() {
     if (ttsPrimed) return;
-    ttsPrimed = true;
     try {
+      ttsPrimed = true;
       const u = new SpeechSynthesisUtterance("음성 연결");
       u.lang = "ko-KR";
       u.rate = 1.0;
@@ -496,12 +492,12 @@
 
       u.onend = () => {
         if (answerTtsStop) return;
-        setTimeout(speakNext, 3000); // ★ 7초 → 3초
+        setTimeout(speakNext, 3000);
       };
 
       u.onerror = () => {
         if (answerTtsStop) return;
-        setTimeout(speakNext, 3000); // ★ 7초 → 3초
+        setTimeout(speakNext, 3000);
       };
 
       window.speechSynthesis.speak(u);
@@ -530,8 +526,6 @@
       window.speechSynthesis.cancel();
     }
   }
-
-  /* ===== 여기까지 TTS ===== */
 
   async function autoOCRLoop() {
     if (autoRunning) {
@@ -577,7 +571,6 @@
     while (autoRunning && currentPage <= MAX_PAGES) {
       setStatus(`페이지 ${currentPage} 자동 OCR 중...(총 ${SHOTS_PER_PAGE}회 촬영)`);
 
-      // 각 페이지 3회 중 conf 가장 높은 샷만 선택
       let bestShot = null;
 
       for (let i = 0; i < SHOTS_PER_PAGE && autoRunning; i++) {
@@ -610,13 +603,23 @@
         autoRunning = false;
         break;
       } else {
-        setStatus(`페이지 ${currentPage} 인식 완료. 다음 페이지를 보여 주세요. 5초 뒤에 다음 페이지를 인식합니다.`);
-        const nextUtter = new SpeechSynthesisUtterance("이 페이지 인식 완료. 다음 페이지를 보여 주세요. 5초 뒤에 다음 페이지를 인식합니다.");
+        // ★ 여기만 수정: 5초 → 10초 + 카운트다운
+        setStatus(`페이지 ${currentPage} 인식 완료. 다음 페이지를 보여 주세요. 10초 뒤에 다음 페이지를 인식합니다.`);
+        const nextUtter = new SpeechSynthesisUtterance("이 페이지 인식 완료. 다음 페이지를 보여 주세요. 10초 뒤에 다음 페이지를 인식합니다.");
         nextUtter.lang = "ko-KR";
         nextUtter.rate = 1.0;
         window.speechSynthesis.speak(nextUtter);
+
+        // 10초 카운트다운 (10, 9, ..., 1초)
+        for (let sec = 10; sec >= 1; sec--) {
+          const u = new SpeechSynthesisUtterance(`${sec}초`);
+          u.lang = "ko-KR";
+          u.rate = 1.0;
+          window.speechSynthesis.speak(u);
+          await sleep(1000);
+        }
+
         currentPage += 1;
-        await sleep(5000);
       }
     }
 
@@ -723,4 +726,3 @@
 </script>
 </body>
 </html>
-
