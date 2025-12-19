@@ -1,6 +1,6 @@
 // netlify/functions/ocr.js
 
-// Netlify Functions(Node 18 기준)에서는 fetch가 기본 내장되어 있음.
+// Netlify Functions(Node 18 기준)에서는 fetch 기본 제공.
 
 exports.handler = async function (event) {
   const headers = {
@@ -43,13 +43,16 @@ exports.handler = async function (event) {
     };
   }
 
-  // 프론트에서 보내는 필드 이름들 호환
+  // 프론트에서 오는 필드들 호환
   let imageBase64 =
     body.imageBase64 ||
     body.imageDataUrl ||
     body.image ||
     body.dataUrl ||
     "";
+
+  const pageIndex =
+    typeof body.pageIndex === "number" ? body.pageIndex : null;
 
   if (!imageBase64 || typeof imageBase64 !== "string") {
     return {
@@ -87,11 +90,9 @@ exports.handler = async function (event) {
   // 3) OCR.Space PRO 엔드포인트 (apipro1)
   const endpoint = "https://apipro1.ocr.space/parse/image";
 
-  // 공식 권장: application/x-www-form-urlencoded
   const form = new URLSearchParams();
   form.set("apikey", apiKey);
-  // ★ 여기 language를 단일 코드로 고정 (E201 방지)
-  form.set("language", "kor"); // 한국어 기준. 영어 텍스트도 대부분 인식됨.
+  form.set("language", "kor"); // 단일 코드 (E201 방지)
   form.set("isOverlayRequired", "false");
   form.set("scale", "true");
   form.set("detectOrientation", "true");
@@ -110,7 +111,6 @@ exports.handler = async function (event) {
     const rawText = await resp.text();
 
     if (!resp.ok) {
-      // HTTP 레벨 에러(403 등)는 ok:false로 감싸서 프론트에 전달
       return {
         statusCode: 200,
         headers,
@@ -153,6 +153,7 @@ exports.handler = async function (event) {
           ok: false,
           error: "OCR_PROCESSING_ERROR",
           message: msg,
+          pageIndex,
         }),
       };
     }
@@ -172,11 +173,12 @@ exports.handler = async function (event) {
           ok: false,
           error: "EMPTY_OCR_TEXT",
           message: "OCR 결과 텍스트가 비어 있습니다.",
+          pageIndex,
         }),
       };
     }
 
-    // index.html 자동 OCR 코드에서 기대하는 필드명: text, conf, note
+    // 자동 OCR index.html이 기대하는 필드명: text, conf, note(+ pageIndex)
     return {
       statusCode: 200,
       headers,
@@ -184,6 +186,7 @@ exports.handler = async function (event) {
         ok: true,
         text,
         conf,
+        pageIndex,
         note: "OCR 성공",
       }),
     };
@@ -195,6 +198,7 @@ exports.handler = async function (event) {
         ok: false,
         error: "OCR_REQUEST_FAILED",
         message: String(e.message || e),
+        pageIndex,
       }),
     };
   }
