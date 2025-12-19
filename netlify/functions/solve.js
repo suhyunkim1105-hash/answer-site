@@ -1,141 +1,93 @@
 // netlify/functions/solve.js
+export async function handler(event) {
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json; charset=utf-8"
+  };
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
-exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-      },
-      body: "",
-    };
-  }
-
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ ok: false, error: "Method not allowed" }),
-    };
-  }
-
-  if (!OPENROUTER_API_KEY) {
-    return {
-      statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ ok: false, error: "OPENROUTER_API_KEY missing" }),
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
   }
 
   try {
-    const { text, force, prefix } = JSON.parse(event.body || "{}");
-
-    if (!text || typeof text !== "string") {
-      return {
-        statusCode: 400,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ ok: false, error: "text is required" }),
-      };
+    const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+    if (!OPENROUTER_API_KEY) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: "서버 설정 오류: OPENROUTER_API_KEY 환경변수가 없습니다." }) };
     }
 
-    // 너무 긴 입력은 뒤에서부터 8000자만 사용
-    const MAX_INPUT = 8000;
-    const trimmed = text.length > MAX_INPUT ? text.slice(-MAX_INPUT) : text;
+    const body = JSON.parse(event.body || "{}");
+    const ocrText = (body.ocrText || "").trim();
+    const target = Number(body.targetCharsPerAnswer || 1000);
 
-    const systemPrompt = [
-      "너는 연세대학교 사회논술(사회복지·사회정책·불평등·권리·복지국가 관점)에 대해 상위 0.0001% 수준의 답안을 쓰는 채점위원 겸 수험생이다.",
-      "",
-      "출력 형식을 절대 어기지 말라. 오직 아래 형태만 출력한다.",
-      "[문제 1]",
-      "(문제 1에 대한 완성된 답안 문단)",
-      "[문제 2]",
-      "(문제 2에 대한 완성된 답안 문단)",
-      "",
-      "규칙:",
-      "- 한국어만 사용한다.",
-      "- 마크다운, 목록(①, 1., bullet), 해설, 메타 코멘트(예: '이 글에서는 ~을 살펴본다')를 쓰지 않는다.",
-      "- 두 답안 모두 현실적인 시험 시간/분량을 고려한 밀도 높은 논리 전개를 할 것.",
-      "- 각 답안은 원고지 기준 대략 1000자 내외, 즉 900~1100자 정도 분량을 목표로 한다.",
-      "- 분량 안에서 핵심 개념 정의, 제시문 간 비교, 비판/평가, 구체적인 정책·제도·사례까지 최대한 압축해서 담는다.",
-      force
-        ? "- 현재 제시문 텍스트가 일부 잘렸을 수 있다. 그래도 보이는 정보만 최대한 활용해 완성도 높은 답안을 작성하라."
-        : "",
+    if (!ocrText || ocrText.length < 200) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "ocrText가 너무 짧습니다. OCR이 제대로 되었는지 확인하세요." }) };
+    }
+
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+
+    // 프롬프트는 “길게”가 아니라 “정확하게”가 중요함 (타임아웃/실패 확률↓)
+    // 대신: 도표/수치/조건은 절대 누락하지 말라고 강하게 못 박음.
+    const system = [
+      "너는 연세대학교 사회논술(사회복지 관점 포함) 상위권 답안을 작성하는 AI이다.",
+      "사용자가 제공한 OCR 텍스트(제시문/도표/문제)를 근거로만 답한다.",
+      "출력은 반드시 아래 형식만 허용한다:",
+      "1) [문제 1] 한 문단",
+      "2) [문제 2] 한 문단",
+      "다른 설명/개요/해설/메타 코멘트/목차/글머리표/마크다운 금지.",
+      "각 문단 분량은 목표 글자수에 최대한 맞춘다(너무 짧거나 길면 감점).",
+      "도표/그래프/표의 수치나 추세는 반드시 요약해 논증에 연결하되, 없는 수치를 지어내지 마라.",
+      "한국어로만 작성한다."
     ].join("\n");
 
-    const userPrompt =
-      (prefix || "") +
-      "\n\n" +
-      "다음은 연세대학교 사회논술 시험지 전체 OCR 텍스트다. 제시문, 도표 설명, [문제 1], [문제 2]를 모두 포함한다.\n" +
-      "이 텍스트를 기반으로 위 규칙을 지켜서, 상위 1% 수험생이 실제 시험에서 쓸 법한 현실적인 답안을 작성하라.\n\n" +
-      "----- OCR 텍스트 시작 -----\n" +
-      trimmed +
-      "\n----- OCR 텍스트 끝 -----\n";
+    const user = [
+      `목표 분량: 문제1 = 약 ${target}자, 문제2 = 약 ${target}자 (±80자 내).`,
+      "아래 OCR 텍스트를 읽고 문제 지시를 충실히 수행하라.",
+      "OCR 텍스트:",
+      "-----",
+      ocrText,
+      "-----",
+      "주의: OCR이 일부 깨졌을 수 있으니, 명확히 읽히는 정보만 단정하고 애매하면 '제시문에 따르면' 수준으로 처리하라."
+    ].join("\n");
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 22000); // 최대 22초
+    const payload = {
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user }
+      ],
+      temperature: 0.25,
+      max_tokens: 1600
+    };
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
+        // 선택 헤더(없어도 됨)
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site"
       },
-      body: JSON.stringify({
-        model: "openai/gpt-5.1-mini", // 가볍고 빠른 모델(원하면 다른 모델로 수정 가능)
-        max_tokens: 1700,
-        temperature: 0.4,
-        top_p: 0.9,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-      signal: controller.signal,
-    }).catch((err) => {
-      clearTimeout(timeout);
-      throw err;
+      body: JSON.stringify(payload)
     });
 
-    clearTimeout(timeout);
+    const json = await res.json().catch(() => null);
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      return {
-        statusCode: 500,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({
-          ok: false,
-          error: "OpenRouter API error",
-          detail,
-        }),
-      };
+    if (!res.ok || !json) {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: `OpenRouter 응답 오류(HTTP ${res.status})`, raw: json }) };
     }
 
-    const data = await response.json();
-    const answer =
-      data.choices?.[0]?.message?.content?.trim() ||
-      "";
+    const answer = (json.choices?.[0]?.message?.content || "").trim();
 
-    return {
-      statusCode: 200,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ ok: true, answer }),
-    };
+    if (!answer) {
+      return { statusCode: 200, headers, body: JSON.stringify({ answer: "", error: "모델 응답이 비어있음" }) };
+    }
+
+    return { statusCode: 200, headers, body: JSON.stringify({ answer }) };
+
   } catch (err) {
-    console.error("solve error", err);
-    const msg =
-      err.name === "AbortError"
-        ? "모델 응답 시간이 너무 오래 걸려 중단되었습니다."
-        : "Unexpected error in solve function";
-
-    return {
-      statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ ok: false, error: msg }),
-    };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err?.message || String(err) }) };
   }
-};
+}
