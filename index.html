@@ -1,201 +1,140 @@
-<!DOCTYPE html>
-<html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <title>논술 자동 풀이 테스트</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      body {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        margin: 0;
-        padding: 16px;
-        box-sizing: border-box;
-      }
-      .row {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 8px;
-        align-items: center;
-      }
-      video {
-        width: 100%;
-        max-height: 300px;
-        background: #000;
-      }
-      textarea {
-        width: 100%;
-        min-height: 120px;
-        box-sizing: border-box;
-      }
-      button {
-        padding: 8px 14px;
-        font-size: 14px;
-        cursor: pointer;
-      }
-      #status {
-        font-size: 13px;
-        color: #444;
-        min-height: 18px;
-      }
-      #canvas {
-        display: none;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>연세대 논술 자동 OCR 테스트</h2>
+<script>
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const shutterBtn = document.getElementById("shutter");
+  const solveBtn = document.getElementById("solve");
+  const statusEl = document.getElementById("status");
+  const ocrResultEl = document.getElementById("ocrResult");
+  const answerResultEl = document.getElementById("answerResult");
 
-    <div class="row">
-      <video id="video" autoplay playsinline></video>
-    </div>
+  let currentPage = 1;
+  const maxPages = 10; // 필요하면 조절
 
-    <canvas id="canvas"></canvas>
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      statusEl.textContent = "카메라 준비 완료";
+    } catch (e) {
+      statusEl.textContent = "카메라 시작 실패: " + e.message;
+      console.error(e);
+    }
+  }
 
-    <div class="row">
-      <button id="shutter">📸 촬영</button>
-      <button id="solve">📝 풀기</button>
-    </div>
+  async function captureAndOcr() {
+    if (!video.videoWidth || !video.videoHeight) {
+      statusEl.textContent =
+        "영상 준비 중입니다. 1~2초 뒤에 다시 시도하세요.";
+      return;
+    }
 
-    <div id="status"></div>
+    // 현재 프레임을 캔버스에 그리기
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    <h3>OCR 결과</h3>
-    <textarea id="ocrResult" placeholder="여기에 제시문 OCR 결과가 누적됩니다."></textarea>
+    // base64 JPEG 생성
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
 
-    <h3>AI 답안 (풀이 결과)</h3>
-    <textarea id="answerResult" placeholder="solve 함수 응답을 여기에 표시"></textarea>
+    statusEl.textContent = `페이지 ${currentPage} OCR 요청 중...`;
 
-    <script>
-      const video = document.getElementById("video");
-      const canvas = document.getElementById("canvas");
-      const shutterBtn = document.getElementById("shutter");
-      const solveBtn = document.getElementById("solve");
-      const statusEl = document.getElementById("status");
-      const ocrResultEl = document.getElementById("ocrResult");
-      const answerResultEl = document.getElementById("answerResult");
+    try {
+      const res = await fetch("/.netlify/functions/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: dataUrl,
+          pageIndex: currentPage,
+        }),
+      });
 
-      let currentPage = 1;
-      const maxPages = 10; // 필요하면 조절
+      const json = await res.json().catch(() => null);
 
-      async function startCamera() {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" },
-            audio: false,
-          });
-          video.srcObject = stream;
-          await video.play();
-          statusEl.textContent = "카메라 준비 완료";
-        } catch (e) {
-          statusEl.textContent = "카메라 시작 실패: " + e.message;
-        }
+      if (!json || !json.ok) {
+        const msg =
+          (json && (json.message || json.error)) ||
+          res.statusText ||
+          "알 수 없는 오류";
+
+        const failPage =
+          json && typeof json.pageIndex === "number"
+            ? json.pageIndex
+            : currentPage;
+
+        statusEl.textContent = `페이지 ${failPage} OCR 실패: ${msg}`;
+        console.error("OCR error detail:", json);
+        return;
       }
 
-      async function captureAndOcr() {
-        if (!video.videoWidth || !video.videoHeight) {
-          statusEl.textContent =
-            "영상 준비 중입니다. 1~2초 뒤에 다시 시도하세요.";
-          return;
-        }
+      // pageIndex 없으면 currentPage로 대체
+      const pageLabel =
+        json && typeof json.pageIndex === "number"
+          ? json.pageIndex
+          : currentPage;
 
-        // 비디오 프레임을 그대로 캔버스에 복사
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const text = json.text || json.ocrText || "";
 
-        // base64 데이터 만들기
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+      const prev = ocrResultEl.value || "";
+      ocrResultEl.value =
+        prev +
+        `\n\n[페이지 ${pageLabel}]-------------------\n` +
+        text;
 
-        statusEl.textContent = `페이지 ${currentPage} OCR 요청 중...`;
+      statusEl.textContent = `페이지 ${pageLabel} OCR 완료`;
 
-        try {
-          const res = await fetch("/.netlify/functions/ocr", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              imageBase64: dataUrl,
-              pageIndex: currentPage,
-            }),
-          });
+      if (currentPage < maxPages) {
+        currentPage += 1;
+      }
+    } catch (e) {
+      statusEl.textContent = "요청 실패: " + e.message;
+      console.error(e);
+    }
+  }
 
-          const json = await res.json().catch(() => null);
+  async function solveNow() {
+    const text = (ocrResultEl.value || "").trim();
+    if (!text) {
+      statusEl.textContent = "먼저 OCR을 완료해주세요.";
+      return;
+    }
 
-          if (!res.ok || !json || !json.ok) {
-            const msg =
-              (json && json.message) ||
-              (json && json.error) ||
-              res.statusText ||
-              "알 수 없는 오류";
+    statusEl.textContent = "AI 풀이 요청 중...";
 
-            statusEl.textContent = "실패: " + msg;
-            console.error("OCR error detail:", json);
-            return;
-          }
+    try {
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
 
-          const prev = ocrResultEl.value || "";
-          ocrResultEl.value =
-            prev +
-            `\n\n[페이지 ${json.pageIndex}]-------------------\n` +
-            (json.ocrText || "");
+      const json = await res.json().catch(() => null);
 
-          statusEl.textContent = `페이지 ${currentPage} OCR 완료`;
-
-          if (currentPage < maxPages) {
-            currentPage += 1;
-          }
-        } catch (e) {
-          statusEl.textContent = "요청 실패: " + e.message;
-          console.error(e);
-        }
+      if (!json || !json.ok) {
+        const msg =
+          (json && (json.message || json.error)) ||
+          res.statusText ||
+          "알 수 없는 오류";
+        statusEl.textContent = "풀이 실패: " + msg;
+        console.error("solve error detail:", json);
+        return;
       }
 
-      async function solveNow() {
-        const text = ocrResultEl.value.trim();
-        if (!text) {
-          statusEl.textContent = "먼저 OCR을 완료해주세요.";
-          return;
-        }
+      const answer = json.answer || json.result || "";
+      answerResultEl.value = answer;
+      statusEl.textContent = "풀이 완료";
+    } catch (e) {
+      statusEl.textContent = "풀이 요청 실패: " + e.message;
+      console.error(e);
+    }
+  }
 
-        statusEl.textContent = "AI 풀이 요청 중...";
+  shutterBtn.addEventListener("click", captureAndOcr);
+  solveBtn.addEventListener("click", solveNow);
 
-        try {
-          const res = await fetch("/.netlify/functions/solve", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text, // solve.js에서 이 필드명을 사용하도록 맞춰줘
-            }),
-          });
-
-          const json = await res.json().catch(() => null);
-
-          if (!res.ok || !json) {
-            const msg =
-              (json && json.message) ||
-              (json && json.error) ||
-              res.statusText ||
-              "알 수 없는 오류";
-            statusEl.textContent = "풀이 실패: " + msg;
-            console.error("solve error detail:", json);
-            return;
-          }
-
-          // 응답 구조는 네 solve.js에 맞게 수정 가능
-          const answer = json.answer || json.result || JSON.stringify(json);
-          answerResultEl.value = answer;
-
-          statusEl.textContent = "풀이 완료";
-        } catch (e) {
-          statusEl.textContent = "풀이 요청 실패: " + e.message;
-          console.error(e);
-        }
-      }
-
-      shutterBtn.addEventListener("click", captureAndOcr);
-      solveBtn.addEventListener("click", solveNow);
-
-      window.addEventListener("load", startCamera);
-    </script>
-  </body>
-</html>
+  window.addEventListener("load", startCamera);
+</script>
