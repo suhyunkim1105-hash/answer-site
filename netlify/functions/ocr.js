@@ -31,8 +31,7 @@ function mergeTexts(t1, t2) {
 
     for (const ln of lines) {
       const key = ln.replace(/\s/g, "").slice(0, 80);
-      // 숫자/기호만 있는 짧은 줄도 살리기 위해 최소 길이 기준을 완화
-      if (key.length < 3) continue;
+      if (key.length < 3) continue;     // 숫자/기호만 있는 짧은 줄도 최대한 살림
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(ln);
@@ -53,8 +52,6 @@ async function ocrOnce({ endpoint, apiKey, base64Part, language, engine, timeout
   form.set("scale", "true");
   form.set("detectOrientation", "true");
   form.set("OCREngine", String(engine || 2));
-  // OCR.Space는 dataURL 전체 또는 base64Image 둘 다 허용하지만
-  // 여기서는 규격 통일: data:image/jpeg;base64, 접두어 포함
   form.set("base64Image", "data:image/jpeg;base64," + base64Part);
 
   const controller = new AbortController();
@@ -132,7 +129,6 @@ exports.handler = async function (event) {
 
   const pageIndex = typeof body.pageIndex === "number" ? body.pageIndex : null;
 
-  // 프론트 호환: imageBase64(순수 base64) 또는 dataURL 둘 다 가능
   let imageBase64 = body.imageBase64 || body.imageDataUrl || body.dataUrl || body.image || "";
 
   if (!imageBase64 || typeof imageBase64 !== "string") {
@@ -145,7 +141,6 @@ exports.handler = async function (event) {
     });
   }
 
-  // data:image/...;base64, 포함이면 잘라서 base64만 남김
   let base64Part = imageBase64;
   const idx = imageBase64.indexOf("base64,");
   if (idx >= 0) base64Part = imageBase64.slice(idx + "base64,".length);
@@ -169,13 +164,10 @@ exports.handler = async function (event) {
     });
   }
 
-  // PRO 엔드포인트
   const endpoint = "https://apipro1.ocr.space/parse/image";
 
-  // 기본: dual(한국어+영어) 고정. 프론트에서 mode를 보내지 않아도 dual.
   const mode = (body.mode || "dual").toString(); // "kor" | "eng" | "dual"
 
-  // 1) kor 시도
   const korRes = await ocrOnce({
     endpoint,
     apiKey,
@@ -185,7 +177,6 @@ exports.handler = async function (event) {
     timeoutMs: 25000,
   });
 
-  // 2) eng 시도(dual/eng일 때)
   let engRes = { ok: false, text: "", conf: 0, error: "SKIP" };
   if (mode === "dual" || mode === "eng") {
     engRes = await ocrOnce({
@@ -234,4 +225,3 @@ exports.handler = async function (event) {
     note: mode === "dual" ? "OCR(kor+eng) 성공" : `OCR(${mode}) 성공`,
   });
 };
-
