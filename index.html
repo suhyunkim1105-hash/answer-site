@@ -321,23 +321,43 @@
     return lastPageFlag;
   }
 
-  async function speakCountdown(){
+  async function speakCountdown7(){
     primeTts();
-    simpleSpeak("다음 페이지를 보여주세요. 5초 뒤에 다시 촬영합니다.");
+    simpleSpeak("다음 페이지를 보여주세요. 7초 뒤에 다시 촬영합니다.");
     await delay(1000);
-    for(let n=5;n>=1 && autoRunning;n--){
+    for(let n=7;n>=1 && autoRunning;n--){
       simpleSpeak(String(n));
       await delay(1000);
     }
   }
 
-  async function runAutoLoop(){
+  // 1분 대기 → '10초 뒤에 시작합니다' → 10초 후 OCR 루프
+  async function runAutoLoopWithIntro(){
     if(autoLoopBusy) return;
     autoLoopBusy = true;
     primeTts();
+
+    // 1분 대기 안내
+    statusEl.textContent = "1분 뒤에 자동 OCR을 시작합니다. 시험지를 미리 세팅하세요.";
+    simpleSpeak("1분 뒤에 자동 오 씨 알을 시작합니다.");
+    await delay(60000);
+    if(!autoRunning){
+      autoLoopBusy = false;
+      return;
+    }
+
+    // 10초 전 안내
+    statusEl.textContent = "10초 뒤에 자동 OCR을 시작합니다. 첫 페이지를 카메라에 맞추세요.";
+    simpleSpeak("10초 뒤에 시작합니다.");
+    await delay(10000);
+    if(!autoRunning){
+      autoLoopBusy = false;
+      return;
+    }
+
+    // 실제 OCR 시작
     statusEl.textContent = "자동 OCR 시작.";
     simpleSpeak("자동 오 씨 알을 시작합니다.");
-
     currentPage = 1;
 
     while(autoRunning && currentPage <= MAX_PAGES){
@@ -359,7 +379,7 @@
       }
 
       statusEl.textContent = "다음 페이지를 보여주세요. 곧 다시 촬영합니다.";
-      await speakCountdown();
+      await speakCountdown7();
     }
 
     autoRunning = false;
@@ -393,7 +413,7 @@
   }
 
   let ttsRunning = false;
-  const ANSWER_RATE = 0.9;
+  const ANSWER_RATE = 0.9;   // ✅ 답안 읽기 0.9배속
 
   function speakAnswerLoop(){
     if(!ttsRunning) return;
@@ -432,7 +452,7 @@
     primeTts();
     if(!autoRunning){
       autoRunning = true;
-      runAutoLoop();
+      runAutoLoopWithIntro();
     }else{
       autoRunning = false;
       statusEl.textContent = "자동 OCR 수동 중지됨.";
