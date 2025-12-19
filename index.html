@@ -76,7 +76,7 @@
   </div>
 
   <div class="hint">
-    - 셔터를 <strong>한 번 누르면</strong> 현재 페이지부터 각 페이지를 5회씩 자동 촬영하며, “이제 풀이를 시작하시오”가 보이면 자동으로 풀이를 시작한다.<br/>
+    - 셔터를 <strong>한 번 누르면</strong> 현재 페이지부터 각 페이지를 <strong>3회씩</strong> 자동 촬영하며, “이제 풀이를 시작하시오”가 보이면 자동으로 풀이를 시작한다.<br/>
     - 각 페이지의 촬영이 끝나면 “5 4 3 2 1, 다음 페이지로 넘겨 주세요.”라는 음성이 들린 뒤 다음 페이지로 자동 넘어간다.<br/>
     - 답안은 원고지 모드로 <strong>아주 느리게</strong> 반복 낭독된다.<br/>
     - <strong>TTS 소리가 전혀 안 들리면, 페이지를 새로고침한 뒤 화면을 한 번 터치해서 TTS를 다시 준비한 후 사용하라.</strong>
@@ -101,8 +101,8 @@
   const OCR_URL   = "/.netlify/functions/ocr";
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  const MAX_PAGE        = 12;
-  const SHOTS_PER_PAGE  = 5;
+  const MAX_PAGE         = 12;
+  const SHOTS_PER_PAGE   = 3;   // ★ 페이지당 3회 촬영
   const SHOT_INTERVAL_MS = 5000; // 5초 간격(정확도 우선)
 
   let currentPage   = 1;
@@ -111,11 +111,11 @@
   let stream        = null;
 
   // TTS 관련 상태
-  let ttsReady       = false;
-  let ttsVoice       = null;
+  let ttsReady        = false;
+  let ttsVoice        = null;
   let answerRepeating = false;
-  let lastAnswerRaw  = "";
-  let wakeLock       = null;
+  let lastAnswerRaw   = "";
+  let wakeLock        = null;
 
   // 페이지 셀렉트 채우기
   for (let i = 1; i <= MAX_PAGE; i++) {
@@ -350,7 +350,7 @@
     return new Promise(function(resolve){ setTimeout(resolve, ms); });
   }
 
-  // --------- 한 페이지(5회) 자동 촬영 ---------
+  // --------- 한 페이지(3회) 자동 촬영 ---------
   async function shootOnePage(page){
     if (!autoRun) return { bestText:"", bestConf:-1, foundSolveCue:false };
     if (isShootingOne) return { bestText:"", bestConf:-1, foundSolveCue:false };
