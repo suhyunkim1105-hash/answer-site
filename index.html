@@ -58,19 +58,33 @@
     .hint { font-size:11px; color:#aaa; margin-top:6px; line-height: 1.4; }
     .sectionTitle { margin-top:14px; font-size:13px; font-weight:600; }
 
-    #shotPreviewBox {
+    #shotsWrap {
       margin-top:8px;
       border:1px dashed #444;
       border-radius:10px;
       padding:8px;
       font-size:11px;
       color:#aaa;
+      max-height:180px;
+      overflow-y:auto;
     }
-    #shotPreview {
-      width:100%;
+    .shotItem {
+      margin-top:6px;
       border-radius:8px;
-      margin-top:8px;
-      display:none;
+      border:1px solid #333;
+      padding:4px;
+      background:#050505;
+    }
+    .shotLabel {
+      font-size:11px;
+      color:#ddd;
+      margin-bottom:4px;
+      display:block;
+    }
+    .shotImg {
+      width:100%;
+      border-radius:6px;
+      display:block;
       background:#000;
     }
 
@@ -110,38 +124,39 @@
   </div>
 
   <div class="hint">
-    1) <b>촬영 + OCR</b> 눌러서 한 장 인식 (자동 OCR 3회)<br/>
+    1) <b>자동 OCR 시작</b>을 한 번 누르면, 각 장마다 자동으로 촬영+OCR 3회 진행<br/>
     2) OCR 신뢰도와 텍스트에서 <b>문제 + "이제 풀이를 시작하시오"</b>가 잡히면<br/>
-       음성으로 <b>"이 페이지 인식 완료, 다음 장으로 넘기세요"</b> 안내<br/>
+       음성으로 <b>"이 페이지 인식 완료, 이제 마지막 페이지입니다"</b> 안내 후 자동 OCR 종료<br/>
     3) 모든 장 끝나면 <b>OCR 전체 텍스트 복사</b> → ChatGPT 5.2 방에 붙여넣기 + 사진 첨부<br/>
     4) 답안 받으면 아래 박스에 붙여넣기 → <b>TTS로 계속 반복 재생</b><br/>
     ※ <b>TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라</b>
+  </div>
+
+  <div class="row">
+    <button id="btnAuto">📸 자동 OCR 시작/정지</button>
+    <button id="btnCopyAll">📋 OCR 전체 텍스트 복사</button>
+  </div>
+
+  <div class="row">
+    <button id="btnCopyLastImg">🖼 마지막 이미지 복사(실험)</button>
+    <button id="btnClearOcr">🧹 OCR 텍스트 지우기</button>
   </div>
 
   <div id="videoBox">
     <video id="video" autoplay playsinline muted></video>
   </div>
 
-  <div id="shotPreviewBox">
-    최근 촬영 미리보기 (사진은 여기서 길게 눌러 복사/저장 → ChatGPT에 첨부)
-    <span class="pill" id="shotMeta">샷 없음</span>
-    <img id="shotPreview" alt="최근 촬영 이미지 미리보기"/>
+  <div id="shotsWrap">
+    촬영된 모든 샷 미리보기 (각 이미지를 길게 눌러 복사/저장 가능)
+    <span class="pill" id="shotCountLabel">샷 0개</span>
     <div class="miniNote">
-      ※ 각 장마다 <b>촬영 + OCR</b> 1번 → 완료 음성 나오면 다음 장으로.
+      ※ 자동 OCR 중에는 페이지를 넘겨 달라는 음성이 나오면 바로 다음 장을 펼치면 된다.
     </div>
-  </div>
-
-  <div class="row">
-    <button id="btnCapture">📸 촬영 + OCR (자동 3회)</button>
-  </div>
-
-  <div class="row">
-    <button id="btnCopyAll">📋 OCR 전체 텍스트 복사</button>
-    <button id="btnClearOcr">🧹 OCR 텍스트 지우기</button>
+    <div id="shotsContainer"></div>
   </div>
 
   <div class="sectionTitle">① OCR 누적 텍스트</div>
-  <textarea id="ocrBox" placeholder="촬영 + OCR을 누르면 여기에 [샷 1], [샷 2]... 순서대로 누적됩니다."></textarea>
+  <textarea id="ocrBox" placeholder="자동 OCR이 진행되면 [샷 1], [샷 2]... 순서대로 누적됩니다."></textarea>
 
   <div class="sectionTitle">② 답안(TTS용) 박스 (ChatGPT 답안을 여기 붙여넣기)</div>
   <textarea id="ttsInput" placeholder="[문제 1] ... [문제 2] ... 답안을 여기 붙여넣으면, '읽기 시작'으로 계속 반복해서 읽어 줍니다."></textarea>
@@ -163,48 +178,51 @@
 (function(){
   const statusEl = document.getElementById("status");
   const video = document.getElementById("video");
-  const btnCapture = document.getElementById("btnCapture");
+  const btnAuto = document.getElementById("btnAuto");
   const btnCopyAll = document.getElementById("btnCopyAll");
+  const btnCopyLastImg = document.getElementById("btnCopyLastImg");
   const btnClearOcr = document.getElementById("btnClearOcr");
   const ocrBox = document.getElementById("ocrBox");
   const ttsInput = document.getElementById("ttsInput");
   const btnTtsStart = document.getElementById("btnTtsStart");
   const btnTtsStop = document.getElementById("btnTtsStop");
   const errOverlay = document.getElementById("errOverlay");
-  const shotPreview = document.getElementById("shotPreview");
-  const shotMeta = document.getElementById("shotMeta");
+  const shotsContainer = document.getElementById("shotsContainer");
+  const shotCountLabel = document.getElementById("shotCountLabel");
 
   const OCR_URL = "/.netlify/functions/ocr";
 
-  // 캡처 해상도/품질 (속도+정확도 타협)
   const CAP_MAX_W = 1600;
   const JPEG_QUALITY = 0.86;
 
-  // OCR 반복 횟수 (필요하면 5로 올려도 됨)
-  const OCR_ATTEMPTS = 3;
+  const OCR_ATTEMPTS = 3; // 페이지당 OCR 시도 횟수 (3회)
 
-  // "완료" 판단 기준
-  const DONE_CONF_THRESHOLD = 70;  // MeanConfidenceLevel (대략값)
-  const DONE_LEN_THRESHOLD = 400;  // 너무 짧은 텍스트 제외용(대략)
+  const DONE_CONF_THRESHOLD = 70;   // 신뢰도 기준
+  const DONE_LEN_THRESHOLD = 400;   // 텍스트 길이 기준
 
-  // TTS 설정
+  let ocrAutoRunning = false;
+  let shotCount = 0;
+  let lastShotDataUrl = null;
+
+  let shotList = [];
+
   let ttsPrimed = false;
   let ttsActive = false;
   let ttsStopRequested = false;
   let ttsTokens = [];
   let ttsIndex = 0;
 
-  const WORD_GAP_MS = 6000;   // 단어 간 침묵 6초
-  const LOOP_GAP_MS = 7000;   // 한 바퀴 끝난 후 쉬는 시간
-  const RATE = 1.0;           // 1배속
+  const WORD_GAP_MS = 6000; // 단어 사이 침묵
+  const LOOP_GAP_MS = 7000; // 한 바퀴 끝나고 다시 시작 전 기다림
+  const RATE = 1.0;
 
   let selectedVoice = null;
 
-  // ---- 에러 오버레이
+  // ----------------- 에러 오버레이 -----------------
   function showErrorOverlay(title, detail){
     try{
       errOverlay.style.display = "block";
-      errOverlay.textContent = `[ERROR]\n${title}\n\n${detail || ""}\n\n(아래 버튼 누르면 닫힘)`;
+      errOverlay.textContent = "[ERROR]\\n" + title + "\\n\\n" + (detail || "") + "\\n\\n(아래 버튼 누르면 닫힘)";
       const btn = document.createElement("button");
       btn.textContent = "닫기";
       btn.onclick = () => { errOverlay.style.display = "none"; errOverlay.innerHTML = ""; };
@@ -223,7 +241,7 @@
     showErrorOverlay(msg, stack);
   });
 
-  // ---- 카메라 시작
+  // ----------------- 카메라 시작 -----------------
   let stream = null;
   async function startCamera(){
     try{
@@ -238,7 +256,7 @@
       });
       video.srcObject = stream;
       statusEl.textContent =
-        "카메라 준비 완료. 한 장이 꽉 차게 보이도록 맞춘 뒤 '촬영 + OCR'을 누르세요.\n" +
+        "카메라 준비 완료. 한 장이 꽉 차게 보이도록 맞춘 뒤 '자동 OCR 시작'을 누르세요.\\n" +
         "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
     }catch(e){
       statusEl.textContent = "카메라 실패: " + (e.message || String(e));
@@ -246,7 +264,7 @@
     }
   }
 
-  // ---- 캡처(dataURL) - 리사이즈 + JPEG 압축
+  // ----------------- 캡쳐 (해상도 제한 + JPEG) -----------------
   function captureDataUrlOptimized(){
     const w = video.videoWidth;
     const h = video.videoHeight;
@@ -254,7 +272,6 @@
 
     let outW = w;
     let outH = h;
-
     if (w > CAP_MAX_W){
       const ratio = CAP_MAX_W / w;
       outW = Math.round(w * ratio);
@@ -272,7 +289,7 @@
     return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   }
 
-  // ---- OCR 1회 호출
+  // ----------------- OCR 1회 호출 -----------------
   async function callOcrOnce(dataUrl){
     try{
       const res = await fetch(OCR_URL, {
@@ -283,19 +300,16 @@
           mode: "dual" // 항상 한글+영어
         })
       });
-
       const json = await res.json().catch(() => null);
       if (!json || !json.ok){
         const msg = (json && (json.message || json.error)) || "OCR 실패";
         return { ok:false, msg, text:"", conf:0 };
       }
-
       const text = (json.text || "").trim();
       const conf = (typeof json.conf === "number") ? json.conf : 0;
       if (!text){
         return { ok:false, msg:"OCR 결과가 비어 있습니다.", text:"", conf };
       }
-
       return { ok:true, text, conf };
     }catch(e){
       return { ok:false, msg:(e.message || String(e)), text:"", conf:0 };
@@ -312,42 +326,34 @@
     return best;
   }
 
-  // ---- "완료" 여부 판단
+  // ----------------- "마지막 페이지" 판정 -----------------
   function isDonePage(text, conf){
     if (!text) return false;
     if (typeof conf !== "number" || conf < DONE_CONF_THRESHOLD) return false;
-
     const norm = text.replace(/\s/g, "");
     const hasMunje = norm.includes("문제");
     const hasStart =
       norm.includes("이제풀이를시작하시오") ||
       norm.includes("이제풀이를시작하십시오");
-
     if (!hasMunje || !hasStart) return false;
-
     if (text.length < DONE_LEN_THRESHOLD) return false;
-
     return true;
   }
 
-  // ---- TTS 공통: 한국어 음성 선택
+  // ----------------- 음성 (공통) -----------------
   function selectKoreanVoice(){
     try{
       const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
       if (!voices || !voices.length) return null;
-
       const ko = voices.filter(v => (v.lang || "").toLowerCase().startsWith("ko"));
       if (!ko.length) return null;
-
       const preferNames = ["Yuna", "유나", "Korean", "Seoyeon", "서연"];
       for (const name of preferNames){
         const found = ko.find(v => (v.name || "").includes(name));
         if (found) return found;
       }
-
       const local = ko.find(v => v.localService);
       if (local) return local;
-
       return ko[0];
     }catch(e){
       return null;
@@ -357,7 +363,6 @@
   function primeTTSOnce(){
     if (ttsPrimed) return;
     ttsPrimed = true;
-
     try{
       selectedVoice = selectKoreanVoice();
       if (window.speechSynthesis){
@@ -365,7 +370,6 @@
           selectedVoice = selectKoreanVoice();
         };
       }
-
       const u = new SpeechSynthesisUtterance("음성 연결");
       u.lang = "ko-KR";
       u.rate = 1.0;
@@ -375,14 +379,10 @@
     }catch(e){}
   }
 
-  // ---- 짧은 안내 음성 (OCR 완료/재촬영 안내용)
   function speakNotice(text){
     if (!window.speechSynthesis) return;
     if (!text) return;
-
-    // 답안 TTS가 돌고 있으면 방해하지 않음
     if (ttsActive) return;
-
     try{
       primeTTSOnce();
       const u = new SpeechSynthesisUtterance(text);
@@ -394,37 +394,118 @@
     }catch(e){}
   }
 
-  // ---- 촬영 + OCR
-  let shotCount = 0;
-  let lastShotDataUrl = null;
+  function speakNextPageCountdown(){
+    if (!window.speechSynthesis) return;
+    if (ttsActive) return;
+    try{
+      primeTTSOnce();
+      const seq = [
+        "다음 페이지를 보여 주세요.",
+        "5",
+        "4",
+        "3",
+        "2",
+        "1"
+      ];
+      let idx = 0;
+      function speakOne(){
+        if (idx >= seq.length) return;
+        const u = new SpeechSynthesisUtterance(seq[idx]);
+        u.lang = "ko-KR";
+        u.rate = 1.0;
+        u.pitch = 1.0;
+        if (selectedVoice) u.voice = selectedVoice;
+        u.onend = () => {
+          idx++;
+          if (idx < seq.length){
+            setTimeout(speakOne, 500);
+          }
+        };
+        window.speechSynthesis.speak(u);
+      }
+      speakOne();
+    }catch(e){}
+  }
 
-  async function captureAndOcr(){
-    const dataUrl = captureDataUrlOptimized();
-    if (!dataUrl){
-      statusEl.textContent = "영상 준비 중입니다. 1~2초 후 다시 시도하세요.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+  // ----------------- 샷 미리보기 누적 -----------------
+  function appendShotPreview(dataUrl, conf){
+    try{
+      const item = document.createElement("div");
+      item.className = "shotItem";
+      const label = document.createElement("span");
+      label.className = "shotLabel";
+      const confStr = (typeof conf === "number" && conf > 0) ? conf.toFixed(1) + "%" : "정보 없음";
+      label.textContent = "샷 " + shotCount + " (신뢰도 대략 " + confStr + ")";
+      const img = document.createElement("img");
+      img.className = "shotImg";
+      img.src = dataUrl;
+      img.alt = "샷 " + shotCount;
+      item.appendChild(label);
+      item.appendChild(img);
+      shotsContainer.appendChild(item);
+      shotCountLabel.textContent = "샷 " + shotCount + "개";
+    }catch(e){}
+  }
+
+  async function copyLastImageToClipboard(){
+    if (!lastShotDataUrl){
+      statusEl.textContent =
+        "복사할 이미지가 없습니다. 먼저 자동 OCR을 한 번이라도 진행하세요.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
+    try{
+      if (!navigator.clipboard || !window.ClipboardItem){
+        statusEl.textContent =
+          "이 브라우저에서는 이미지 클립보드 복사가 완전히 지원되지 않을 수 있습니다.\\n" +
+          "이미지를 길게 눌러 '복사' 또는 '사진 저장'을 사용하세요.\\n" +
+          "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+        return;
+      }
+      const res = await fetch(lastShotDataUrl);
+      const blob = await res.blob();
+      const item = new ClipboardItem({ [blob.type]: blob });
+      await navigator.clipboard.write([item]);
+      statusEl.textContent =
+        "마지막 샷 이미지를 클립보드에 복사했습니다. ChatGPT 입력창에 바로 붙여넣기를 시도해 보세요.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+    }catch(e){
+      statusEl.textContent =
+        "이미지 복사 실패. 사파리에서 지원이 부족할 수 있습니다.\\n" +
+        "이미지를 길게 눌러 '복사' 또는 '사진 저장'을 사용하세요.\\n" +
+        "오류: " + (e.message || String(e)) + "\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+    }
+  }
 
-    btnCapture.disabled = true;
+  // ----------------- 단일 샷 캡쳐 + OCR(3회) -----------------
+  async function captureAndOcrSingleShot(){
+    const dataUrl = captureDataUrlOptimized();
+    if (!dataUrl){
+      statusEl.textContent =
+        "영상 준비 중입니다. 1~2초 후 다시 시도됩니다.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      return { ok:false, done:false };
+    }
 
     shotCount += 1;
     lastShotDataUrl = dataUrl;
+    shotList.push({ index: shotCount, dataUrl });
 
-    try{
-      shotPreview.src = dataUrl;
-      shotPreview.style.display = "block";
-      shotMeta.textContent = `샷 ${shotCount}`;
-    }catch(e){}
+    appendShotPreview(dataUrl, 0);
 
-    statusEl.textContent = `샷 ${shotCount}: 촬영 완료. OCR 자동 ${OCR_ATTEMPTS}회 진행 중...\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+    statusEl.textContent =
+      "샷 " + shotCount + ": 촬영 완료. OCR 자동 " + OCR_ATTEMPTS + "회 진행 중...\\n" +
+      "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
 
     let best = null;
     let lastErr = "";
 
     for (let attempt = 1; attempt <= OCR_ATTEMPTS; attempt++){
+      if (!ocrAutoRunning) break;
       statusEl.textContent =
-        `샷 ${shotCount}: OCR ${attempt}회차 처리 중...\n` +
-        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+        "샷 " + shotCount + ": OCR " + attempt + "회차 처리 중...\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       const r = await callOcrOnce(dataUrl);
       if (!r.ok) lastErr = r.msg || lastErr;
       best = pickBest(best, r);
@@ -432,13 +513,12 @@
 
     if (!best || !best.ok){
       statusEl.textContent =
-        `샷 ${shotCount}: OCR ${OCR_ATTEMPTS}회 모두 실패.\n` +
-        `조명/거리/초점 다시 맞추고 다시 '촬영 + OCR'을 누르세요.\n` +
-        `마지막 오류: ${lastErr || "정보 없음"}\n` +
-        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
-      btnCapture.disabled = false;
-      speakNotice("오 씨 알에 실패했습니다. 다시 촬영하세요.");
-      return;
+        "샷 " + shotCount + ": OCR " + OCR_ATTEMPTS + "회 모두 실패.\\n" +
+        "조명/거리/초점 다시 맞추고 자동 OCR을 다시 시작하거나, 잠시 후 재시도하세요.\\n" +
+        "마지막 오류: " + (lastErr || "정보 없음") + "\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      speakNotice("오 씨 알에 실패했습니다. 조명과 거리를 조정하고 다시 시도하세요.");
+      return { ok:false, done:false };
     }
 
     const text = best.text || "";
@@ -446,59 +526,109 @@
     const confStr = confValue ? confValue.toFixed(1) + "%" : "정보 없음";
     const lengthStr = text.length;
 
-    const header = `\n\n[샷 ${shotCount}] ---------------------- (신뢰도 대략 ${confStr}, 길이 ${lengthStr}자)\n`;
-    ocrBox.value = (ocrBox.value || "") + header + text + "\n";
+    const header =
+      "\\n\\n[샷 " + shotCount + "] ---------------------- " +
+      "(신뢰도 대략 " + confStr + ", 길이 " + lengthStr + "자)\\n";
+    ocrBox.value = (ocrBox.value || "") + header + text + "\\n";
 
     const done = isDonePage(text, confValue);
 
     if (done){
       statusEl.textContent =
-        `샷 ${shotCount}: OCR 성공(신뢰도 대략 ${confStr}, 길이 ${lengthStr}자).\n` +
-        `텍스트에서 '문제'와 '이제 풀이를 시작하시오' 문구가 감지되었습니다.\n` +
-        `→ 이 페이지 인식 완료. 다음 장으로 넘기세요.\n` +
-        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
-      speakNotice("이 페이지 인식 완료. 다음 장으로 넘기세요.");
+        "샷 " + shotCount + ": OCR 성공(신뢰도 대략 " + confStr + ", 길이 " + lengthStr + "자).\\n" +
+        "텍스트에서 '문제'와 '이제 풀이를 시작하시오' 문구가 감지되었습니다.\\n" +
+        "→ 이 페이지를 마지막으로 자동 OCR을 종료합니다.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      speakNotice("이 페이지 인식 완료. 이제 마지막 페이지입니다. 자동 오 씨 알을 종료합니다.");
+      return { ok:true, done:true };
     }else{
       statusEl.textContent =
-        `샷 ${shotCount}: OCR 성공(신뢰도 대략 ${confStr}, 길이 ${lengthStr}자).\n` +
-        `다만 '문제' 또는 '이제 풀이를 시작하시오' 문구가 완전히 잡히지 않았습니다.\n` +
-        `→ 필요하면 이 장을 한 번 더 촬영하세요.\n` +
-        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
-      speakNotice("인식은 되었지만 완전히 끝난 페이지로 보이지 않습니다. 필요하면 다시 촬영하세요.");
+        "샷 " + shotCount + ": OCR 성공(신뢰도 대략 " + confStr + ", 길이 " + lengthStr + "자).\\n" +
+        "다만 '문제' 또는 '이제 풀이를 시작하시오' 문구가 완전히 잡히지 않았습니다.\\n" +
+        "→ 다음 안내에 따라 페이지를 넘겨 자동 OCR을 계속 진행합니다.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      // 미리보기의 라벨에도 conf 반영
+      if (shotsContainer && shotsContainer.lastElementChild){
+        const lbl = shotsContainer.lastElementChild.querySelector(".shotLabel");
+        if (lbl){
+          lbl.textContent = "샷 " + shotCount + " (신뢰도 대략 " + confStr + ")";
+        }
+      }
+      return { ok:true, done:false };
     }
-
-    btnCapture.disabled = false;
   }
 
-  // ---- OCR 전체 텍스트 복사
+  function sleep(ms){
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // ----------------- 자동 OCR 루프 -----------------
+  async function runAutoOcrLoop(){
+    if (ocrAutoRunning) return;
+    ocrAutoRunning = true;
+    btnAuto.textContent = "⏹ 자동 OCR 중지";
+
+    statusEl.textContent =
+      "자동 OCR을 시작합니다.\\n" +
+      "지금 보이는 페이지를 고정한 상태에서 기다리면, 각 장마다 자동으로 촬영 + OCR " + OCR_ATTEMPTS + "회가 진행됩니다.\\n" +
+      "완료 문구가 나오면 그 페이지가 마지막입니다.\\n" +
+      "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+
+    while (ocrAutoRunning){
+      const res = await captureAndOcrSingleShot();
+      if (!ocrAutoRunning) break;
+      if (!res.ok){
+        statusEl.textContent += "\\n자동 OCR 루프를 잠시 멈춥니다. 필요하면 다시 '자동 OCR 시작'을 누르세요.";
+        break;
+      }
+      if (res.done){
+        ocrAutoRunning = false;
+        break;
+      }
+      // 다음 페이지 안내
+      speakNextPageCountdown();
+      await sleep(6500); // 카운트다운 + 페이지 넘길 시간
+    }
+
+    ocrAutoRunning = false;
+    btnAuto.textContent = "📸 자동 OCR 시작/정지";
+  }
+
+  function stopAutoOcr(){
+    ocrAutoRunning = false;
+    btnAuto.textContent = "📸 자동 OCR 시작/정지";
+    statusEl.textContent =
+      "자동 OCR을 중지했습니다. 필요하면 다시 '자동 OCR 시작'을 눌러 이어서 진행할 수 있습니다.\\n" +
+      "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+  }
+
+  // ----------------- OCR 텍스트 복사/초기화 -----------------
   function buildSharePayload(text){
     return (
-`[OCR 이미지/텍스트 세트]
-
-- 아래 OCR 텍스트는 시험지에서 추출됨
-- 사진은 사이트 미리보기에서 길게 눌러 복사/저장 후 ChatGPT에 첨부
-
-[OCR TEXT START]
-${text}
-[OCR TEXT END]
-`
+"[OCR 이미지/텍스트 세트]\\n\\n" +
+"- 아래 OCR 텍스트는 시험지에서 추출됨\\n" +
+"- 사진은 사이트 샷 미리보기에서 길게 눌러 복사/저장 후 ChatGPT에 첨부\\n\\n" +
+"[OCR TEXT START]\\n" +
+text +
+"\\n[OCR TEXT END]\\n"
     );
   }
 
   async function copyAllText(){
     const text = (ocrBox.value || "").trim();
     if (!text){
-      statusEl.textContent = "복사할 OCR 텍스트가 없습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      statusEl.textContent =
+        "복사할 OCR 텍스트가 없습니다. 먼저 자동 OCR을 진행하세요.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
     const payload = buildSharePayload(text);
-
     try{
       if (navigator.clipboard && navigator.clipboard.writeText){
         await navigator.clipboard.writeText(payload);
         statusEl.textContent =
-          "OCR 텍스트를 복사했습니다. ChatGPT에 붙여넣으세요.\n" +
-          "사진은 미리보기에서 길게 눌러 저장/복사한 뒤 ChatGPT에 첨부.\n" +
+          "OCR 텍스트를 클립보드에 복사했습니다. ChatGPT에 붙여넣으세요.\\n" +
+          "이미지는 각 샷 미리보기에서 길게 눌러 복사/저장 후 첨부하세요.\\n" +
           "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       }else{
         const tmp = document.createElement("textarea");
@@ -510,12 +640,12 @@ ${text}
         document.execCommand("copy");
         document.body.removeChild(tmp);
         statusEl.textContent =
-          "복사 시도 완료. 붙여넣기 안 되면 전체선택 후 복사하세요.\n" +
+          "복사 시도 완료. 붙여넣기 안 되면 OCR 텍스트를 전체선택 후 직접 복사하세요.\\n" +
           "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       }
     }catch(e){
       statusEl.textContent =
-        "복사 실패: " + (e.message || String(e)) + "\n" +
+        "복사 실패: " + (e.message || String(e)) + "\\n" +
         "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       showErrorOverlay("클립보드 복사 실패", String(e && e.stack ? e.stack : e));
     }
@@ -524,17 +654,17 @@ ${text}
   function clearOcr(){
     if (!confirm("OCR 누적 텍스트를 모두 지우겠습니까?")) return;
     ocrBox.value = "";
-    statusEl.textContent = "OCR 텍스트를 초기화했습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+    statusEl.textContent =
+      "OCR 텍스트를 초기화했습니다. 샷 미리보기는 그대로 남아 있습니다.\\n" +
+      "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
   }
 
-  // ---- TTS(답안 반복 읽기)
-
+  // ----------------- TTS(답안 읽기: 1배속 + 단어 사이 6초 침묵) -----------------
   function buildTokens(text){
     let t = String(text || "");
     t = t.replace(/\r/g, "");
     t = t.replace(/\./g, " 마침표 ");
     const lines = t.split(/\n+/).map(x => x.trim()).filter(Boolean);
-
     const out = [];
     for (let i = 0; i < lines.length; i++){
       if (i > 0) out.push("줄바꿈");
@@ -544,15 +674,13 @@ ${text}
     return out;
   }
 
-  function speakNext(){
+  function speakNextToken(){
     if (!ttsActive || ttsStopRequested) return;
     if (!ttsTokens.length){
       ttsActive = false;
       return;
     }
-
     const token = ttsTokens[ttsIndex];
-
     const u = new SpeechSynthesisUtterance(token);
     u.lang = "ko-KR";
     u.rate = RATE;
@@ -561,18 +689,18 @@ ${text}
 
     u.onend = () => {
       if (ttsStopRequested) return;
-
       ttsIndex++;
       if (ttsIndex >= ttsTokens.length){
+        // 한 바퀴 끝
         ttsIndex = 0;
         setTimeout(() => {
           if (!ttsActive || ttsStopRequested) return;
-          speakNext();
+          speakNextToken();
         }, LOOP_GAP_MS);
       }else{
         setTimeout(() => {
           if (!ttsActive || ttsStopRequested) return;
-          speakNext();
+          speakNextToken();
         }, WORD_GAP_MS);
       }
     };
@@ -582,7 +710,7 @@ ${text}
       setTimeout(() => {
         if (!ttsActive || ttsStopRequested) return;
         ttsIndex = Math.min(ttsIndex + 1, ttsTokens.length - 1);
-        speakNext();
+        speakNextToken();
       }, WORD_GAP_MS);
     };
 
@@ -590,7 +718,7 @@ ${text}
       window.speechSynthesis.speak(u);
     }catch(e){
       statusEl.textContent =
-        "TTS 오류: " + (e.message || String(e)) + "\n" +
+        "TTS 오류: " + (e.message || String(e)) + "\\n" +
         "TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
     }
   }
@@ -600,69 +728,75 @@ ${text}
       statusEl.textContent = "이 브라우저에서는 TTS를 사용할 수 없습니다.";
       return;
     }
-
     const text = (ttsInput.value || "").trim();
     if (!text){
-      statusEl.textContent = "TTS 박스에 답안을 붙여넣으세요.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      statusEl.textContent =
+        "TTS 박스에 답안을 붙여넣으세요.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
-
     primeTTSOnce();
-
     ttsStopRequested = false;
     ttsActive = false;
     try{ window.speechSynthesis.cancel(); }catch(e){}
-
     selectedVoice = selectKoreanVoice() || selectedVoice;
-
     ttsTokens = buildTokens(text);
     if (!ttsTokens.length){
-      statusEl.textContent = "읽을 내용이 없습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      statusEl.textContent =
+        "읽을 내용이 없습니다.\\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
-
     ttsIndex = 0;
     ttsActive = true;
-
     statusEl.textContent =
-      "TTS 시작: 1배속 + 단어 간 약 6초 침묵 + 반복.\n" +
-      "앱 전환 후 무음이면 '읽기 시작' 다시 누르기 → 그래도 무음이면 새로고침.\n" +
+      "TTS 시작: 1배속 + 단어 간 약 6초 침묵 + 반복.\\n" +
+      "앱 전환 후 무음이면 '읽기 시작' 다시 누르기 → 그래도 무음이면 새로고침.\\n" +
       "TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
-
-    speakNext();
+    speakNextToken();
   }
 
   function stopTts(){
     ttsStopRequested = true;
     ttsActive = false;
     try{ window.speechSynthesis.cancel(); }catch(e){}
-    statusEl.textContent = "TTS 정지.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+    statusEl.textContent =
+      "TTS를 정지했습니다.\\n" +
+      "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
   }
 
-  // ---- 앱 전환 감지
+  // ----------------- 포그라운드 복귀 안내 -----------------
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") return;
     statusEl.textContent =
-      "앱 전환 후 돌아왔습니다.\n" +
-      "TTS가 안 나오면 '읽기 시작'을 다시 누르세요.\n" +
-      "그래도 무음이면 새로고침.\n" +
+      "앱 전환 후 돌아왔습니다.\\n" +
+      "TTS가 안 나오면 '읽기 시작'을 다시 누르세요.\\n" +
+      "그래도 무음이면 새로고침.\\n" +
       "TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
   });
 
-  // ---- 붙여넣기 후 자동 시작(실패해도 상관없게)
+  // TTS 입력창에 붙여넣으면 자동으로 읽기 시작 시도
   ttsInput.addEventListener("paste", () => {
     setTimeout(() => {
       try{ startTts(); }catch(e){}
     }, 60);
   });
 
-  // ---- 이벤트 바인딩 + 시작
-  btnCapture.addEventListener("click", captureAndOcr);
+  // ----------------- 버튼 이벤트 -----------------
+  btnAuto.addEventListener("click", () => {
+    if (ocrAutoRunning){
+      stopAutoOcr();
+    }else{
+      runAutoOcrLoop();
+    }
+  });
   btnCopyAll.addEventListener("click", copyAllText);
+  btnCopyLastImg.addEventListener("click", copyLastImageToClipboard);
   btnClearOcr.addEventListener("click", clearOcr);
   btnTtsStart.addEventListener("click", startTts);
   btnTtsStop.addEventListener("click", stopTts);
 
+  // ----------------- 시작 -----------------
   startCamera();
 })();
 </script>
