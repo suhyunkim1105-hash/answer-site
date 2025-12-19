@@ -7,26 +7,70 @@
 
   <style>
     * { box-sizing: border-box; }
-    body { margin:0; padding:12px; font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif; background:#0b0b0b; color:#fff; }
+    body {
+      margin:0; padding:12px;
+      font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+      background:#0b0b0b; color:#fff;
+    }
     h1 { font-size:16px; margin:0 0 10px; }
-    #status { font-size:12px; color:#c4f1ff; white-space:pre-wrap; padding:8px; border:1px solid #333; border-radius:10px; background:#070707; }
-    #videoBox { margin-top:10px; border:1px solid #333; border-radius:10px; overflow:hidden; background:#000; }
+    #status {
+      font-size:12px; color:#c4f1ff;
+      white-space:pre-wrap;
+      padding:8px; border:1px solid #333;
+      border-radius:10px; background:#070707;
+    }
+    #videoBox {
+      margin-top:10px; border:1px solid #333;
+      border-radius:10px; overflow:hidden; background:#000;
+    }
     video { width:100%; height:auto; display:block; }
+
     .row { display:flex; gap:8px; margin-top:10px; }
-    button { flex:1; padding:10px 12px; font-size:14px; border-radius:10px; border:1px solid #555; background:#151515; color:#fff; }
+    button {
+      flex:1; padding:10px 12px;
+      font-size:14px;
+      border-radius:10px;
+      border:1px solid #555;
+      background:#151515; color:#fff;
+    }
     button:active { transform: scale(0.98); }
-    textarea { width:100%; min-height:140px; margin-top:8px; padding:10px; border-radius:10px; border:1px solid #333; background:#060606; color:#fff; font-size:12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; }
+    button:disabled { opacity:0.5; }
+
+    textarea {
+      width:100%; min-height:140px;
+      margin-top:8px; padding:10px;
+      border-radius:10px; border:1px solid #333;
+      background:#060606; color:#fff;
+      font-size:12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space:pre-wrap;
+    }
     .hint { font-size:11px; color:#aaa; margin-top:6px; }
+
     #errOverlay {
-      position:fixed; inset:0; background:rgba(0,0,0,0.92); color:#fff; padding:14px;
+      position:fixed; inset:0;
+      background:rgba(0,0,0,0.92); color:#fff;
+      padding:14px;
       display:none; z-index:9999; overflow:auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space:pre-wrap;
     }
     #errOverlay button { margin-top:10px; width:auto; }
-    .smallRow { display:flex; gap:8px; margin-top:8px; align-items:center; }
-    select { padding:8px; border-radius:10px; border:1px solid #444; background:#111; color:#fff; }
-    label { font-size:12px; color:#bbb; }
+
+    .smallRow {
+      display:flex; gap:8px;
+      margin-top:8px; align-items:center;
+    }
+    .badge {
+      font-size:11px; padding:4px 8px;
+      border-radius:999px;
+      border:1px solid #444;
+      background:#111; color:#ddd;
+    }
+    #pageDisplay {
+      font-weight:bold;
+      margin-left:4px;
+    }
   </style>
 </head>
 
@@ -41,31 +85,28 @@
   </div>
 
   <div class="smallRow">
-    <label>OCR 모드</label>
-    <select id="ocrMode">
-      <option value="dual" selected>dual(한글+영어)</option>
-      <option value="kor">kor(한글 우선)</option>
-      <option value="eng">eng(영어 우선)</option>
-    </select>
-    <label style="margin-left:auto;">페이지</label>
-    <select id="pageSel"></select>
+    <div class="badge">OCR: 한글 + 영어 + 숫자/기호</div>
+    <div style="margin-left:auto; font-size:12px; color:#ccc;">
+      현재 페이지: <span id="pageDisplay">1</span>
+    </div>
   </div>
 
   <div class="row">
-    <button id="btnShutter">📸 셔터</button>
-    <button id="btnSolve">📝 풀기</button>
+    <button id="btnShutter">📸 셔터(5회 자동 촬영)</button>
+    <button id="btnSolve">📝 풀기(수동 재시작용)</button>
   </div>
 
   <div class="hint">
-    - 에러가 나면 흰 화면 대신 에러 오버레이가 뜬다.<br/>
-    - 셔터는 “한 쪽 전체가 꽉 차게” 보여주고 눌러라. (A3면 특히)
+    - 셔터를 한 번 누르면, 같은 페이지를 5초 간격으로 5번 촬영/OCR하고, 그 중 신뢰도(conf)가 가장 높은 결과만 저장한다.<br/>
+    - OCR 누적 텍스트 안에 “이제 풀이를 시작하시오”가 들어오면 자동으로 풀이를 시작한다.<br/>
+    - 안내 음성은 짧게, 답안은 원고지 모드로 느리게 반복 낭독된다.
   </div>
 
   <textarea id="ocrBox" placeholder="OCR 누적 텍스트"></textarea>
   <textarea id="answerBox" placeholder="AI 답안"></textarea>
 
 <script>
-(function(){
+(function() {
   const statusEl = document.getElementById("status");
   const video = document.getElementById("video");
   const btnShutter = document.getElementById("btnShutter");
@@ -73,53 +114,74 @@
   const ocrBox = document.getElementById("ocrBox");
   const answerBox = document.getElementById("answerBox");
   const errOverlay = document.getElementById("errOverlay");
-  const ocrModeSel = document.getElementById("ocrMode");
-  const pageSel = document.getElementById("pageSel");
+  const pageDisplay = document.getElementById("pageDisplay");
 
   const OCR_URL = "/.netlify/functions/ocr";
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  // --- 페이지 선택(1~12)
-  const MAX_PAGE = 12;
-  for (let i=1; i<=MAX_PAGE; i++){
-    const opt = document.createElement("option");
-    opt.value = String(i);
-    opt.textContent = String(i);
-    pageSel.appendChild(opt);
-  }
-  pageSel.value = "1";
+  const MULTI_SHOTS = 5;
+  const SHOT_INTERVAL_MS = 5000;
 
-  // --- 에러 오버레이(흰 화면 방지)
-  function showErrorOverlay(title, detail){
-    try{
+  let currentPageIndex = 1;      // 다음에 촬영할 페이지 번호
+  let isShooting = false;        // 한 페이지에서 5회 OCR 중인지 여부
+  let autoSolveTriggered = false; // "이제 풀이를 시작하시오" 감지 후 자동 풀이 한 번만
+
+  // ----- 공통 유틸 -----
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function showErrorOverlay(title, detail) {
+    try {
+      errOverlay.innerHTML = "";
       errOverlay.style.display = "block";
-      errOverlay.textContent = `[ERROR]\n${title}\n\n${detail || ""}\n\n(아래 버튼 누르면 닫힘)`;
+      const pre = document.createElement("div");
+      pre.textContent = "[ERROR]\n" + (title || "") + "\n\n" + (detail || "") + "\n\n(아래 버튼 누르면 닫힘)";
+      errOverlay.appendChild(pre);
+
       const btn = document.createElement("button");
       btn.textContent = "닫기";
-      btn.onclick = () => { errOverlay.style.display = "none"; errOverlay.innerHTML = ""; };
-      errOverlay.appendChild(document.createElement("br"));
+      btn.onclick = () => {
+        errOverlay.style.display = "none";
+        errOverlay.innerHTML = "";
+      };
       errOverlay.appendChild(btn);
-    }catch(e){}
+    } catch (e) {}
   }
 
   window.addEventListener("error", (e) => {
-    showErrorOverlay(e.message || "Unknown JS error", (e.error && e.error.stack) ? e.error.stack : "");
+    const msg = e.message || "Unknown JS error";
+    const stack = e.error && e.error.stack ? e.error.stack : "";
+    showErrorOverlay(msg, stack);
   });
+
   window.addEventListener("unhandledrejection", (e) => {
     const msg = (e && e.reason) ? (e.reason.message || String(e.reason)) : "Unhandled rejection";
     const stack = (e && e.reason && e.reason.stack) ? e.reason.stack : "";
     showErrorOverlay(msg, stack);
   });
 
-  // --- TTS 큐/반복 (새 답안이 와도 “중간에 끊지 않고” 다음에 재생)
+  // ----- TTS (안내 vs 원고지 모드 분리) -----
   let ttsPrimed = false;
   let speaking = false;
-  let pendingText = null;
-  let lastSpokenText = "";
-  let repeatMode = true; // 최종답안 반복 재생
-  const RATE = 0.72;     // 느리게
+  let pending = null; // { text, kind }
 
-  function toWongojiSpeech(text){
+  function primeTTS() {
+    if (ttsPrimed) return;
+    ttsPrimed = true;
+    if (!window.speechSynthesis) return;
+    try {
+      const u = new SpeechSynthesisUtterance("음성 연결 테스트");
+      u.lang = "ko-KR";
+      u.rate = 1.0;
+      u.onend = () => {
+        window.speechSynthesis.cancel();
+      };
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  function toWongojiSpeech(text) {
     let t = String(text || "");
     t = t.replace(/\r/g, "");
     t = t.replace(/\n+/g, " 줄바꿈 ");
@@ -131,81 +193,92 @@
     return t;
   }
 
-  function speakQueued(text){
-    try{
-      if (!text) return;
-      if (!window.speechSynthesis) return;
+  function speak(text, kind) {
+    if (!text) return;
+    if (!window.speechSynthesis) return;
 
-      if (speaking){
-        pendingText = text;
+    const isAnswer = kind === "answer";
+
+    if (speaking) {
+      pending = { text, kind };
+      return;
+    }
+
+    speaking = true;
+    const utterText = isAnswer ? toWongojiSpeech(text) : text;
+    const rate = isAnswer ? 0.72 : 1.0;
+    const repeat = isAnswer;
+
+    const u = new SpeechSynthesisUtterance(utterText);
+    u.lang = "ko-KR";
+    u.rate = rate;
+    u.pitch = 1.0;
+
+    u.onend = () => {
+      speaking = false;
+
+      if (pending) {
+        const next = pending;
+        pending = null;
+        speak(next.text, next.kind);
         return;
       }
 
-      speaking = true;
-      lastSpokenText = text;
+      if (repeat) {
+        setTimeout(() => {
+          speak(text, kind);
+        }, 900);
+      }
+    };
 
-      const u = new SpeechSynthesisUtterance(toWongojiSpeech(text));
-      u.lang = "ko-KR";
-      u.rate = RATE;
-      u.pitch = 1.0;
+    u.onerror = () => {
+      speaking = false;
+    };
 
-      u.onend = () => {
-        speaking = false;
-
-        if (pendingText){
-          const next = pendingText;
-          pendingText = null;
-          setTimeout(() => speakQueued(next), 400);
-          return;
-        }
-
-        if (repeatMode && lastSpokenText){
-          setTimeout(() => speakQueued(lastSpokenText), 900);
-        }
-      };
-
-      u.onerror = () => { speaking = false; };
-
+    try {
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
-    }catch(e){}
+    } catch (e) {}
   }
 
-  function primeTTS(){
-    if (ttsPrimed) return;
-    ttsPrimed = true;
-    try{
-      const u = new SpeechSynthesisUtterance("음성 연결");
-      u.lang = "ko-KR";
-      u.rate = 1.0;
-      u.onend = () => { window.speechSynthesis.cancel(); };
-      window.speechSynthesis.speak(u);
-    }catch(e){}
+  function speakStatus(text) {
+    speak(text, "status");
   }
 
-  // --- 카메라
+  function speakAnswer(text) {
+    speak(text, "answer");
+  }
+
+  // ----- 카메라 -----
   let stream = null;
-  async function startCamera(){
-    try{
+
+  async function startCamera() {
+    try {
       statusEl.textContent = "카메라 권한 요청 중...";
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        statusEl.textContent = "이 브라우저에서는 카메라를 사용할 수 없습니다.";
+        return;
+      }
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
         audio: false
       });
       video.srcObject = stream;
-      statusEl.textContent = "카메라 준비 완료";
-    }catch(e){
+      statusEl.textContent = "카메라 준비 완료. 페이지 1부터 촬영하세요.";
+    } catch (e) {
       statusEl.textContent = "카메라 실패: " + (e.message || String(e));
       showErrorOverlay("카메라 시작 실패", String(e && e.message ? e.message : e));
     }
   }
 
-  // --- 프레임 캡쳐(dataURL)
-  function captureDataUrl(){
+  function captureDataUrl() {
     const w = video.videoWidth;
     const h = video.videoHeight;
     if (!w || !h) return null;
-
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
@@ -214,70 +287,127 @@
     return canvas.toDataURL("image/jpeg", 0.9);
   }
 
-  // --- OCR
-  async function doOCR(){
-    const pageIndex = Number(pageSel.value || "1");
-    const mode = ocrModeSel.value || "dual";
+  // ----- 자동 풀이 트리거 -----
+  function shouldAutoSolve(allText) {
+    const s = String(allText || "").replace(/\s/g, "");
+    // "이제 풀이를 시작하시오" 문구 포함 여부만 본다.
+    return s.includes("이제풀이를시작하시오");
+  }
 
-    const dataUrl = captureDataUrl();
-    if (!dataUrl){
-      statusEl.textContent = "영상 준비 중(1~2초 뒤 재시도)";
-      speakQueued("카메라 영상이 준비되지 않았습니다.");
+  // ----- OCR: 셔터 1번 → 5초 간격 5회 시도 -----
+  async function multiShotOCR() {
+    primeTTS();
+
+    if (isShooting) {
+      statusEl.textContent = "이미 이 페이지 OCR 중입니다. 잠시만 기다리세요.";
+      speakStatus("이미 촬영 중입니다.");
       return;
     }
 
-    statusEl.textContent = `페이지 ${pageIndex} OCR 요청 중...`;
-    try{
-      const res = await fetch(OCR_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: dataUrl, pageIndex, mode })
-      });
+    const pageIndex = currentPageIndex;
+    isShooting = true;
+    btnShutter.disabled = true;
+    btnSolve.disabled = true;
 
-      const json = await res.json().catch(() => null);
-      if (!json || !json.ok){
-        const msg = (json && (json.message || json.error)) || "OCR 실패";
-        statusEl.textContent = `실패: ${msg}`;
-        speakQueued("오씨알 실패. 다시 촬영하세요.");
-        return;
+    statusEl.textContent = `페이지 ${pageIndex} OCR: 5회 촬영을 시작합니다. 시험지를 한 면 꽉 차게 맞춰주세요.`;
+
+    let best = null; // { text, conf }
+
+    for (let i = 1; i <= MULTI_SHOTS; i++) {
+      statusEl.textContent = `페이지 ${pageIndex} OCR: ${i}/${MULTI_SHOTS}회 촬영 중...`;
+
+      const dataUrl = captureDataUrl();
+      if (!dataUrl) {
+        statusEl.textContent = "영상 준비 중입니다. 1~2초 후 자동으로 다시 시도합니다.";
+        await sleep(1200);
+      } else {
+        try {
+          const res = await fetch(OCR_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              imageBase64: dataUrl,
+              pageIndex,
+              mode: "dual" // 항상 한글+영어
+            })
+          });
+
+          const json = await res.json().catch(() => null);
+
+          if (json && json.ok && json.text && json.text.trim()) {
+            const conf = typeof json.conf === "number" ? json.conf : 0;
+            if (!best || conf > best.conf) {
+              best = { text: json.text, conf };
+            }
+          }
+        } catch (e) {
+          // 마지막 시도까지 전부 실패한 경우에만 에러 오버레이
+          if (i === MULTI_SHOTS && !best) {
+            showErrorOverlay("OCR 요청 실패", String(e && e.stack ? e.stack : e));
+          }
+        }
       }
 
-      const label = (typeof json.pageIndex === "number") ? json.pageIndex : pageIndex;
-      const block = `\n\n[페이지 ${label}]-------------------\n${json.text || ""}`;
-      ocrBox.value = (ocrBox.value || "") + block;
+      if (i < MULTI_SHOTS) {
+        await sleep(SHOT_INTERVAL_MS);
+      }
+    }
 
-      statusEl.textContent = `OCR 성공 (페이지 ${label}) / 신뢰도(대략): ${(json.conf || 0).toFixed(1)}%`;
-      speakQueued("오씨알 성공");
-    }catch(e){
-      statusEl.textContent = "OCR 요청 실패: " + (e.message || String(e));
-      showErrorOverlay("OCR 요청 실패", String(e && e.stack ? e.stack : e));
+    isShooting = false;
+    btnShutter.disabled = false;
+    btnSolve.disabled = false;
+
+    if (!best) {
+      statusEl.textContent = `페이지 ${pageIndex} OCR 5회 모두 실패했습니다. 다시 셔터를 눌러주세요.`;
+      speakStatus("오씨알 다섯 번 모두 실패했습니다. 다시 촬영해주세요.");
+      return;
+    }
+
+    const block = `\n\n[페이지 ${pageIndex}]-------------------\n${best.text}`;
+    ocrBox.value = (ocrBox.value || "") + block;
+
+    statusEl.textContent = `OCR 완료: 페이지 ${pageIndex} (최고 신뢰도 약 ${(best.conf || 0).toFixed(1)}%)`;
+    speakStatus("오씨알 완료");
+
+    currentPageIndex += 1;
+    pageDisplay.textContent = String(currentPageIndex);
+
+    // 자동 풀이 트리거
+    if (!autoSolveTriggered && shouldAutoSolve(ocrBox.value)) {
+      autoSolveTriggered = true;
+      statusEl.textContent += "\n\n'이제 풀이를 시작하시오' 문구를 감지했습니다. 자동으로 풀이를 시작합니다.";
+      doSolve();
     }
   }
 
-  // --- Solve
-  async function doSolve(){
+  // ----- Solve (AI 풀이) -----
+  async function doSolve() {
     primeTTS();
 
     const text = (ocrBox.value || "").trim();
-    if (!text){
+    if (!text) {
       statusEl.textContent = "먼저 셔터로 OCR을 쌓아주세요.";
-      speakQueued("먼저 오씨알을 진행하세요.");
+      speakStatus("먼저 오씨알을 진행하세요.");
       return;
     }
 
-    statusEl.textContent = "AI 풀이 요청 중...";
-    try{
+    statusEl.textContent = "AI 풀이 요청 중... (최대 수십 초 걸릴 수 있음)";
+    try {
       const res = await fetch(SOLVE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, targetChars: 1000, tolerance: 120 })
+        body: JSON.stringify({
+          text,
+          targetChars: 1000,
+          tolerance: 120
+        })
       });
 
       const json = await res.json().catch(() => null);
-      if (!json || !json.ok){
+      if (!json || !json.ok) {
         const msg = (json && (json.message || json.error)) || "solve 실패";
         statusEl.textContent = `풀이 실패: ${msg}`;
-        speakQueued("풀이 실패");
+        speakStatus("풀이에 실패했습니다.");
         return;
       }
 
@@ -285,16 +415,27 @@
       answerBox.value = answer || "(빈 응답)";
       statusEl.textContent = "풀이 완료. (원고지 모드로 느리게 반복 낭독)";
 
-      speakQueued(answer);
-    }catch(e){
+      speakAnswer(answer);
+    } catch (e) {
       statusEl.textContent = "풀이 요청 실패: " + (e.message || String(e));
       showErrorOverlay("solve 요청 실패", String(e && e.stack ? e.stack : e));
     }
   }
 
-  btnShutter.addEventListener("click", doOCR);
-  btnSolve.addEventListener("click", doSolve);
+  // ----- 버튼 이벤트 -----
+  btnShutter.addEventListener("click", () => {
+    primeTTS();
+    multiShotOCR();
+  });
 
+  // 수동으로 다시 풀고 싶을 때만 사용
+  btnSolve.addEventListener("click", () => {
+    primeTTS();
+    autoSolveTriggered = true; // 수동 풀이도 '이미 한 번 풀었다'로 본다
+    doSolve();
+  });
+
+  // ----- 시작 -----
   startCamera();
 })();
 </script>
