@@ -1,7 +1,6 @@
 // netlify/functions/ocr.js
 
-// Netlify Functions (Node 18 기준)에서는 fetch가 기본 내장되어 있음.
-// 따로 node-fetch 같은 패키지 import 할 필요 없음.
+// Netlify Functions(Node 18 기준)에서는 fetch가 기본 내장되어 있음.
 
 exports.handler = async function (event) {
   const headers = {
@@ -11,7 +10,7 @@ exports.handler = async function (event) {
     "Access-Control-Allow-Methods": "POST,OPTIONS",
   };
 
-  // 프리플라이트 대응
+  // CORS preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
   }
@@ -20,7 +19,11 @@ exports.handler = async function (event) {
     return {
       statusCode: 405,
       headers,
-      body: JSON.stringify({ ok: false, error: "METHOD_NOT_ALLOWED" }),
+      body: JSON.stringify({
+        ok: false,
+        error: "METHOD_NOT_ALLOWED",
+        message: "POST로 호출해야 합니다.",
+      }),
     };
   }
 
@@ -40,7 +43,7 @@ exports.handler = async function (event) {
     };
   }
 
-  // 프론트에서 보내는 필드: imageBase64 (당신 코드 기준 b64 문자열)
+  // 프론트에서 보내는 필드 이름들 호환
   let imageBase64 =
     body.imageBase64 ||
     body.imageDataUrl ||
@@ -61,9 +64,7 @@ exports.handler = async function (event) {
     };
   }
 
-  // 2) 순수 base64 / dataURL 모두 처리
-  // - 네 자동 OCR 코드(b64)는 순수 base64 형태
-  // - 혹시 data:image/jpeg;base64,... 형태여도 같이 처리
+  // 2) base64 추출 (dataURL / 순수 base64 둘 다 처리)
   let base64Part = imageBase64;
   const idx = imageBase64.indexOf("base64,");
   if (idx >= 0) {
@@ -86,13 +87,15 @@ exports.handler = async function (event) {
   // 3) OCR.Space PRO 엔드포인트 (apipro1)
   const endpoint = "https://apipro1.ocr.space/parse/image";
 
-  // x-www-form-urlencoded 로 전송 (OCR.Space 공식 방식)
+  // 공식 권장: application/x-www-form-urlencoded
   const form = new URLSearchParams();
   form.set("apikey", apiKey);
-  form.set("language", "kor+eng"); // 한글 + 영어
+  // ★ 여기 language를 단일 코드로 고정 (E201 방지)
+  form.set("language", "kor"); // 한국어 기준. 영어 텍스트도 대부분 인식됨.
   form.set("isOverlayRequired", "false");
   form.set("scale", "true");
-  form.set("OCREngine", "3");
+  form.set("detectOrientation", "true");
+  form.set("OCREngine", "2");
   form.set("base64Image", "data:image/jpeg;base64," + base64Part);
 
   try {
@@ -107,7 +110,7 @@ exports.handler = async function (event) {
     const rawText = await resp.text();
 
     if (!resp.ok) {
-      // 여기서 403 등 나오면 그대로 프론트에 전달
+      // HTTP 레벨 에러(403 등)는 ok:false로 감싸서 프론트에 전달
       return {
         statusCode: 200,
         headers,
@@ -135,9 +138,8 @@ exports.handler = async function (event) {
       };
     }
 
-    // OCR.Space 에러 플래그 체크
     if (data.IsErroredOnProcessing) {
-      const errMsg =
+      const msg =
         (Array.isArray(data.ErrorMessage)
           ? data.ErrorMessage.join(" / ")
           : data.ErrorMessage) ||
@@ -150,7 +152,7 @@ exports.handler = async function (event) {
         body: JSON.stringify({
           ok: false,
           error: "OCR_PROCESSING_ERROR",
-          message: errMsg,
+          message: msg,
         }),
       };
     }
@@ -174,8 +176,7 @@ exports.handler = async function (event) {
       };
     }
 
-    // 프론트(index.html)가 기대하는 필드 이름에 맞춤:
-    // data.text, data.conf
+    // index.html 자동 OCR 코드에서 기대하는 필드명: text, conf, note
     return {
       statusCode: 200,
       headers,
