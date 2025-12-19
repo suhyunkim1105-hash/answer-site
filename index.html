@@ -27,16 +27,17 @@
       white-space:pre-wrap;
       min-height:36px;
     }
-    .btnRow {
+    .btnCol {
       margin-top:8px;
       display:flex;
+      flex-direction:column;
       gap:8px;
     }
     button {
-      flex:1;
-      padding:10px 8px;
-      font-size:13px;
-      border-radius:10px;
+      width:100%;
+      padding:12px 10px;
+      font-size:15px;
+      border-radius:12px;
       border:1px solid #555;
       background:#151515;
       color:#f8f8f8;
@@ -98,14 +99,10 @@
 
   <h1>연세대 논술 OCR → 복붙 → TTS</h1>
 
-  <div class="btnRow">
+  <!-- 버튼 두 개만: 자동 OCR / 공유(텍스트 복사) -->
+  <div class="btnCol">
     <button id="btnAuto">📸 자동 OCR 시작/정지</button>
-    <button id="btnCopyOcr">📋 OCR 전체 텍스트 복사</button>
-    <button id="btnClearOcr">🧹 OCR 텍스트 지우기</button>
-  </div>
-  <div class="btnRow">
-    <button id="btnStartTts">🔊 TTS 시작/정지</button>
-    <button id="btnClearTts">🧹 TTS 텍스트 지우기</button>
+    <button id="btnShare">🚀 ChatGPT로 공유(텍스트 복사)</button>
   </div>
 
   <div id="status">카메라 준비 중...</div>
@@ -128,11 +125,8 @@
   const ocrBox     = document.getElementById("ocrBox");
   const ttsBox     = document.getElementById("ttsBox");
 
-  const btnAuto     = document.getElementById("btnAuto");
-  const btnCopyOcr  = document.getElementById("btnCopyOcr");
-  const btnClearOcr = document.getElementById("btnClearOcr");
-  const btnStartTts = document.getElementById("btnStartTts");
-  const btnClearTts = document.getElementById("btnClearTts");
+  const btnAuto  = document.getElementById("btnAuto");
+  const btnShare = document.getElementById("btnShare");
 
   // ===== 공통: 에러 오버레이 =====
   function showErrorOverlay(title, detail){
@@ -284,7 +278,7 @@
 
       const result = await callOcrApi(dataUrl, pageIndex);
       if(!result.ok){
-        // 실패 shot은 그냥 넘어가고 다음 시도
+        // 실패한 샷은 건너뛰고 다음 샷 시도
         continue;
       }
 
@@ -321,11 +315,12 @@
     return lastPageFlag;
   }
 
-  async function speakCountdown7(){
+  // ★ 5초 카운트다운으로 변경
+  async function speakCountdown5(){
     primeTts();
-    simpleSpeak("다음 페이지를 보여주세요. 7초 뒤에 다시 촬영합니다.");
+    simpleSpeak("다음 페이지를 보여주세요. 5초 뒤에 다시 촬영합니다.");
     await delay(1000);
-    for(let n=7;n>=1 && autoRunning;n--){
+    for(let n=5;n>=1 && autoRunning;n--){
       simpleSpeak(String(n));
       await delay(1000);
     }
@@ -379,14 +374,14 @@
       }
 
       statusEl.textContent = "다음 페이지를 보여주세요. 곧 다시 촬영합니다.";
-      await speakCountdown7();
+      await speakCountdown5();
     }
 
     autoRunning = false;
     autoLoopBusy = false;
   }
 
-  // ===== TTS (프롬프트용 짧은 멘트, 답안 반복 TTS) =====
+  // ===== TTS (답안 상시 반복 재생, 속도 0.9) =====
   let ttsPrimed = false;
 
   function primeTts(){
@@ -447,6 +442,21 @@
     }
   }
 
+  // TTS: 텍스트가 바뀌면 자동으로 반복 재생 시작
+  ttsBox.addEventListener("input", () => {
+    primeTts();
+    const text = (ttsBox.value || "").trim();
+    if(!text){
+      window.speechSynthesis.cancel();
+      ttsRunning = false;
+      statusEl.textContent = "TTS 텍스트가 비어 있습니다.";
+      return;
+    }
+    ttsRunning = true;
+    window.speechSynthesis.cancel();
+    speakAnswerLoop();
+  });
+
   // ===== 버튼 이벤트 =====
   btnAuto.addEventListener("click", () => {
     primeTts();
@@ -460,34 +470,43 @@
     }
   });
 
-  btnCopyOcr.addEventListener("click", async () => {
+  // 공유 버튼: OCR 텍스트를 ChatGPT에 붙이기 쉬운 형식으로 복사
+  btnShare.addEventListener("click", async () => {
     try{
-      const text = ocrBox.value || "";
-      await navigator.clipboard.writeText(text);
-      statusEl.textContent = "OCR 전체 텍스트를 클립보드에 복사했습니다.";
+      const raw = (ocrBox.value || "").trim();
+      if(!raw){
+        statusEl.textContent = "공유할 OCR 텍스트가 없습니다.";
+        return;
+      }
+
+      const shareText =
+        "[연세대 사회 편입 논술 OCR TEXT]\n\n" +
+        "※ 위 텍스트 전체를 그대로 붙여넣고, 첨부한 문제/도표 이미지를 함께 참고하여 [문제 1], [문제 2] 답안을 작성하라.\n\n" +
+        "[OCR TEXT START]\n" +
+        raw +
+        "\n[OCR TEXT END]\n";
+
+      // 1순위: Web Share API
+      if (navigator.share && typeof navigator.share === "function") {
+        try{
+          await navigator.share({ text: shareText });
+          statusEl.textContent = "공유 시트로 텍스트를 보냈습니다. ChatGPT를 선택해서 붙여넣으면 됩니다.";
+          return;
+        }catch(e){
+          // 사용자가 취소했거나, 공유 실패 → 클립보드 복사로 폴백
+        }
+      }
+
+      // 2순위: 클립보드 복사
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareText);
+        statusEl.textContent = "OCR 텍스트를 클립보드에 복사했습니다. ChatGPT에 붙여넣으세요.";
+      } else {
+        statusEl.textContent = "클립보드 API를 사용할 수 없습니다. 텍스트를 수동으로 선택해 복사하세요.";
+      }
     }catch(e){
-      statusEl.textContent = "클립보드 복사 실패: " + (e.message || String(e));
+      statusEl.textContent = "공유 처리 중 오류: " + (e.message || String(e));
     }
-  });
-
-  btnClearOcr.addEventListener("click", () => {
-    ocrBox.value = "";
-    statusEl.textContent = "OCR 텍스트를 모두 지웠습니다.";
-  });
-
-  btnStartTts.addEventListener("click", () => {
-    primeTts();
-    if(!ttsRunning){
-      ttsRunning = true;
-      speakAnswerLoop();
-    }else{
-      ttsRunning = false;
-      window.speechSynthesis.cancel();
-    }
-  });
-
-  btnClearTts.addEventListener("click", () => {
-    ttsBox.value = "";
   });
 
   // ===== 시작 =====
