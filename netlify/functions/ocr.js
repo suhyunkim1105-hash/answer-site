@@ -30,8 +30,9 @@ function mergeTexts(t1, t2) {
       .filter(Boolean);
 
     for (const ln of lines) {
-      const key = ln.replace(/\s/g, "").slice(0, 40);
-      if (key.length < 8) continue;
+      const key = ln.replace(/\s/g, "").slice(0, 80);
+      // 숫자/기호만 있는 짧은 줄도 살리기 위해 최소 길이 기준을 완화
+      if (key.length < 3) continue;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(ln);
@@ -52,6 +53,8 @@ async function ocrOnce({ endpoint, apiKey, base64Part, language, engine, timeout
   form.set("scale", "true");
   form.set("detectOrientation", "true");
   form.set("OCREngine", String(engine || 2));
+  // OCR.Space는 dataURL 전체 또는 base64Image 둘 다 허용하지만
+  // 여기서는 규격 통일: data:image/jpeg;base64, 접두어 포함
   form.set("base64Image", "data:image/jpeg;base64," + base64Part);
 
   const controller = new AbortController();
@@ -169,7 +172,7 @@ exports.handler = async function (event) {
   // PRO 엔드포인트
   const endpoint = "https://apipro1.ocr.space/parse/image";
 
-  // 기본: dual(한국어+영어)
+  // 기본: dual(한국어+영어) 고정. 프론트에서 mode를 보내지 않아도 dual.
   const mode = (body.mode || "dual").toString(); // "kor" | "eng" | "dual"
 
   // 1) kor 시도
@@ -182,7 +185,7 @@ exports.handler = async function (event) {
     timeoutMs: 25000,
   });
 
-  // 2) eng 시도(dual일 때만)
+  // 2) eng 시도(dual/eng일 때)
   let engRes = { ok: false, text: "", conf: 0, error: "SKIP" };
   if (mode === "dual" || mode === "eng") {
     engRes = await ocrOnce({
@@ -195,7 +198,6 @@ exports.handler = async function (event) {
     });
   }
 
-  // 결과 합치기
   const korText = korRes.ok ? korRes.text : "";
   const engText = engRes.ok ? engRes.text : "";
 
@@ -206,7 +208,6 @@ exports.handler = async function (event) {
   if (engRes.ok) confs.push(engRes.conf || 0);
   const avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
 
-  // OCR 실패 처리
   if (!merged || !merged.trim()) {
     const msg =
       (korRes.ok ? "" : (korRes.message || korRes.raw || korRes.error || "")) ||
@@ -233,6 +234,4 @@ exports.handler = async function (event) {
     note: mode === "dual" ? "OCR(kor+eng) 성공" : `OCR(${mode}) 성공`,
   });
 };
-
-
 
