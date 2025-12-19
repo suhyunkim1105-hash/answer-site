@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>autononsul - OCR + Share + TTS</title>
+  <title>autononsul - OCR + 복붙 + TTS</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 
   <style>
@@ -104,13 +104,18 @@
 <body>
   <div id="errOverlay"></div>
 
-  <h1>연세대 논술 OCR → (사진+텍스트 공유) → TTS</h1>
-  <div id="status">로딩됨. 카메라 준비 중...</div>
+  <h1>연세대 논술 OCR → 복붙 → TTS</h1>
+  <div id="status">
+    로딩됨. 카메라 준비 중...
+  </div>
 
   <div class="hint">
-    - 목표 플로우(우선 1번 시도): <b>촬영+OCR</b> → <b>ChatGPT로 공유(사진+텍스트)</b> → ChatGPT에서 <b>Send 1번</b><br/>
-    - 만약 공유에서 사진이 안 붙으면: <b>2번 플로우</b>(텍스트만)로 전환하면 됨<br/>
-    - <b>TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라</b>
+    1) <b>촬영 + OCR</b> 눌러서 한 장 인식 (자동 OCR 3회)<br/>
+    2) OCR 신뢰도와 텍스트에서 <b>문제 + "이제 풀이를 시작하시오"</b>가 잡히면<br/>
+       음성으로 <b>"이 페이지 인식 완료, 다음 장으로 넘기세요"</b> 안내<br/>
+    3) 모든 장 끝나면 <b>OCR 전체 텍스트 복사</b> → ChatGPT 5.2 방에 붙여넣기 + 사진 첨부<br/>
+    4) 답안 받으면 아래 박스에 붙여넣기 → <b>TTS로 계속 반복 재생</b><br/>
+    ※ <b>TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라</b>
   </div>
 
   <div id="videoBox">
@@ -118,29 +123,28 @@
   </div>
 
   <div id="shotPreviewBox">
-    최근 촬영 미리보기 (공유 시 사진이 함께 붙는지 확인용)
+    최근 촬영 미리보기 (사진은 여기서 길게 눌러 복사/저장 → ChatGPT에 첨부)
     <span class="pill" id="shotMeta">샷 없음</span>
     <img id="shotPreview" alt="최근 촬영 이미지 미리보기"/>
     <div class="miniNote">
-      ※ iOS/앱 조합에 따라 “텍스트만 공유”로 떨어질 수 있음(그 경우 2번 플로우로 전환).
+      ※ 각 장마다 <b>촬영 + OCR</b> 1번 → 완료 음성 나오면 다음 장으로.
     </div>
   </div>
 
   <div class="row">
-    <button id="btnCapture">📸 촬영 + OCR (자동 2회, 실패 시 3회)</button>
-    <button id="btnShare" disabled>📤 ChatGPT로 공유(사진+텍스트)</button>
+    <button id="btnCapture">📸 촬영 + OCR (자동 3회)</button>
   </div>
 
   <div class="row">
-    <button id="btnCopyAll">📋 (사진제외) OCR 전체 텍스트 복사</button>
+    <button id="btnCopyAll">📋 OCR 전체 텍스트 복사</button>
     <button id="btnClearOcr">🧹 OCR 텍스트 지우기</button>
   </div>
 
   <div class="sectionTitle">① OCR 누적 텍스트</div>
-  <textarea id="ocrBox" placeholder="촬영+OCR을 누르면 여기에 누적됩니다."></textarea>
+  <textarea id="ocrBox" placeholder="촬영 + OCR을 누르면 여기에 [샷 1], [샷 2]... 순서대로 누적됩니다."></textarea>
 
-  <div class="sectionTitle">② 답안(TTS용) 박스 (ChatGPT 답안을 여기에 붙여넣기)</div>
-  <textarea id="ttsInput" placeholder="[문제 1] ... [문제 2] ... 답안을 여기 붙여넣으면, 자동으로 읽기를 시작하도록 설정돼 있습니다. (안 되면 '읽기 시작' 버튼 누르기)"></textarea>
+  <div class="sectionTitle">② 답안(TTS용) 박스 (ChatGPT 답안을 여기 붙여넣기)</div>
+  <textarea id="ttsInput" placeholder="[문제 1] ... [문제 2] ... 답안을 여기 붙여넣으면, '읽기 시작'으로 계속 반복해서 읽어 줍니다."></textarea>
 
   <div class="row">
     <button id="btnTtsStart">🔊 읽기 시작(반복)</button>
@@ -148,9 +152,11 @@
   </div>
 
   <div class="hint">
-    - TTS는 <b>1배속</b>으로 읽고, 단어 사이를 <b>약 5초 침묵</b>으로 벌립니다.<br/>
-    - 줄바꿈은 “줄바꿈”, 마침표는 “마침표”라고 읽습니다. (띄어쓰기 단어는 말하지 않음)<br/>
-    - 앱 전환 후 무음이 되면: <b>읽기 시작</b> 다시 누르기 → 그래도 무음이면 <b>새로고침</b><br/>
+    - TTS는 <b>1배속</b>으로 읽고, 단어 사이에 <b>약 6초 침묵</b> 간격을 둔다.<br/>
+    - 줄바꿈은 <b>"줄바꿈"</b>, 마침표는 <b>"마침표"</b>라고 읽는다. 띄어쓰기는 말하지 않는다(침묵만).<br/>
+    - 답안 전체를 다 읽고 나면, <b>잠시 쉬었다가 처음부터 다시 반복</b>한다.<br/>
+    - 앱 전환 후 돌아왔는데 TTS가 안 들리면: <b>'읽기 시작' 다시 누르고</b>, 그래도 안 되면 <b>새로고침</b>.<br/>
+    - <b>TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라</b>
   </div>
 
 <script>
@@ -158,7 +164,6 @@
   const statusEl = document.getElementById("status");
   const video = document.getElementById("video");
   const btnCapture = document.getElementById("btnCapture");
-  const btnShare = document.getElementById("btnShare");
   const btnCopyAll = document.getElementById("btnCopyAll");
   const btnClearOcr = document.getElementById("btnClearOcr");
   const ocrBox = document.getElementById("ocrBox");
@@ -171,17 +176,31 @@
 
   const OCR_URL = "/.netlify/functions/ocr";
 
-  // 캡처 최적화(속도/안정성)
-  // - 해상도를 너무 크게 보내면 업로드/서버 처리/ocr.space가 느려질 수 있음
-  // - 너무 줄이면 글자가 뭉개질 수 있음
-  const CAP_MAX_W = 1600;      // 1400~1800 사이 추천
-  const JPEG_QUALITY = 0.86;   // 0.80~0.90 사이 추천
+  // 캡처 해상도/품질 (속도+정확도 타협)
+  const CAP_MAX_W = 1600;
+  const JPEG_QUALITY = 0.86;
 
-  // OCR 재시도 정책
-  const OCR_TRY1_2 = 2;
-  const OCR_TRY3 = 1;
+  // OCR 반복 횟수 (필요하면 5로 올려도 됨)
+  const OCR_ATTEMPTS = 3;
 
-  // ---- 에러 오버레이(흰 화면 방지)
+  // "완료" 판단 기준
+  const DONE_CONF_THRESHOLD = 70;  // MeanConfidenceLevel (대략값)
+  const DONE_LEN_THRESHOLD = 400;  // 너무 짧은 텍스트 제외용(대략)
+
+  // TTS 설정
+  let ttsPrimed = false;
+  let ttsActive = false;
+  let ttsStopRequested = false;
+  let ttsTokens = [];
+  let ttsIndex = 0;
+
+  const WORD_GAP_MS = 6000;   // 단어 간 침묵 6초
+  const LOOP_GAP_MS = 7000;   // 한 바퀴 끝난 후 쉬는 시간
+  const RATE = 1.0;           // 1배속
+
+  let selectedVoice = null;
+
+  // ---- 에러 오버레이
   function showErrorOverlay(title, detail){
     try{
       errOverlay.style.display = "block";
@@ -193,16 +212,18 @@
       errOverlay.appendChild(btn);
     }catch(e){}
   }
+
   window.addEventListener("error", (e) => {
     showErrorOverlay(e.message || "Unknown JS error", (e.error && e.error.stack) ? e.error.stack : "");
   });
+
   window.addEventListener("unhandledrejection", (e) => {
     const msg = (e && e.reason) ? (e.reason.message || String(e.reason)) : "Unhandled rejection";
     const stack = (e && e.reason && e.reason.stack) ? e.reason.stack : "";
     showErrorOverlay(msg, stack);
   });
 
-  // ---- 카메라
+  // ---- 카메라 시작
   let stream = null;
   async function startCamera(){
     try{
@@ -216,7 +237,9 @@
         audio: false
       });
       video.srcObject = stream;
-      statusEl.textContent = "카메라 준비 완료. 한 장이 꽉 차게 보이도록 맞춘 뒤 '촬영+OCR'을 누르세요.";
+      statusEl.textContent =
+        "카메라 준비 완료. 한 장이 꽉 차게 보이도록 맞춘 뒤 '촬영 + OCR'을 누르세요.\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
     }catch(e){
       statusEl.textContent = "카메라 실패: " + (e.message || String(e));
       showErrorOverlay("카메라 시작 실패", String(e && e.message ? e.message : e));
@@ -249,37 +272,7 @@
     return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   }
 
-  // ---- 상태 저장(공유용)
-  let shotCount = 0;
-  let lastShotDataUrl = null;
-  let lastShotBlob = null;    // 공유용 파일
-  let lastShareText = "";
-
-  function buildSharePayload(ocrText){
-    return (
-`[OCR 이미지/텍스트 세트]
-
-- 아래 OCR 텍스트는 시험지에서 추출됨
-- 이미지(촬영사진)도 함께 첨부됨(가능한 경우)
-
-[OCR TEXT START]
-${ocrText}
-[OCR TEXT END]
-`
-    );
-  }
-
-  async function dataUrlToBlob(dataUrl){
-    // fetch(dataURL) 패턴은 iOS에서도 대체로 동작하지만,
-    // 일부 환경에서 실패 가능 -> 실패 시 fallback 제공.
-    try{
-      const r = await fetch(dataUrl);
-      return await r.blob();
-    }catch(e){
-      return null;
-    }
-  }
-
+  // ---- OCR 1회 호출
   async function callOcrOnce(dataUrl){
     try{
       const res = await fetch(OCR_URL, {
@@ -294,23 +287,24 @@ ${ocrText}
       const json = await res.json().catch(() => null);
       if (!json || !json.ok){
         const msg = (json && (json.message || json.error)) || "OCR 실패";
-        return { ok:false, msg };
+        return { ok:false, msg, text:"", conf:0 };
       }
 
       const text = (json.text || "").trim();
       const conf = (typeof json.conf === "number") ? json.conf : 0;
-      if (!text) return { ok:false, msg:"OCR 결과가 비어 있습니다." };
+      if (!text){
+        return { ok:false, msg:"OCR 결과가 비어 있습니다.", text:"", conf };
+      }
 
       return { ok:true, text, conf };
     }catch(e){
-      return { ok:false, msg:(e.message || String(e)) };
+      return { ok:false, msg:(e.message || String(e)), text:"", conf:0 };
     }
   }
 
-  function pickBetter(best, cand){
-    // conf 우선, 같으면 길이가 긴 쪽
-    if (!best || !best.ok) return cand;
+  function pickBest(best, cand){
     if (!cand || !cand.ok) return best;
+    if (!best || !best.ok) return cand;
     if ((cand.conf || 0) > (best.conf || 0)) return cand;
     if ((cand.conf || 0) === (best.conf || 0)){
       if ((cand.text || "").length > (best.text || "").length) return cand;
@@ -318,184 +312,25 @@ ${ocrText}
     return best;
   }
 
-  async function captureAndOcr(){
-    const dataUrl = captureDataUrlOptimized();
-    if (!dataUrl){
-      statusEl.textContent = "영상 준비 중입니다. 1~2초 후 다시 시도하세요.";
-      return;
-    }
+  // ---- "완료" 여부 판단
+  function isDonePage(text, conf){
+    if (!text) return false;
+    if (typeof conf !== "number" || conf < DONE_CONF_THRESHOLD) return false;
 
-    btnCapture.disabled = true;
-    btnShare.disabled = true;
+    const norm = text.replace(/\s/g, "");
+    const hasMunje = norm.includes("문제");
+    const hasStart =
+      norm.includes("이제풀이를시작하시오") ||
+      norm.includes("이제풀이를시작하십시오");
 
-    shotCount += 1;
-    lastShotDataUrl = dataUrl;
-    lastShotBlob = null;
+    if (!hasMunje || !hasStart) return false;
 
-    // 미리보기
-    try{
-      shotPreview.src = dataUrl;
-      shotPreview.style.display = "block";
-      shotMeta.textContent = `샷 ${shotCount}`;
-    }catch(e){}
+    if (text.length < DONE_LEN_THRESHOLD) return false;
 
-    statusEl.textContent = `샷 ${shotCount}: 촬영 완료. OCR 자동 2회 진행 중...`;
-
-    // OCR 2회 + 둘다 실패하면 3회차
-    let best = null;
-    let lastErr = "";
-
-    for (let attempt = 1; attempt <= OCR_TRY1_2; attempt++){
-      statusEl.textContent = `샷 ${shotCount}: OCR ${attempt}회차 처리 중...`;
-      const r = await callOcrOnce(dataUrl);
-      if (!r.ok) lastErr = r.msg || lastErr;
-      best = pickBetter(best, r);
-    }
-
-    if (!best || !best.ok){
-      statusEl.textContent = `샷 ${shotCount}: 2회 실패 → 3회차 재시도 중...`;
-      for (let i = 0; i < OCR_TRY3; i++){
-        const r3 = await callOcrOnce(dataUrl);
-        if (!r3.ok) lastErr = r3.msg || lastErr;
-        best = pickBetter(best, r3);
-      }
-    }
-
-    if (!best || !best.ok){
-      statusEl.textContent =
-        `샷 ${shotCount}: OCR 실패.\n` +
-        `조명/거리/초점 다시 맞추고 다시 '촬영+OCR'을 누르세요.\n` +
-        `(마지막 오류: ${lastErr || "정보 없음"})`;
-      btnCapture.disabled = false;
-      return;
-    }
-
-    // 누적
-    const confStr = (typeof best.conf === "number") ? best.conf.toFixed(1) + "%" : "정보 없음";
-    const header = `\n\n[샷 ${shotCount}] ---------------------- (신뢰도 대략 ${confStr})\n`;
-    ocrBox.value = (ocrBox.value || "") + header + (best.text || "") + "\n";
-
-    // 공유 텍스트 준비
-    lastShareText = buildSharePayload(ocrBox.value.trim());
-
-    // 공유용 blob 준비(실패해도 텍스트 공유는 가능)
-    lastShotBlob = await dataUrlToBlob(dataUrl);
-
-    statusEl.textContent =
-      `샷 ${shotCount}: OCR 성공(신뢰도 대략 ${confStr}).\n` +
-      `이제 'ChatGPT로 공유(사진+텍스트)'를 눌러서 ChatGPT로 넘겨보세요.\n` +
-      `※ ChatGPT에서 Send는 직접 1번 눌러야 합니다.\n` +
-      `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
-
-    btnShare.disabled = false;
-    btnCapture.disabled = false;
+    return true;
   }
 
-  // ---- 공유 (사진+텍스트)
-  async function shareToChatGPT(){
-    if (!lastShareText){
-      statusEl.textContent = "공유할 텍스트가 없습니다. 먼저 '촬영+OCR'을 누르세요.";
-      return;
-    }
-
-    if (!navigator.share){
-      statusEl.textContent =
-        "이 브라우저는 공유 기능을 지원하지 않습니다.\n" +
-        "대신: 'OCR 전체 텍스트 복사' → ChatGPT에 붙여넣기.\n" +
-        "사진은 미리보기 길게 눌러 저장 후 ChatGPT에 첨부.";
-      return;
-    }
-
-    try{
-      // 파일 공유 가능한 경우에만 files 첨부
-      let shareData = { title: "연세대 논술 OCR 세트", text: lastShareText };
-
-      if (lastShotBlob){
-        const file = new File([lastShotBlob], `shot_${shotCount}.jpg`, { type: lastShotBlob.type || "image/jpeg" });
-        const candidate = { title: "연세대 논술 OCR 세트", text: lastShareText, files: [file] };
-
-        if (navigator.canShare && navigator.canShare(candidate)){
-          shareData = candidate;
-        }else{
-          // 파일 공유가 막힌 환경일 수 있음
-          statusEl.textContent =
-            "현재 환경에서 '사진+텍스트 동시 공유'가 제한될 수 있습니다.\n" +
-            "일단 텍스트 공유를 진행합니다.\n" +
-            "사진은 미리보기에서 길게 눌러 저장/공유하세요.";
-        }
-      }else{
-        statusEl.textContent =
-          "사진 파일 변환이 실패했습니다(환경 제한 가능).\n" +
-          "일단 텍스트 공유를 진행합니다.\n" +
-          "사진은 미리보기에서 길게 눌러 저장/공유하세요.";
-      }
-
-      await navigator.share(shareData);
-
-      statusEl.textContent =
-        "공유 시트를 열었습니다.\n" +
-        "ChatGPT를 선택한 뒤, ChatGPT에서 Send 1번 눌러 전송하세요.\n" +
-        "※ 자동 전송은 iOS 정책상 불가.\n" +
-        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
-    }catch(e){
-      statusEl.textContent =
-        "공유 실패: " + (e.message || String(e)) + "\n" +
-        "대신: 'OCR 전체 텍스트 복사'로 진행하세요.\n" +
-        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
-    }
-  }
-
-  // ---- OCR 전체 텍스트 복사(사진 제외)
-  async function copyAllText(){
-    const text = (ocrBox.value || "").trim();
-    if (!text){
-      statusEl.textContent = "복사할 OCR 텍스트가 없습니다.";
-      return;
-    }
-    const payload = buildSharePayload(text);
-
-    try{
-      if (navigator.clipboard && navigator.clipboard.writeText){
-        await navigator.clipboard.writeText(payload);
-        statusEl.textContent = "OCR 텍스트를 복사했습니다. ChatGPT에 붙여넣으세요.";
-      }else{
-        const tmp = document.createElement("textarea");
-        tmp.value = payload;
-        tmp.style.position = "fixed";
-        tmp.style.left = "-9999px";
-        document.body.appendChild(tmp);
-        tmp.select();
-        document.execCommand("copy");
-        document.body.removeChild(tmp);
-        statusEl.textContent = "복사 시도 완료. 붙여넣기 안 되면 전체선택 후 복사하세요.";
-      }
-    }catch(e){
-      statusEl.textContent = "복사 실패: " + (e.message || String(e));
-      showErrorOverlay("클립보드 복사 실패", String(e && e.stack ? e.stack : e));
-    }
-  }
-
-  function clearOcr(){
-    if (!confirm("OCR 누적 텍스트를 모두 지우겠습니까?")) return;
-    ocrBox.value = "";
-    lastShareText = "";
-    btnShare.disabled = true;
-    statusEl.textContent = "OCR 텍스트를 초기화했습니다.";
-  }
-
-  // ---- TTS (1배속 + 단어간 5초 침묵 + 줄바꿈/마침표 단어 + 반복)
-  let ttsPrimed = false;
-  let ttsActive = false;
-  let ttsStopRequested = false;
-  let ttsTokens = [];
-  let ttsIndex = 0;
-
-  const WORD_GAP_MS = 5000;   // 단어 사이 침묵(요청대로 5초)
-  const LOOP_GAP_MS = 7000;   // 한 바퀴 끝나고 다음 반복 전 대기
-  const RATE = 1.0;           // 1배속
-
-  let selectedVoice = null;
-
+  // ---- TTS 공통: 한국어 음성 선택
   function selectKoreanVoice(){
     try{
       const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
@@ -504,14 +339,12 @@ ${ocrText}
       const ko = voices.filter(v => (v.lang || "").toLowerCase().startsWith("ko"));
       if (!ko.length) return null;
 
-      // iOS에서 상대적으로 자연스러운 이름이 있는 경우 우선(확실하지 않음: 기기마다 다름)
       const preferNames = ["Yuna", "유나", "Korean", "Seoyeon", "서연"];
       for (const name of preferNames){
         const found = ko.find(v => (v.name || "").includes(name));
         if (found) return found;
       }
 
-      // localService 우선
       const local = ko.find(v => v.localService);
       if (local) return local;
 
@@ -526,7 +359,6 @@ ${ocrText}
     ttsPrimed = true;
 
     try{
-      // voices 로딩 타이밍 문제 대응
       selectedVoice = selectKoreanVoice();
       if (window.speechSynthesis){
         window.speechSynthesis.onvoiceschanged = () => {
@@ -543,15 +375,164 @@ ${ocrText}
     }catch(e){}
   }
 
+  // ---- 짧은 안내 음성 (OCR 완료/재촬영 안내용)
+  function speakNotice(text){
+    if (!window.speechSynthesis) return;
+    if (!text) return;
+
+    // 답안 TTS가 돌고 있으면 방해하지 않음
+    if (ttsActive) return;
+
+    try{
+      primeTTSOnce();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      if (selectedVoice) u.voice = selectedVoice;
+      window.speechSynthesis.speak(u);
+    }catch(e){}
+  }
+
+  // ---- 촬영 + OCR
+  let shotCount = 0;
+  let lastShotDataUrl = null;
+
+  async function captureAndOcr(){
+    const dataUrl = captureDataUrlOptimized();
+    if (!dataUrl){
+      statusEl.textContent = "영상 준비 중입니다. 1~2초 후 다시 시도하세요.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      return;
+    }
+
+    btnCapture.disabled = true;
+
+    shotCount += 1;
+    lastShotDataUrl = dataUrl;
+
+    try{
+      shotPreview.src = dataUrl;
+      shotPreview.style.display = "block";
+      shotMeta.textContent = `샷 ${shotCount}`;
+    }catch(e){}
+
+    statusEl.textContent = `샷 ${shotCount}: 촬영 완료. OCR 자동 ${OCR_ATTEMPTS}회 진행 중...\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+
+    let best = null;
+    let lastErr = "";
+
+    for (let attempt = 1; attempt <= OCR_ATTEMPTS; attempt++){
+      statusEl.textContent =
+        `샷 ${shotCount}: OCR ${attempt}회차 처리 중...\n` +
+        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+      const r = await callOcrOnce(dataUrl);
+      if (!r.ok) lastErr = r.msg || lastErr;
+      best = pickBest(best, r);
+    }
+
+    if (!best || !best.ok){
+      statusEl.textContent =
+        `샷 ${shotCount}: OCR ${OCR_ATTEMPTS}회 모두 실패.\n` +
+        `조명/거리/초점 다시 맞추고 다시 '촬영 + OCR'을 누르세요.\n` +
+        `마지막 오류: ${lastErr || "정보 없음"}\n` +
+        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+      btnCapture.disabled = false;
+      speakNotice("오 씨 알에 실패했습니다. 다시 촬영하세요.");
+      return;
+    }
+
+    const text = best.text || "";
+    const confValue = (typeof best.conf === "number") ? best.conf : 0;
+    const confStr = confValue ? confValue.toFixed(1) + "%" : "정보 없음";
+    const lengthStr = text.length;
+
+    const header = `\n\n[샷 ${shotCount}] ---------------------- (신뢰도 대략 ${confStr}, 길이 ${lengthStr}자)\n`;
+    ocrBox.value = (ocrBox.value || "") + header + text + "\n";
+
+    const done = isDonePage(text, confValue);
+
+    if (done){
+      statusEl.textContent =
+        `샷 ${shotCount}: OCR 성공(신뢰도 대략 ${confStr}, 길이 ${lengthStr}자).\n` +
+        `텍스트에서 '문제'와 '이제 풀이를 시작하시오' 문구가 감지되었습니다.\n` +
+        `→ 이 페이지 인식 완료. 다음 장으로 넘기세요.\n` +
+        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+      speakNotice("이 페이지 인식 완료. 다음 장으로 넘기세요.");
+    }else{
+      statusEl.textContent =
+        `샷 ${shotCount}: OCR 성공(신뢰도 대략 ${confStr}, 길이 ${lengthStr}자).\n` +
+        `다만 '문제' 또는 '이제 풀이를 시작하시오' 문구가 완전히 잡히지 않았습니다.\n` +
+        `→ 필요하면 이 장을 한 번 더 촬영하세요.\n` +
+        `※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라`;
+      speakNotice("인식은 되었지만 완전히 끝난 페이지로 보이지 않습니다. 필요하면 다시 촬영하세요.");
+    }
+
+    btnCapture.disabled = false;
+  }
+
+  // ---- OCR 전체 텍스트 복사
+  function buildSharePayload(text){
+    return (
+`[OCR 이미지/텍스트 세트]
+
+- 아래 OCR 텍스트는 시험지에서 추출됨
+- 사진은 사이트 미리보기에서 길게 눌러 복사/저장 후 ChatGPT에 첨부
+
+[OCR TEXT START]
+${text}
+[OCR TEXT END]
+`
+    );
+  }
+
+  async function copyAllText(){
+    const text = (ocrBox.value || "").trim();
+    if (!text){
+      statusEl.textContent = "복사할 OCR 텍스트가 없습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      return;
+    }
+    const payload = buildSharePayload(text);
+
+    try{
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(payload);
+        statusEl.textContent =
+          "OCR 텍스트를 복사했습니다. ChatGPT에 붙여넣으세요.\n" +
+          "사진은 미리보기에서 길게 눌러 저장/복사한 뒤 ChatGPT에 첨부.\n" +
+          "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      }else{
+        const tmp = document.createElement("textarea");
+        tmp.value = payload;
+        tmp.style.position = "fixed";
+        tmp.style.left = "-9999px";
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand("copy");
+        document.body.removeChild(tmp);
+        statusEl.textContent =
+          "복사 시도 완료. 붙여넣기 안 되면 전체선택 후 복사하세요.\n" +
+          "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      }
+    }catch(e){
+      statusEl.textContent =
+        "복사 실패: " + (e.message || String(e)) + "\n" +
+        "※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+      showErrorOverlay("클립보드 복사 실패", String(e && e.stack ? e.stack : e));
+    }
+  }
+
+  function clearOcr(){
+    if (!confirm("OCR 누적 텍스트를 모두 지우겠습니까?")) return;
+    ocrBox.value = "";
+    statusEl.textContent = "OCR 텍스트를 초기화했습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
+  }
+
+  // ---- TTS(답안 반복 읽기)
+
   function buildTokens(text){
-    // 규칙:
-    // - 마침표는 "마침표"라고 말한다.
-    // - 줄바꿈은 "줄바꿈"이라고 말한다.
-    // - 띄어쓰기라는 단어는 말하지 않는다(대신 침묵으로 간격).
     let t = String(text || "");
     t = t.replace(/\r/g, "");
     t = t.replace(/\./g, " 마침표 ");
-    // 다른 기호는 말로 바꾸지 않음(그대로 읽히거나 무시될 수 있음)
     const lines = t.split(/\n+/).map(x => x.trim()).filter(Boolean);
 
     const out = [];
@@ -598,7 +579,6 @@ ${ocrText}
 
     u.onerror = () => {
       if (ttsStopRequested) return;
-      // iOS에서 가끔 무음/에러가 나면 다음 토큰으로 넘겨서 회복 시도
       setTimeout(() => {
         if (!ttsActive || ttsStopRequested) return;
         ttsIndex = Math.min(ttsIndex + 1, ttsTokens.length - 1);
@@ -623,13 +603,12 @@ ${ocrText}
 
     const text = (ttsInput.value || "").trim();
     if (!text){
-      statusEl.textContent = "TTS 박스에 답안을 붙여넣으세요.";
+      statusEl.textContent = "TTS 박스에 답안을 붙여넣으세요.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
 
     primeTTSOnce();
 
-    // iOS에서 앱 전환 후 꼬였을 수 있으니 시작할 때 cancel
     ttsStopRequested = false;
     ttsActive = false;
     try{ window.speechSynthesis.cancel(); }catch(e){}
@@ -638,7 +617,7 @@ ${ocrText}
 
     ttsTokens = buildTokens(text);
     if (!ttsTokens.length){
-      statusEl.textContent = "읽을 내용이 없습니다.";
+      statusEl.textContent = "읽을 내용이 없습니다.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
       return;
     }
 
@@ -646,7 +625,7 @@ ${ocrText}
     ttsActive = true;
 
     statusEl.textContent =
-      "TTS 시작: 1배속 + 단어 간 약 5초 침묵 + 반복.\n" +
+      "TTS 시작: 1배속 + 단어 간 약 6초 침묵 + 반복.\n" +
       "앱 전환 후 무음이면 '읽기 시작' 다시 누르기 → 그래도 무음이면 새로고침.\n" +
       "TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
 
@@ -657,45 +636,34 @@ ${ocrText}
     ttsStopRequested = true;
     ttsActive = false;
     try{ window.speechSynthesis.cancel(); }catch(e){}
-    statusEl.textContent = "TTS 정지.";
+    statusEl.textContent = "TTS 정지.\n※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
   }
 
-  // ---- 앱 전환 감지(무음 방지 안내)
+  // ---- 앱 전환 감지
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden"){
-      // iOS는 백그라운드에서 TTS/타이머가 멈출 수 있음
-      return;
-    }
-
-    // 다시 돌아온 경우
-    // 자동 재개는 iOS 정책상/안정성상 하지 않음(무음/꼬임 유발)
-    // 대신 사용자에게 안내
+    if (document.visibilityState === "hidden") return;
     statusEl.textContent =
-      "앱 전환 후 돌아옴.\n" +
+      "앱 전환 후 돌아왔습니다.\n" +
       "TTS가 안 나오면 '읽기 시작'을 다시 누르세요.\n" +
       "그래도 무음이면 새로고침.\n" +
       "TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라";
   });
 
-  // ---- 붙여넣기 자동 시작(사용자 동작 이벤트이므로 iOS에서 허용될 가능성 높음)
+  // ---- 붙여넣기 후 자동 시작(실패해도 상관없게)
   ttsInput.addEventListener("paste", () => {
     setTimeout(() => {
-      // 자동 시작이 막힐 수도 있으므로 실패해도 괜찮게 설계
       try{ startTts(); }catch(e){}
     }, 60);
   });
 
-  // ---- 이벤트 바인딩
+  // ---- 이벤트 바인딩 + 시작
   btnCapture.addEventListener("click", captureAndOcr);
-  btnShare.addEventListener("click", shareToChatGPT);
   btnCopyAll.addEventListener("click", copyAllText);
   btnClearOcr.addEventListener("click", clearOcr);
   btnTtsStart.addEventListener("click", startTts);
   btnTtsStop.addEventListener("click", stopTts);
 
-  // ---- 시작
   startCamera();
-
 })();
 </script>
 </body>
