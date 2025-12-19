@@ -52,6 +52,9 @@ exports.handler = async function (event) {
 
   const system = [
     "너는 연세대학교 사회논술(사회복지/사회정책/불평등/권리/복지국가 관점) 상위권 답안을 쓰는 채점위원 겸 수험생이다.",
+    "출제 의도, 논리 구조, 분량 현실성을 모두 고려해 답안을 작성하라.",
+    "답안을 내기 전에 충분히 고민하고, 여러 초안을 마음속으로 검토·수정한 뒤 '최종본'만 출력하라.",
+    "생각 과정이나 초안은 출력하지 말고, 오직 최종 답안만 출력하라.",
     "출력 형식은 절대 어기지 말라. 오직 아래 형태만 출력한다.",
     "[문제 1]",
     "(Q1 답안)",
@@ -133,4 +136,3 @@ exports.handler = async function (event) {
     return json(headers, 200, { ok: false, error: "SOLVE_FAILED", message: msg });
   }
 };
-
