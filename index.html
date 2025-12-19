@@ -78,7 +78,7 @@
   <div class="hint">
     - 셔터를 <strong>한 번 누르면</strong> 현재 페이지부터 각 페이지를 <strong>3회씩</strong> 자동 촬영하며, “이제 풀이를 시작하시오”가 보이면 자동으로 풀이를 시작한다.<br/>
     - 각 페이지의 촬영이 끝나면 “5 4 3 2 1, 다음 페이지로 넘겨 주세요.”라는 음성이 들린 뒤 다음 페이지로 자동 넘어간다.<br/>
-    - 답안은 원고지 모드로 <strong>느리지만 또박또박</strong> 반복 낭독된다.<br/>
+    - 답안은 원문을 <strong>아주 느린 속도</strong>로 반복 낭독한다.<br/>
     - <strong>TTS 소리가 전혀 안 들리면, 페이지를 새로고침한 뒤 화면을 한 번 터치해서 TTS를 다시 준비한 후 사용하라.</strong>
   </div>
 
@@ -101,9 +101,10 @@
   const OCR_URL   = "/.netlify/functions/ocr";
   const SOLVE_URL = "/.netlify/functions/solve";
 
-  const MAX_PAGE         = 12;
-  const SHOTS_PER_PAGE   = 3;    // 페이지당 3회 촬영
-  const SHOT_INTERVAL_MS = 5000; // 5초 간격
+  const MAX_PAGE           = 12;
+  const SHOTS_PER_PAGE     = 3;    // 페이지당 3회 촬영
+  const SHOT_INTERVAL_MS   = 5000; // 5초 간격
+  const MAX_RETRY_PER_PAGE = 2;    // OCR 완전 실패 시 페이지 전체 재시도 최대 2회
 
   let currentPage   = 1;
   let autoRun       = false;
@@ -173,24 +174,14 @@
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }
 
-  function toWongojiSpeech(text){
+  function transformAnswerText(text){
     let t = String(text || "");
     t = t.replace(/\r/g, "");
+    // 줄바꿈은 '줄바꿈'이라는 단어로
     t = t.replace(/\n+/g, " 줄바꿈 ");
-    t = t.replace(/ /g, " 띄우고 ");
+    // 마침표는 '마침표'라는 단어로
     t = t.replace(/\./g, " 마침표 ");
-    t = t.replace(/,/g, " 쉼표 ");
-    t = t.replace(/!/g, " 느낌표 ");
-    t = t.replace(/\?/g, " 물음표 ");
-    t = t.replace(/\[/g, " 대괄호 여는 괄호 ");
-    t = t.replace(/\]/g, " 대괄호 닫는 괄호 ");
-    t = t.replace(/\(/g, " 소괄호 여는 괄호 ");
-    t = t.replace(/\)/g, " 소괄호 닫는 괄호 ");
-    t = t.replace(/%/g, " 퍼센트 ");
-    t = t.replace(/:/g, " 콜론 ");
-    t = t.replace(/;/g, " 세미콜론 ");
-    t = t.replace(/\"/g, " 큰따옴표 ");
-    t = t.replace(/'/g, " 작은따옴표 ");
+    // 공백은 그대로 둔다 (단어 사이 공백은 속도로만 느리게)
     return t;
   }
 
@@ -198,12 +189,11 @@
     if (!window.speechSynthesis) return;
     const opts = options || {};
     const rate = typeof opts.rate === "number" ? opts.rate : 0.9;
-    const wongoji = !!opts.wongoji;
     const onend = typeof opts.onend === "function" ? opts.onend : null;
     const skipCancel = !!opts.skipCancel;
 
     try {
-      const content = wongoji ? toWongojiSpeech(text) : String(text || "");
+      const content = String(text || "");
       if (!content.trim()) return;
 
       if (!skipCancel) {
@@ -212,7 +202,7 @@
 
       const u = new SpeechSynthesisUtterance(content);
       u.lang = "ko-KR";
-      u.rate = rate;    // 여기 rate로 느리기/빠르기 결정
+      u.rate = rate;
       u.pitch = 1.0;
       if (ttsVoice) u.voice = ttsVoice;
 
@@ -231,15 +221,14 @@
       return;
     }
     // 준비 멘트는 정상 속도에 가깝게
-    speakInternal("음성 준비 완료", { rate: 0.95, wongoji:false });
+    speakInternal("음성 준비 완료", { rate: 0.95 });
     window.speechSynthesis.cancel();
   }
 
   function speakStatus(text){
     if (!ttsReady) return;
     if (answerRepeating) return;
-    // 안내 멘트는 거의 정상 속도로
-    speakInternal(text, { rate: 0.95, wongoji:false });
+    speakInternal(text, { rate: 0.95 });
   }
 
   function speakAnswer(text, isRevision){
@@ -249,11 +238,12 @@
     }
     answerRepeating = true;
 
+    const transformed = transformAnswerText(text);
+
     function playOnce(){
-      // ★ 답안 읽기 속도: 0.5 (느리지만 또박또박 나는 구간)
-      speakInternal(text, {
+      // 답안 읽기: 느리게 읽되, 단어 사이 공백은 속도로만 조절
+      speakInternal(transformed, {
         rate: 0.5,
-        wongoji: true,
         onend: function(){
           if (answerRepeating) {
             setTimeout(playOnce, 1000);
@@ -265,7 +255,6 @@
     if (isRevision) {
       speakInternal("이전 답안을 수정하겠습니다. 더 나은 최종 답안을 읽어 드리겠습니다.", {
         rate: 0.9,
-        wongoji:false,
         onend: function(){ setTimeout(playOnce, 500); }
       });
     } else {
@@ -355,81 +344,115 @@
     return new Promise(function(resolve){ setTimeout(resolve, ms); });
   }
 
-  // --------- 한 페이지(3회) 자동 촬영 ---------
+  // --------- 한 페이지(3회) 자동 촬영 + 실패 시 자동 재시도 ---------
   async function shootOnePage(page){
-    if (!autoRun) return { bestText:"", bestConf:-1, foundSolveCue:false };
-    if (isShootingOne) return { bestText:"", bestConf:-1, foundSolveCue:false };
+    if (!autoRun || isShootingOne) {
+      return { bestText:"", bestConf:-1, foundSolveCue:false };
+    }
 
     isShootingOne = true;
     stopAnswerRepeat();
 
-    let bestText = "";
-    let bestConf = -1;
+    let overallBestText = "";
+    let overallBestConf = -1;
     let foundSolveCue = false;
 
-    statusEl.textContent = "페이지 " + page + " 자동 촬영 시작 (총 " + SHOTS_PER_PAGE + "회)...";
+    for (let attempt = 1; attempt <= MAX_RETRY_PER_PAGE && autoRun; attempt++) {
+      let bestText = "";
+      let bestConf = -1;
 
-    for (let i = 1; i <= SHOTS_PER_PAGE && autoRun; i++) {
-      statusEl.textContent = "페이지 " + page + " 촬영 " + i + " / " + SHOTS_PER_PAGE + " 진행 중...";
+      statusEl.textContent =
+        "페이지 " + page + " 자동 촬영 " + attempt + "차 시도 시작 (각 " +
+        SHOTS_PER_PAGE + "회 촬영)...";
 
-      const dataUrl = captureDataUrl();
-      if (!dataUrl) {
-        statusEl.textContent = "영상 준비 중입니다. 1~2초 후 자동 재시도...";
-        await sleep(SHOT_INTERVAL_MS);
-        continue;
-      }
-
-      const res = await callOCR(dataUrl, page);
-
-      if (res && res.ok && res.text && String(res.text).trim()) {
-        const txt  = String(res.text);
-        const conf = typeof res.conf === "number" ? res.conf : 0;
-
-        if (conf > bestConf) {
-          bestConf  = conf;
-          bestText  = txt;
-        }
-
-        if (/이제\s*풀이를\s*시작하시오/.test(txt)) {
-          foundSolveCue = true;
-        }
-
-        const confText = (conf && conf.toFixed) ? conf.toFixed(1) : String(conf);
+      for (let i = 1; i <= SHOTS_PER_PAGE && autoRun; i++) {
         statusEl.textContent =
           "페이지 " + page + " 촬영 " + i + " / " + SHOTS_PER_PAGE +
-          " 완료 (신뢰도 대략 " + confText + "%)";
-      } else {
-        const msg = res && (res.message || res.error) ? (res.message || res.error) : "OCR 실패";
-        statusEl.textContent =
-          "페이지 " + page + " 촬영 " + i + " / " + SHOTS_PER_PAGE + " 실패: " + msg;
+          " (시도 " + attempt + "/" + MAX_RETRY_PER_PAGE + ") 진행 중...";
+
+        const dataUrl = captureDataUrl();
+        if (!dataUrl) {
+          statusEl.textContent = "영상 준비 중입니다. 1~2초 후 자동 재시도...";
+          await sleep(SHOT_INTERVAL_MS);
+          continue;
+        }
+
+        const res = await callOCR(dataUrl, page);
+
+        if (res && res.ok && res.text && String(res.text).trim()) {
+          const txt  = String(res.text);
+          const conf = typeof res.conf === "number" ? res.conf : 0;
+
+          if (conf > bestConf) {
+            bestConf = conf;
+            bestText = txt;
+          }
+          if (conf > overallBestConf) {
+            overallBestConf = conf;
+            overallBestText = txt;
+          }
+
+          if (/이제\s*풀이를\s*시작하시오/.test(txt)) {
+            foundSolveCue = true;
+          }
+
+          const confText = (conf && conf.toFixed) ? conf.toFixed(1) : String(conf);
+          statusEl.textContent =
+            "페이지 " + page + " 촬영 " + i + " / " + SHOTS_PER_PAGE +
+            " 완료 (신뢰도 대략 " + confText + "%, 시도 " + attempt + ")";
+        } else {
+          const msg = res && (res.message || res.error) ? (res.message || res.error) : "OCR 실패";
+          statusEl.textContent =
+            "페이지 " + page + " 촬영 " + i + " / " + SHOTS_PER_PAGE +
+            " 실패: " + msg + " (시도 " + attempt + ")";
+        }
+
+        if (i < SHOTS_PER_PAGE && autoRun) {
+          await sleep(SHOT_INTERVAL_MS);
+        }
       }
 
-      if (i < SHOTS_PER_PAGE && autoRun) {
-        await sleep(SHOT_INTERVAL_MS);
+      // 현재 attempt에서 유의미한 텍스트가 생겼으면 추가 재시도 없이 종료
+      if (bestText && bestText.trim()) {
+        break;
+      }
+
+      // attempt 실패 시 자동 재시도 안내
+      if (attempt < MAX_RETRY_PER_PAGE && autoRun) {
+        statusEl.textContent =
+          "페이지 " + page + "에서 인식된 내용이 거의 없습니다. 같은 페이지를 다시 촬영합니다 (" +
+          (attempt + 1) + "차 시도).";
+        speakStatus("이 페이지 인식이 잘 되지 않아 자동으로 다시 촬영합니다. " + (attempt + 1) + "번째 시도입니다.");
+        await sleep(2000);
       }
     }
 
     if (!autoRun) {
       isShootingOne = false;
-      return { bestText, bestConf, foundSolveCue };
+      return { bestText: overallBestText, bestConf: overallBestConf, foundSolveCue };
     }
 
-    if (!bestText || !bestText.trim()) {
-      statusEl.textContent = "페이지 " + page + "에서 유효한 OCR 결과를 얻지 못했습니다. 필요하면 다시 시도하세요.";
-    } else {
-      const block =
-        "\n\n[페이지 " + page + "]-------------------\n" +
-        bestText;
-      ocrBox.value = (ocrBox.value || "") + block;
-
-      const bestConfText =
-        (bestConf >= 0 && bestConf.toFixed) ? bestConf.toFixed(1) : "0.0";
+    if (!overallBestText || !overallBestText.trim()) {
       statusEl.textContent =
-        "페이지 " + page + " OCR 완료 (최고 신뢰도 대략 " + bestConfText + "%)";
+        "페이지 " + page + "에서 여러 차례 시도했지만 유효한 OCR 결과를 얻지 못했습니다. " +
+        "필요하면 셔터 버튼을 다시 눌러 이 페이지부터 자동 촬영을 다시 시작하세요.";
+      speakStatus("이 페이지는 인식이 잘 되지 않습니다. 자세한 재촬영이 필요할 수 있습니다.");
+      isShootingOne = false;
+      return { bestText:"", bestConf:-1, foundSolveCue:false };
     }
 
+    const block =
+      "\n\n[페이지 " + page + "]-------------------\n" +
+      overallBestText;
+    ocrBox.value = (ocrBox.value || "") + block;
+
+    const bestConfText =
+      (overallBestConf >= 0 && overallBestConf.toFixed) ? overallBestConf.toFixed(1) : "0.0";
+    statusEl.textContent =
+      "페이지 " + page + " OCR 완료 (최고 신뢰도 대략 " + bestConfText + "%)";
     isShootingOne = false;
-    return { bestText, bestConf, foundSolveCue };
+
+    return { bestText: overallBestText, bestConf: overallBestConf, foundSolveCue };
   }
 
   async function speakCountdownAndWait(){
@@ -447,8 +470,9 @@
       const hasText = result.bestText && result.bestText.trim();
 
       if (!hasText) {
-        speakStatus("이 페이지에서 인식된 내용이 거의 없습니다. 필요하면 셔터를 다시 눌러 자동 촬영을 다시 시작하세요.");
+        // 이 페이지에서 끝까지 실패한 경우 자동 촬영 중단
         autoRun = false;
+        btnShutter.textContent = "📸 셔터(연속 자동 OCR 시작)";
         break;
       }
 
@@ -503,7 +527,7 @@
         statusEl.textContent =
           "풀이 실패: " + msg +
           "\n(TTS가 전혀 들리지 않으면 페이지를 새로고침한 뒤 다시 시도하세요.)";
-        speakStatus("풀이에 실패했습니다.");
+        speakStatus("풀이에 실패했습니다. 같은 지문으로 다시 풀기 버튼을 눌러 재시도할 수 있습니다.");
         return;
       }
 
@@ -511,7 +535,7 @@
       if (!answer) {
         statusEl.textContent =
           "풀이 결과가 비어 있습니다.\n(TTS가 전혀 들리지 않으면 페이지를 새로고침한 뒤 다시 시도하세요.)";
-        speakStatus("풀이 결과가 비어 있습니다.");
+        speakStatus("풀이 결과가 비어 있습니다. 같은 지문으로 다시 풀기 버튼을 눌러 재시도할 수 있습니다.");
         return;
       }
 
@@ -520,7 +544,7 @@
 
       answerBox.value = answer;
       statusEl.textContent =
-        "풀이 완료. (원고지 모드로 느리지만 또박또박 반복 낭독 중)\n" +
+        "풀이 완료. (줄바꿈과 마침표를 말로 표시하며, 매우 느린 속도로 원문을 반복 낭독 중)\n" +
         "TTS 소리가 전혀 안 들리면, 페이지를 새로고침한 뒤 다시 한 번 화면을 터치해서 TTS를 준비하세요.";
 
       speakAnswer(answer, isRevision);
@@ -563,3 +587,4 @@
 </script>
 </body>
 </html>
+
