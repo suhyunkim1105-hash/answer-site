@@ -54,7 +54,7 @@
   <div class="hint">
     - 셔터 한 번 누르면 현재 페이지를 5회 자동 촬영 후 가장 잘 나온 결과만 사용한다.<br/>
     - 마지막 페이지에서 “이제 풀이를 시작하시오”가 인식되면 자동으로 풀이를 시작한다.<br/>
-    - 답안은 원고지 모드로 매우 느리게 반복 낭독된다.
+    - 답안은 원고지 모드로 <strong>아주 느리게</strong> 반복 낭독된다.
   </div>
 
   <textarea id="ocrBox" placeholder="OCR 누적 텍스트"></textarea>
@@ -185,7 +185,7 @@
 
       const u = new SpeechSynthesisUtterance(content);
       u.lang = "ko-KR";
-      u.rate = rate;
+      u.rate = rate;  // 속도
       u.pitch = 1.0;
       if (ttsVoice) u.voice = ttsVoice;
 
@@ -207,14 +207,14 @@
     ttsReady = true;
     if (!window.speechSynthesis) return;
     // 짧은 프라임 음성
-    speakInternal("음성 준비 완료", { rate: 1.0, wongoji: false });
+    speakInternal("음성 준비 완료", { rate: 0.95, wongoji: false });
     window.speechSynthesis.cancel();
   }
 
   function speakStatus(text) {
     if (!ttsReady) return;
     if (answerRepeating) {
-      // 답안 낭독 중에는 상태 음성은 생략(화면 텍스트만 사용)
+      // 답안 낭독 중에는 상태 음성은 생략
       return;
     }
     speakInternal(text, { rate: 0.95, wongoji: false });
@@ -225,8 +225,9 @@
     answerRepeating = true;
 
     const playOnce = function () {
+      // 답안은 아주 느리고 또박또박 읽도록 rate 더 낮춤
       speakInternal(text, {
-        rate: 0.45, // 매우 느리게
+        rate: 0.35,
         wongoji: true,
         onend: function () {
           if (answerRepeating) {
@@ -237,6 +238,7 @@
     };
 
     if (isRevision) {
+      // 더 좋은 답안일 때만 수정 안내 멘트
       speakInternal("이전 답안을 수정하겠습니다. 더 나은 최종 답안을 읽어 드리겠습니다.", {
         rate: 0.9,
         wongoji: false,
@@ -346,7 +348,7 @@
       return;
     }
     isAutoShooting = true;
-    stopAnswerRepeat(); // 답안 읽는 중이면 정지
+    stopAnswerRepeat();
 
     const page = Number(pageSel.value || currentPage || 1);
     currentPage = page;
@@ -461,8 +463,9 @@
       lastAnswerRaw = answer;
 
       answerBox.value = answer;
-      statusEl.textContent = "풀이 완료. (원고지 모드로 매우 느리게 반복 낭독 중)";
+      statusEl.textContent = "풀이 완료. (원고지 모드로 아주 느리게 반복 낭독 중)";
 
+      // 처음부터 최대한 좋은 답안을 쓰고, 새 호출에서 달라졌을 때만 "수정하겠습니다" 멘트
       speakAnswer(answer, isRevision);
     } catch (e) {
       statusEl.textContent = "풀이 요청 실패: " + (e.message || String(e));
