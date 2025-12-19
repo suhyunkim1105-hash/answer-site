@@ -1,129 +1,83 @@
-exports.handler = async function handler(event) {
+// netlify/functions/ocr.js
+export async function handler(event) {
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
-    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json; charset=utf-8"
   };
 
-  // CORS preflight
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
   }
 
-  // POST 이외 메서드 거부
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ ok: false, error: "POST only" }),
-    };
-  }
-
   try {
-    const apiKey = process.env.OCRSPACE_API_KEY;
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ ok: false, error: "OCRSPACE_API_KEY 환경변수가 없음" }),
-      };
+    const OCRSPACE_API_KEY = process.env.OCRSPACE_API_KEY;
+    if (!OCRSPACE_API_KEY) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: "서버 설정 오류: OCRSPACE_API_KEY 환경변수가 없습니다." }) };
     }
 
-    let body = {};
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ ok: false, error: "JSON 파싱 실패" }),
-      };
+    const body = JSON.parse(event.body || "{}");
+    const imageDataUrl = body.imageDataUrl || "";
+    const language = body.language || "kor";
+    const ocrEngine = body.ocrEngine || 2;
+    const detectOrientation = body.detectOrientation !== false;
+    const scale = body.scale !== false;
+
+    if (!imageDataUrl.startsWith("data:image/")) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "imageDataUrl이 올바른 data:image/... 형식이 아닙니다." }) };
     }
 
-    const imageDataUrl = body.imageDataUrl;
-    const language = (body.language || "kor").toString();
+    // OCR.Space: base64Image는 "data:image/jpeg;base64,..." 형태 그대로 넣어도 됨
+    const params = new URLSearchParams();
+    params.set("apikey", OCRSPACE_API_KEY);
+    params.set("base64Image", imageDataUrl);
+    params.set("language", language);
+    params.set("OCREngine", String(ocrEngine));
+    params.set("isOverlayRequired", "false");
+    params.set("detectOrientation", detectOrientation ? "true" : "false");
+    params.set("scale", scale ? "true" : "false");
 
-    if (
-      !imageDataUrl ||
-      typeof imageDataUrl !== "string" ||
-      !imageDataUrl.startsWith("data:image/")
-    ) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({
-          ok: false,
-          error: "imageDataUrl(data:image/... base64) 필요",
-        }),
-      };
-    }
+    // 표/도표 섞인 문서에서 도움이 되는 경우가 있음(항상 이득은 아님)
+    // params.set("isTable", "true");
 
-    const form = new URLSearchParams();
-    form.set("apikey", apiKey);
-    form.set("language", language);
-    form.set("isOverlayRequired", "false");
-    form.set("detectOrientation", "true");
-    form.set("scale", "true");
-    // 🔴 여기만 변경: 엔진 2 → 1 (한글+영어 혼합용)
-    form.set("OCREngine", "1");
-    form.set("base64Image", imageDataUrl);
-
-    const resp = await fetch("https://api.ocr.space/parse/image", {
+    const res = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: params.toString()
     });
 
-    const ct = (resp.headers.get("content-type") || "").toLowerCase();
-    if (!ct.includes("application/json")) {
-      const t = await resp.text();
-      return {
-        statusCode: 502,
-        headers,
-        body: JSON.stringify({
-          ok: false,
-          error: "OCR.Space 응답이 JSON이 아님",
-          detail: t.slice(0, 300),
-        }),
-      };
+    const json = await res.json().catch(() => null);
+
+    if (!res.ok || !json) {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: `OCR.Space 응답 오류(HTTP ${res.status})`, raw: json }) };
     }
 
-    const data = await resp.json();
-
-    if (data.IsErroredOnProcessing) {
-      const errMsg =
-        (Array.isArray(data.ErrorMessage)
-          ? data.ErrorMessage.join(" / ")
-          : data.ErrorMessage) ||
-        data.ErrorDetails ||
-        "OCR.Space 처리 오류";
-
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ ok: false, error: errMsg }),
-      };
+    // OCR.Space 에러 형식
+    if (json.IsErroredOnProcessing) {
+      const msg = (json.ErrorMessage && json.ErrorMessage[0]) || json.ErrorMessage || json.ErrorDetails || "OCR 처리 에러";
+      return { statusCode: 200, headers, body: JSON.stringify({ text: "", reason: String(msg), meta: json }) };
     }
 
-    const parsed =
-      data.ParsedResults && data.ParsedResults[0] ? data.ParsedResults[0] : null;
-    const text = parsed && parsed.ParsedText ? parsed.ParsedText : "";
+    const parsedText = (json.ParsedResults?.[0]?.ParsedText || "").trim();
 
+    // 빈 결과 디버그를 위해 meta도 같이 반환
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ ok: true, text }),
-    };
-  } catch (e) {
-    return {
-      statusCode: 500,
-      headers,
       body: JSON.stringify({
-        ok: false,
-        error: String(e && e.message ? e.message : e),
-      }),
+        text: parsedText,
+        meta: {
+          OCRExitCode: json.OCRExitCode,
+          ParsedTextLength: parsedText.length,
+          SearchablePDFURL: json.SearchablePDFURL || null,
+          ProcessingTimeInMilliseconds: json.ProcessingTimeInMilliseconds || null
+        }
+      })
     };
+
+  } catch (err) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err?.message || String(err) }) };
   }
-};
+}
 
