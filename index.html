@@ -409,14 +409,15 @@
     updateShotsInfo();
     updateShotsGallery();
 
+    // ★ 여기 수정: "풀이 시작" 대신 "문제 1 / 문제 2"가 보이면 마지막 페이지로 판단
     const isLastPage =
-      /풀이\s*시작/.test(clean) ||
-      /풀이를\s*시작하시오/.test(clean);
+      /문제\s*1/.test(clean) ||
+      /문제\s*2/.test(clean);
 
     return { isChart, isLastPage };
   }
 
-  /* ===== 답안 TTS (단어 사이 7초, 기호 말로 읽기) ===== */
+  /* ===== 답안 TTS (단어 사이 3초, 기호 말로 읽기) ===== */
 
   let ttsPrimed = false;
   const ANSWER_RATE = 0.9;
@@ -495,12 +496,12 @@
 
       u.onend = () => {
         if (answerTtsStop) return;
-        setTimeout(speakNext, 7000); // 단어 사이 7초
+        setTimeout(speakNext, 3000); // ★ 7초 → 3초
       };
 
       u.onerror = () => {
         if (answerTtsStop) return;
-        setTimeout(speakNext, 7000);
+        setTimeout(speakNext, 3000); // ★ 7초 → 3초
       };
 
       window.speechSynthesis.speak(u);
@@ -576,7 +577,7 @@
     while (autoRunning && currentPage <= MAX_PAGES) {
       setStatus(`페이지 ${currentPage} 자동 OCR 중...(총 ${SHOTS_PER_PAGE}회 촬영)`);
 
-      // ★★★ 여기만 수정: 3회 중 conf 가장 높은 샷만 선택 ★★★
+      // 각 페이지 3회 중 conf 가장 높은 샷만 선택
       let bestShot = null;
 
       for (let i = 0; i < SHOTS_PER_PAGE && autoRunning; i++) {
