@@ -29,20 +29,6 @@
       background: #0c0c0c;
       min-height: 34px;
     }
-    #videoBox {
-      margin-top: 10px;
-      border-radius: 12px;
-      overflow: hidden;
-      background: #000;
-      border: 1px solid #333;
-    }
-    video {
-      width: 100%;
-      height: auto;
-      display: block;
-      object-fit: contain;
-      transform: translateZ(0);
-    }
     .btn-col {
       display: flex;
       flex-direction: column;
@@ -78,6 +64,20 @@
       font-size: 12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: pre-wrap;
+    }
+    #videoBox {
+      margin-top: 10px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+      border: 1px solid #333;
+    }
+    video {
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: contain;
+      transform: translateZ(0);
     }
     #shotsInfo {
       margin-top: 6px;
@@ -119,6 +119,41 @@
       width: 100%;
       display: block;
     }
+    #shotsGalleryLabel {
+      margin-top: 6px;
+      font-size: 11px;
+      color: #bbb;
+    }
+    #shotsGallery {
+      margin-top: 4px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .shotThumbWrap {
+      flex: 0 0 auto;
+      width: 70px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #555;
+      background: #000;
+      position: relative;
+    }
+    .shotThumbWrap span {
+      position: absolute;
+      left: 4px;
+      top: 2px;
+      font-size: 9px;
+      background: rgba(0,0,0,0.6);
+      padding: 1px 3px;
+      border-radius: 3px;
+    }
+    .shotThumb {
+      width: 100%;
+      display: block;
+    }
     #ocrBox {
       width: 100%;
       min-height: 120px;
@@ -157,10 +192,7 @@
   <h1>연세대 논술 OCR → 복붙 → TTS</h1>
   <div id="status">카메라 준비 중...</div>
 
-  <div id="videoBox">
-    <video id="video" autoplay playsinline muted></video>
-  </div>
-
+  <!-- 🔼🔼🔼 여기: 맨 위에 버튼 2개 + TTS 박스 🔼🔼🔼 -->
   <div class="btn-col">
     <button id="btnAuto">📸 자동 OCR 시작/정지</button>
     <button id="btnShare">🔗 ChatGPT로 공유 (텍스트+도표 샷)</button>
@@ -171,10 +203,17 @@
     ※ TTS 출력이 전혀 안 나오는 것 같으면 새로고침하라.
   </div>
   <textarea id="ttsBox" placeholder="ChatGPT 최종 답안을 여기 붙여넣기"></textarea>
+  <!-- 🔽 그 아래에 카메라 / 샷 갤러리 / OCR 텍스트 -->
+
+  <div id="videoBox">
+    <video id="video" autoplay playsinline muted></video>
+  </div>
 
   <div id="shotsInfo"></div>
   <div id="chartGalleryLabel"></div>
   <div id="chartGallery"></div>
+  <div id="shotsGalleryLabel"></div>
+  <div id="shotsGallery"></div>
 
   <textarea id="ocrBox" placeholder="OCR 누적 텍스트 (점검용)"></textarea>
 
@@ -191,6 +230,8 @@
   const shotsInfo = document.getElementById("shotsInfo");
   const chartGallery = document.getElementById("chartGallery");
   const chartGalleryLabel = document.getElementById("chartGalleryLabel");
+  const shotsGallery = document.getElementById("shotsGallery");
+  const shotsGalleryLabel = document.getElementById("shotsGalleryLabel");
   const errOverlay = document.getElementById("errOverlay");
 
   const OCR_URL = "/.netlify/functions/ocr";
@@ -204,13 +245,9 @@
   let shotIndex = 0;
   let allText = "";
   let shots = [];
-
-  // 도표 샷 누적 저장용
-  let chartImages = []; // { page, dataUrl }
-
+  let chartImages = [];
   let lastFrameDataUrl = null;
 
-  // ---------- 공통 유틸 ----------
   function setStatus(msg) {
     statusEl.textContent = msg;
   }
@@ -234,7 +271,6 @@
     return new Promise(r => setTimeout(r, ms));
   }
 
-  // ---------- 카메라 ----------
   async function startCamera() {
     try {
       setStatus("카메라 권한 요청 중...");
@@ -266,7 +302,6 @@
     return canvas.toDataURL("image/jpeg", 0.9);
   }
 
-  // ---------- OCR 1회 ----------
   async function ocrOneShot(pageIndex) {
     const dataUrl = captureFrameDataUrl();
     lastFrameDataUrl = dataUrl;
@@ -322,6 +357,28 @@
     });
   }
 
+  function updateShotsGallery() {
+    shotsGallery.innerHTML = "";
+    if (!shots.length) {
+      shotsGalleryLabel.textContent = "";
+      return;
+    }
+    shotsGalleryLabel.textContent = `촬영 샷 누적 (${shots.length}개):`;
+    shots.forEach((s) => {
+      if (!s.dataUrl) return;
+      const wrap = document.createElement("div");
+      wrap.className = "shotThumbWrap";
+      const badge = document.createElement("span");
+      badge.textContent = `P${s.page}`;
+      const img = document.createElement("img");
+      img.className = "shotThumb";
+      img.src = s.dataUrl;
+      wrap.appendChild(img);
+      wrap.appendChild(badge);
+      shotsGallery.appendChild(wrap);
+    });
+  }
+
   function updateShotsInfo() {
     if (!shots.length) {
       shotsInfo.textContent = "";
@@ -343,7 +400,6 @@
     allText += head + "\n" + clean;
     ocrBox.value = allText;
 
-    // "도표입니다" 뿐 아니라 "도표"라는 단어가 들어가면 도표 샷으로 간주
     const isChart = clean.includes("도표입니다") || clean.includes("도표 ");
     if (isChart && dataUrl) {
       chartImages.push({ page: pageIndex, dataUrl });
@@ -352,6 +408,7 @@
 
     shots.push({ idx: shotIndex, page: pageIndex, text: clean, conf, dataUrl, isChart });
     updateShotsInfo();
+    updateShotsGallery();
 
     const isLastPage =
       /풀이\s*시작/.test(clean) ||
@@ -360,7 +417,6 @@
     return { isChart, isLastPage };
   }
 
-  // ---------- TTS (답안용, 0.9배속 반복) ----------
   let ttsPrimed = false;
   let repeatText = "";
   const ANSWER_RATE = 0.9;
@@ -410,7 +466,6 @@
     startAnswerTTS();
   });
 
-  // ---------- 자동 OCR 루프 ----------
   async function autoOCRLoop() {
     if (autoRunning) {
       autoRunning = false;
@@ -432,6 +487,7 @@
     ocrBox.value = "";
     updateShotsInfo();
     updateChartGallery();
+    updateShotsGallery();
     setStatus("1분 대기 후 시작합니다. 시험지를 정렬하세요.");
     primeTTS();
 
@@ -502,7 +558,6 @@
     autoRunning = false;
   }
 
-  // ---------- 텍스트 + 도표 샷 공유 ----------
   function buildShareText() {
     const core = (ocrBox.value || allText || "").trim();
     if (!core) return "";
@@ -536,7 +591,6 @@
       return;
     }
 
-    // 도표 샷이 여러 개일 수 있으니, 너무 많으면 앞에서 3개만 사용
     const imgs = chartImages.slice(0, 3);
     const files = [];
 
@@ -581,7 +635,6 @@
     }
   }
 
-  // ---------- 이벤트 ----------
   btnAuto.addEventListener("click", () => {
     autoOCRLoop();
   });
