@@ -77,9 +77,9 @@
 
   <div class="hint">
     - 셔터를 <strong>한 번 누르면</strong> 현재 페이지부터 각 페이지를 <strong>3회씩</strong> 자동 촬영하며, “이제 풀이를 시작하시오”가 보이면 자동으로 풀이를 시작한다.<br/>
-    - 각 페이지의 촬영이 끝나면 “5 4 3 2 1, 다음 페이지로 넘겨 주세요.”라는 음성이 들린 뒤 다음 페이지로 자동 넘어간다.<br/>
-    - 답안은 원문을 <strong>아주 느린 속도</strong>로 반복 낭독한다.<br/>
-    - <strong>TTS 소리가 전혀 안 들리면, 페이지를 새로고침한 뒤 화면을 한 번 터치해서 TTS를 다시 준비한 후 사용하라.</strong>
+    - 각 페이지 촬영이 끝나면 “5 4 3 2 1, 다음 페이지로 넘겨 주세요.”라는 음성이 들린 뒤 다음 페이지로 자동 넘어간다.<br/>
+    - 답안은 <strong>보통 속도</strong>로 읽되, 문장 사이에 잠깐의 쉼을 두고 전체를 계속 반복 낭독한다.<br/>
+    - <strong>TTS 출력이 전혀 안 나오는 것 같으면, 페이지를 새로고침하고 화면을 한 번 터치한 뒤 다시 사용하라.</strong>
   </div>
 
   <textarea id="ocrBox" placeholder="OCR 누적 텍스트"></textarea>
@@ -102,23 +102,23 @@
   const SOLVE_URL = "/.netlify/functions/solve";
 
   const MAX_PAGE           = 12;
-  const SHOTS_PER_PAGE     = 3;    // 페이지당 3회 촬영
+  const SHOTS_PER_PAGE     = 3;
   const SHOT_INTERVAL_MS   = 5000; // 5초 간격
-  const MAX_RETRY_PER_PAGE = 2;    // OCR 완전 실패 시 페이지 전체 재시도 최대 2회
+  const MAX_RETRY_PER_PAGE = 2;
 
   let currentPage   = 1;
   let autoRun       = false;
   let isShootingOne = false;
   let stream        = null;
 
-  // TTS 관련 상태
+  // TTS 상태
   let ttsReady        = false;
   let ttsVoice        = null;
   let answerRepeating = false;
   let lastAnswerRaw   = "";
   let wakeLock        = null;
 
-  // 페이지 셀렉트 채우기
+  // 페이지 셀렉트 초기화
   for (let i = 1; i <= MAX_PAGE; i++) {
     const opt = document.createElement("option");
     opt.value = String(i);
@@ -127,7 +127,7 @@
   }
   pageSel.value = "1";
 
-  // --------- 에러 오버레이 ---------
+  // 에러 오버레이
   function showErrorOverlay(title, detail){
     try {
       errOverlay.style.display = "block";
@@ -156,7 +156,7 @@
     showErrorOverlay(msg, stack);
   });
 
-  // --------- TTS ---------
+  // ===== TTS =====
   function loadVoices(){
     try {
       if (!window.speechSynthesis) return;
@@ -174,21 +174,19 @@
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }
 
+  // 줄바꿈 / 마침표만 단어로 읽도록 변환
   function transformAnswerText(text){
     let t = String(text || "");
     t = t.replace(/\r/g, "");
-    // 줄바꿈은 '줄바꿈'이라는 단어로
     t = t.replace(/\n+/g, " 줄바꿈 ");
-    // 마침표는 '마침표'라는 단어로
     t = t.replace(/\./g, " 마침표 ");
-    // 공백은 그대로 둔다 (단어 사이 공백은 속도로만 느리게)
     return t;
   }
 
   function speakInternal(text, options){
     if (!window.speechSynthesis) return;
     const opts = options || {};
-    const rate = typeof opts.rate === "number" ? opts.rate : 0.9;
+    const rate = typeof opts.rate === "number" ? opts.rate : 1.0; // 보통 속도
     const onend = typeof opts.onend === "function" ? opts.onend : null;
     const skipCancel = !!opts.skipCancel;
 
@@ -213,22 +211,55 @@
     } catch(e){}
   }
 
+  function splitIntoSentences(t){
+    const s = transformAnswerText(t);
+    // 마침표/물음표/느낌표 기준으로 큼직하게 쪼갬
+    const raw = s.split(/(?<=[.!?]|마침표|물음표|느낌표)\s+/);
+    return raw.map(function(x){ return x.trim(); }).filter(function(x){ return x.length > 0; });
+  }
+
   function primeTTS(){
     if (ttsReady) return;
-    ttsReady = true;
     if (!window.speechSynthesis) {
       statusEl.textContent = "이 브라우저에서는 TTS가 지원되지 않을 수 있습니다.";
       return;
     }
-    // 준비 멘트는 정상 속도에 가깝게
-    speakInternal("음성 준비 완료", { rate: 0.95 });
+    ttsReady = true;
+    speakInternal("음성 준비 완료", { rate: 1.0 });
     window.speechSynthesis.cancel();
   }
 
   function speakStatus(text){
     if (!ttsReady) return;
-    if (answerRepeating) return;
-    speakInternal(text, { rate: 0.95 });
+    if (answerRepeating) return; // 답안 낭독 중에는 안내 멘트 최소화
+    speakInternal(text, { rate: 1.0 });
+  }
+
+  function playSentenceSequence(sentences, index){
+    if (!answerRepeating) return;
+    if (!sentences || !sentences.length) return;
+
+    if (index >= sentences.length) {
+      // 한 바퀴 끝난 후 잠깐 쉬고 다시 처음부터
+      setTimeout(function(){
+        if (!answerRepeating) return;
+        playSentenceSequence(sentences, 0);
+      }, 1500);
+      return;
+    }
+
+    const s = sentences[index];
+    speakInternal(s, {
+      rate: 1.0,      // 단어 자체 속도는 보통
+      skipCancel: true,
+      onend: function(){
+        if (!answerRepeating) return;
+        // 문장과 문장 사이에 잠깐 멈추는 느낌(약 0.7초)
+        setTimeout(function(){
+          playSentenceSequence(sentences, index + 1);
+        }, 700);
+      }
+    });
   }
 
   function speakAnswer(text, isRevision){
@@ -238,27 +269,20 @@
     }
     answerRepeating = true;
 
-    const transformed = transformAnswerText(text);
+    const sentences = splitIntoSentences(text);
 
-    function playOnce(){
-      // 답안 읽기: 느리게 읽되, 단어 사이 공백은 속도로만 조절
-      speakInternal(transformed, {
-        rate: 0.5,
-        onend: function(){
-          if (answerRepeating) {
-            setTimeout(playOnce, 1000);
-          }
-        }
-      });
+    function startLoop(){
+      if (!sentences.length) return;
+      playSentenceSequence(sentences, 0);
     }
 
     if (isRevision) {
       speakInternal("이전 답안을 수정하겠습니다. 더 나은 최종 답안을 읽어 드리겠습니다.", {
-        rate: 0.9,
-        onend: function(){ setTimeout(playOnce, 500); }
+        rate: 1.0,
+        onend: function(){ setTimeout(startLoop, 500); }
       });
     } else {
-      playOnce();
+      startLoop();
     }
   }
 
@@ -269,7 +293,7 @@
     }
   }
 
-  // 첫 사용자 클릭 시 TTS 준비 + 화면 꺼짐 방지 요청
+  // 첫 사용자 클릭 시: TTS 준비 + (지원되면) 화면 꺼짐 방지
   document.addEventListener("click", function(){
     primeTTS();
     requestWakeLock();
@@ -287,7 +311,7 @@
     }
   }
 
-  // --------- 카메라 ---------
+  // ===== 카메라 =====
   async function startCamera(){
     try {
       statusEl.textContent = "카메라 권한 요청 중...";
@@ -344,7 +368,7 @@
     return new Promise(function(resolve){ setTimeout(resolve, ms); });
   }
 
-  // --------- 한 페이지(3회) 자동 촬영 + 실패 시 자동 재시도 ---------
+  // ===== 한 페이지(3회) 자동 촬영 + 실패 시 자동 재시도 =====
   async function shootOnePage(page){
     if (!autoRun || isShootingOne) {
       return { bestText:"", bestConf:-1, foundSolveCue:false };
@@ -412,12 +436,10 @@
         }
       }
 
-      // 현재 attempt에서 유의미한 텍스트가 생겼으면 추가 재시도 없이 종료
       if (bestText && bestText.trim()) {
         break;
       }
 
-      // attempt 실패 시 자동 재시도 안내
       if (attempt < MAX_RETRY_PER_PAGE && autoRun) {
         statusEl.textContent =
           "페이지 " + page + "에서 인식된 내용이 거의 없습니다. 같은 페이지를 다시 촬영합니다 (" +
@@ -434,7 +456,7 @@
 
     if (!overallBestText || !overallBestText.trim()) {
       statusEl.textContent =
-        "페이지 " + page + "에서 여러 차례 시도했지만 유효한 OCR 결과를 얻지 못했습니다. " +
+        "페이지 " + page + "에서 여러 차례 시도했지만 유효한 OCR 결과를 얻지 못했습니다.\n" +
         "필요하면 셔터 버튼을 다시 눌러 이 페이지부터 자동 촬영을 다시 시작하세요.";
       speakStatus("이 페이지는 인식이 잘 되지 않습니다. 자세한 재촬영이 필요할 수 있습니다.");
       isShootingOne = false;
@@ -461,7 +483,7 @@
     await sleep(5000);
   }
 
-  // --------- 여러 페이지 연속 자동 OCR ---------
+  // 여러 페이지 연속 OCR
   async function runAutoPages(){
     while (autoRun && currentPage <= MAX_PAGE) {
       const result = await shootOnePage(currentPage);
@@ -470,7 +492,6 @@
       const hasText = result.bestText && result.bestText.trim();
 
       if (!hasText) {
-        // 이 페이지에서 끝까지 실패한 경우 자동 촬영 중단
         autoRun = false;
         btnShutter.textContent = "📸 셔터(연속 자동 OCR 시작)";
         break;
@@ -497,7 +518,7 @@
     btnShutter.textContent = "📸 셔터(연속 자동 OCR 시작)";
   }
 
-  // --------- 풀이 요청 ---------
+  // 풀이 요청
   async function doSolve(isAuto){
     primeTTS();
 
@@ -515,8 +536,8 @@
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           text: text,
-          targetChars: 1000,
-          tolerance: 120,
+          targetChars: 950,
+          tolerance: 100,
           mode: "deep"
         })
       });
@@ -526,7 +547,7 @@
         const msg = json && (json.message || json.error) ? (json.message || json.error) : "solve 실패";
         statusEl.textContent =
           "풀이 실패: " + msg +
-          "\n(TTS가 전혀 들리지 않으면 페이지를 새로고침한 뒤 다시 시도하세요.)";
+          "\n(TTS 출력이 전혀 안 나오는 것 같으면, 페이지를 새로고침하고 다시 시도하세요.)";
         speakStatus("풀이에 실패했습니다. 같은 지문으로 다시 풀기 버튼을 눌러 재시도할 수 있습니다.");
         return;
       }
@@ -534,7 +555,7 @@
       const answer = (json.answer || "").trim();
       if (!answer) {
         statusEl.textContent =
-          "풀이 결과가 비어 있습니다.\n(TTS가 전혀 들리지 않으면 페이지를 새로고침한 뒤 다시 시도하세요.)";
+          "풀이 결과가 비어 있습니다.\n(TTS 출력이 전혀 안 나오는 것 같으면, 페이지를 새로고침하고 다시 시도하세요.)";
         speakStatus("풀이 결과가 비어 있습니다. 같은 지문으로 다시 풀기 버튼을 눌러 재시도할 수 있습니다.");
         return;
       }
@@ -544,19 +565,19 @@
 
       answerBox.value = answer;
       statusEl.textContent =
-        "풀이 완료. (줄바꿈과 마침표를 말로 표시하며, 매우 느린 속도로 원문을 반복 낭독 중)\n" +
-        "TTS 소리가 전혀 안 들리면, 페이지를 새로고침한 뒤 다시 한 번 화면을 터치해서 TTS를 준비하세요.";
+        "풀이 완료. (줄바꿈과 마침표를 말로 표시하면서, 문장 사이에 짧은 쉼을 두고 계속 반복 낭독 중)\n" +
+        "TTS 출력이 전혀 안 나오는 것 같으면, 페이지를 새로고침하고 화면을 한 번 터치한 뒤 다시 실행하세요.";
 
       speakAnswer(answer, isRevision);
     } catch(e){
       statusEl.textContent =
         "풀이 요청 실패: " + (e.message || String(e)) +
-        "\n(TTS가 전혀 들리지 않으면 페이지를 새로고침한 뒤 다시 시도하세요.)";
+        "\n(TTS 출력이 전혀 안 나오는 것 같으면, 페이지를 새로고침하고 다시 시도하세요.)";
       showErrorOverlay("solve 요청 실패", String(e && e.stack ? e.stack : e));
     }
   }
 
-  // --------- 버튼 핸들러 ---------
+  // 버튼 핸들러
   btnShutter.addEventListener("click", function(){
     if (!autoRun) {
       autoRun = true;
