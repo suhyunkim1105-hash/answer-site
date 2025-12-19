@@ -3,6 +3,8 @@
 // - OCR.Space PRO: apipro1 엔드포인트 사용
 // - language는 단일 코드만 가능(E201 방지): kor 또는 eng
 // - dual 모드: kor 1회 + eng 1회 실행 후 결과 합침
+// - kor/eng를 "병렬"로 호출하고, 각 호출 타임아웃을 15초로 제한해
+//   한 번의 /ocr 함수가 너무 오래 끌려서 튕길 위험을 줄인다.
 
 function json(headers, statusCode, obj) {
   return { statusCode, headers, body: JSON.stringify(obj) };
@@ -30,8 +32,8 @@ function mergeTexts(t1, t2) {
       .filter(Boolean);
 
     for (const ln of lines) {
-      const key = ln.replace(/\s/g, "").slice(0, 80);
-      if (key.length < 3) continue;     // 숫자/기호만 있는 짧은 줄도 최대한 살림
+      const key = ln.replace(/\s/g, "").slice(0, 40);
+      if (key.length < 8) continue;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(ln);
@@ -44,6 +46,7 @@ function mergeTexts(t1, t2) {
   return out.join("\n");
 }
 
+// OCR 한 번 호출 (단일 language)
 async function ocrOnce({ endpoint, apiKey, base64Part, language, engine, timeoutMs }) {
   const form = new URLSearchParams();
   form.set("apikey", apiKey);
@@ -55,7 +58,7 @@ async function ocrOnce({ endpoint, apiKey, base64Part, language, engine, timeout
   form.set("base64Image", "data:image/jpeg;base64," + base64Part);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || 25000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
 
   try {
     const resp = await fetch(endpoint, {
@@ -129,6 +132,7 @@ exports.handler = async function (event) {
 
   const pageIndex = typeof body.pageIndex === "number" ? body.pageIndex : null;
 
+  // 프론트 호환: imageBase64(순수 base64) 또는 dataURL 둘 다 가능
   let imageBase64 = body.imageBase64 || body.imageDataUrl || body.dataUrl || body.image || "";
 
   if (!imageBase64 || typeof imageBase64 !== "string") {
@@ -141,6 +145,7 @@ exports.handler = async function (event) {
     });
   }
 
+  // data:image/...;base64, 포함이면 잘라서 base64만 남김
   let base64Part = imageBase64;
   const idx = imageBase64.indexOf("base64,");
   if (idx >= 0) base64Part = imageBase64.slice(idx + "base64,".length);
@@ -164,41 +169,53 @@ exports.handler = async function (event) {
     });
   }
 
+  // PRO 엔드포인트
   const endpoint = "https://apipro1.ocr.space/parse/image";
 
+  // 기본: dual(한국어+영어)
   const mode = (body.mode || "dual").toString(); // "kor" | "eng" | "dual"
+  const TIMEOUT_MS = 15000; // 각 언어별 최대 대기 시간 15초
 
-  const korRes = await ocrOnce({
+  // kor / eng를 병렬로 호출
+  const korPromise = ocrOnce({
     endpoint,
     apiKey,
     base64Part,
     language: "kor",
     engine: 2,
-    timeoutMs: 25000,
+    timeoutMs: TIMEOUT_MS,
   });
 
-  let engRes = { ok: false, text: "", conf: 0, error: "SKIP" };
+  let engPromise = Promise.resolve({ ok: false, text: "", conf: 0, error: "SKIP" });
   if (mode === "dual" || mode === "eng") {
-    engRes = await ocrOnce({
+    engPromise = ocrOnce({
       endpoint,
       apiKey,
       base64Part,
       language: "eng",
       engine: 2,
-      timeoutMs: 25000,
+      timeoutMs: TIMEOUT_MS,
     });
   }
+
+  const [korRes, engRes] = await Promise.all([korPromise, engPromise]);
 
   const korText = korRes.ok ? korRes.text : "";
   const engText = engRes.ok ? engRes.text : "";
 
-  const merged = mode === "kor" ? korText : mode === "eng" ? engText : mergeTexts(korText, engText);
+  const merged =
+    mode === "kor"
+      ? korText
+      : mode === "eng"
+      ? engText
+      : mergeTexts(korText, engText);
 
   const confs = [];
   if (korRes.ok) confs.push(korRes.conf || 0);
   if (engRes.ok) confs.push(engRes.conf || 0);
   const avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
 
+  // OCR 실패 처리
   if (!merged || !merged.trim()) {
     const msg =
       (korRes.ok ? "" : (korRes.message || korRes.raw || korRes.error || "")) ||
@@ -222,6 +239,6 @@ exports.handler = async function (event) {
     text: merged,
     conf: avgConf,
     pageIndex,
-    note: mode === "dual" ? "OCR(kor+eng) 성공" : `OCR(${mode}) 성공`,
+    note: mode === "dual" ? "OCR(kor+eng 병렬) 성공" : `OCR(${mode}) 성공`,
   });
 };
