@@ -1,8 +1,8 @@
-// netlify/functions/ocr.js
-// OCR.Space 호출: 이미지 1장 -> { text, conf }
-// conf는 OCR.Space 응답 구조가 바뀔 수 있으므로(확실하지 않음) 가능한 경우만 추출하고, 없으면 null 반환.
+// netlify/functions/ocr.js (CommonJS)
+// OCR.Space 호출: 이미지 1장 -> { ok, text, conf }
+// conf는 가능한 경우만 추출하고 없으면 null.
 
-export async function handler(event) {
+exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
@@ -12,20 +12,20 @@ export async function handler(event) {
     if (!apiKey) return json(500, { ok: false, error: "Missing OCR_SPACE_API_KEY" });
 
     const body = safeJson(event.body);
-    const imageDataUrl = body?.imageDataUrl;
+    const imageDataUrl = body && body.imageDataUrl;
+
     if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
       return json(400, { ok: false, error: "Invalid imageDataUrl" });
     }
 
-    // OCR.Space는 base64Image 필드에 "data:image/jpeg;base64,..." 그대로 받는 방식이 일반적이다.
     const form = new URLSearchParams();
     form.set("apikey", apiKey);
     form.set("base64Image", imageDataUrl);
-    form.set("language", "eng");          // 시험은 영어가 메인
-    form.set("OCREngine", "2");           // 보통 2가 더 나은 경우가 많음(케이스에 따라 다를 수 있음)
+    form.set("language", "eng");             // 편입영어
+    form.set("OCREngine", "2");
     form.set("detectOrientation", "true");
-    form.set("scale", "true");            // 작은 글씨에 도움이 되는 경우가 있음
-    form.set("isOverlayRequired", "true"); // conf 계산 시도용(없으면 null)
+    form.set("scale", "true");
+    form.set("isOverlayRequired", "true");
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
@@ -45,28 +45,23 @@ export async function handler(event) {
     const data = await resp.json().catch(() => null);
     if (!data) return json(502, { ok: false, error: "OCR API returned invalid JSON" });
 
-    // OCR.Space 성공 여부
-    // 보통 IsErroredOnProcessing, ErrorMessage, OCRExitCode 등을 준다.
     if (data.IsErroredOnProcessing) {
       const msg = Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(" / ") : (data.ErrorMessage || "OCR error");
       return json(200, { ok: false, error: msg });
     }
 
-    const parsed = data?.ParsedResults?.[0];
-    const text = (parsed?.ParsedText || "").trim();
-    if (!text) {
-      return json(200, { ok: false, error: "Empty OCR text" });
-    }
+    const parsed = data && data.ParsedResults && data.ParsedResults[0];
+    const text = (parsed && parsed.ParsedText ? String(parsed.ParsedText) : "").trim();
 
-    // conf 추출 시도
+    if (!text) return json(200, { ok: false, error: "Empty OCR text" });
+
     const conf = extractConfidence(parsed);
 
     return json(200, { ok: true, text, conf });
   } catch (e) {
-    // AbortError 포함
-    return json(500, { ok: false, error: String(e?.message || e) });
+    return json(500, { ok: false, error: String(e && (e.message || e)) });
   }
-}
+};
 
 function json(statusCode, obj) {
   return {
@@ -84,24 +79,20 @@ function safeJson(s) {
 }
 
 function extractConfidence(parsed) {
-  // 1) MeanConfidence가 있으면 사용(0~100 가정)
-  const mc = parsed?.MeanConfidence;
-  if (typeof mc === "number" && isFinite(mc)) {
-    const v = clamp01(mc / 100);
-    return v;
-  }
+  // 1) MeanConfidence(0~100)
+  const mc = parsed && parsed.MeanConfidence;
+  if (typeof mc === "number" && isFinite(mc)) return clamp01(mc / 100);
 
-  // 2) TextOverlay → Words → WordConf 평균(0~100 가정)
-  const lines = parsed?.TextOverlay?.Lines;
+  // 2) TextOverlay -> Words -> WordConf 평균(0~100)
+  const lines = parsed && parsed.TextOverlay && parsed.TextOverlay.Lines;
   if (Array.isArray(lines)) {
     const confs = [];
     for (const ln of lines) {
-      const words = ln?.Words;
+      const words = ln && ln.Words;
       if (!Array.isArray(words)) continue;
       for (const w of words) {
-        const wc = w?.WordConf;
+        const wc = w && w.WordConf;
         if (typeof wc === "number" && isFinite(wc)) confs.push(wc);
-        // 어떤 응답은 string일 수 있어 방어
         if (typeof wc === "string") {
           const num = Number(wc);
           if (isFinite(num)) confs.push(num);
@@ -114,7 +105,6 @@ function extractConfidence(parsed) {
     }
   }
 
-  // 3) 없으면 null
   return null;
 }
 
