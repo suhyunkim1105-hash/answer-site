@@ -1,244 +1,124 @@
 // netlify/functions/ocr.js
-// - Netlify Node 18: fetch 내장
-// - OCR.Space PRO: apipro1 엔드포인트 사용
-// - language는 단일 코드만 가능(E201 방지): kor 또는 eng
-// - dual 모드: kor 1회 + eng 1회 실행 후 결과 합침
-// - kor/eng를 "병렬"로 호출하고, 각 호출 타임아웃을 15초로 제한해
-//   한 번의 /ocr 함수가 너무 오래 끌려서 튕길 위험을 줄인다.
+// OCR.Space 호출: 이미지 1장 -> { text, conf }
+// conf는 OCR.Space 응답 구조가 바뀔 수 있으므로(확실하지 않음) 가능한 경우만 추출하고, 없으면 null 반환.
 
-function json(headers, statusCode, obj) {
-  return { statusCode, headers, body: JSON.stringify(obj) };
-}
-
-function safeStr(x) {
-  return typeof x === "string" ? x : "";
-}
-
-function normalizeLine(s) {
-  return safeStr(s)
-    .replace(/\u00A0/g, " ")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-}
-
-function mergeTexts(t1, t2) {
-  const seen = new Set();
-  const out = [];
-
-  const pushLines = (t) => {
-    const lines = safeStr(t)
-      .split(/\r?\n/)
-      .map(normalizeLine)
-      .filter(Boolean);
-
-    for (const ln of lines) {
-      const key = ln.replace(/\s/g, "").slice(0, 40);
-      if (key.length < 8) continue;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(ln);
-    }
-  };
-
-  pushLines(t1);
-  pushLines(t2);
-
-  return out.join("\n");
-}
-
-// OCR 한 번 호출 (단일 language)
-async function ocrOnce({ endpoint, apiKey, base64Part, language, engine, timeoutMs }) {
-  const form = new URLSearchParams();
-  form.set("apikey", apiKey);
-  form.set("language", language); // 반드시 단일 코드
-  form.set("isOverlayRequired", "false");
-  form.set("scale", "true");
-  form.set("detectOrientation", "true");
-  form.set("OCREngine", String(engine || 2));
-  form.set("base64Image", "data:image/jpeg;base64," + base64Part);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
-
+export async function handler(event) {
   try {
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-      signal: controller.signal,
-    });
+    if (event.httpMethod !== "POST") {
+      return json(405, { ok: false, error: "Method Not Allowed" });
+    }
 
-    const raw = await resp.text().catch(() => "");
+    const apiKey = process.env.OCR_SPACE_API_KEY;
+    if (!apiKey) return json(500, { ok: false, error: "Missing OCR_SPACE_API_KEY" });
+
+    const body = safeJson(event.body);
+    const imageDataUrl = body?.imageDataUrl;
+    if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
+      return json(400, { ok: false, error: "Invalid imageDataUrl" });
+    }
+
+    // OCR.Space는 base64Image 필드에 "data:image/jpeg;base64,..." 그대로 받는 방식이 일반적이다.
+    const form = new URLSearchParams();
+    form.set("apikey", apiKey);
+    form.set("base64Image", imageDataUrl);
+    form.set("language", "eng");          // 시험은 영어가 메인
+    form.set("OCREngine", "2");           // 보통 2가 더 나은 경우가 많음(케이스에 따라 다를 수 있음)
+    form.set("detectOrientation", "true");
+    form.set("scale", "true");            // 작은 글씨에 도움이 되는 경우가 있음
+    form.set("isOverlayRequired", "true"); // conf 계산 시도용(없으면 null)
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+
+    const resp = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeout));
 
     if (!resp.ok) {
-      return {
-        ok: false,
-        error: "OCR_HTTP_ERROR",
-        status: resp.status,
-        raw: raw.slice(0, 400),
-      };
+      const t = await resp.text().catch(() => "");
+      return json(502, { ok: false, error: `OCR API HTTP ${resp.status}: ${t.slice(0,200)}` });
     }
 
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (e) {
-      return { ok: false, error: "OCR_JSON_PARSE_ERROR", raw: raw.slice(0, 400) };
-    }
+    const data = await resp.json().catch(() => null);
+    if (!data) return json(502, { ok: false, error: "OCR API returned invalid JSON" });
 
+    // OCR.Space 성공 여부
+    // 보통 IsErroredOnProcessing, ErrorMessage, OCRExitCode 등을 준다.
     if (data.IsErroredOnProcessing) {
-      const msg =
-        (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(" / ") : data.ErrorMessage) ||
-        data.ErrorDetails ||
-        "OCR.Space 처리 오류";
-      return { ok: false, error: "OCR_PROCESSING_ERROR", message: msg };
+      const msg = Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join(" / ") : (data.ErrorMessage || "OCR error");
+      return json(200, { ok: false, error: msg });
     }
 
-    const parsed = data.ParsedResults && data.ParsedResults[0] ? data.ParsedResults[0] : null;
-    const text = parsed && parsed.ParsedText ? parsed.ParsedText : "";
-    const conf = typeof parsed?.MeanConfidenceLevel === "number" ? parsed.MeanConfidenceLevel : 0;
+    const parsed = data?.ParsedResults?.[0];
+    const text = (parsed?.ParsedText || "").trim();
+    if (!text) {
+      return json(200, { ok: false, error: "Empty OCR text" });
+    }
 
-    return { ok: true, text, conf };
+    // conf 추출 시도
+    const conf = extractConfidence(parsed);
+
+    return json(200, { ok: true, text, conf });
   } catch (e) {
-    const msg = e && e.name === "AbortError" ? "OCR 요청 타임아웃" : String(e?.message || e);
-    return { ok: false, error: "OCR_REQUEST_FAILED", message: msg };
-  } finally {
-    clearTimeout(timer);
+    // AbortError 포함
+    return json(500, { ok: false, error: String(e?.message || e) });
   }
 }
 
-exports.handler = async function (event) {
-  const headers = {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    body: JSON.stringify(obj)
   };
+}
 
-  if (event.httpMethod === "OPTIONS") {
-    return json(headers, 200, { ok: true });
+function safeJson(s) {
+  try { return JSON.parse(s || "{}"); } catch { return null; }
+}
+
+function extractConfidence(parsed) {
+  // 1) MeanConfidence가 있으면 사용(0~100 가정)
+  const mc = parsed?.MeanConfidence;
+  if (typeof mc === "number" && isFinite(mc)) {
+    const v = clamp01(mc / 100);
+    return v;
   }
 
-  if (event.httpMethod !== "POST") {
-    return json(headers, 405, { ok: false, error: "METHOD_NOT_ALLOWED", message: "POST only" });
+  // 2) TextOverlay → Words → WordConf 평균(0~100 가정)
+  const lines = parsed?.TextOverlay?.Lines;
+  if (Array.isArray(lines)) {
+    const confs = [];
+    for (const ln of lines) {
+      const words = ln?.Words;
+      if (!Array.isArray(words)) continue;
+      for (const w of words) {
+        const wc = w?.WordConf;
+        if (typeof wc === "number" && isFinite(wc)) confs.push(wc);
+        // 어떤 응답은 string일 수 있어 방어
+        if (typeof wc === "string") {
+          const num = Number(wc);
+          if (isFinite(num)) confs.push(num);
+        }
+      }
+    }
+    if (confs.length > 0) {
+      const avg = confs.reduce((a,b)=>a+b,0) / confs.length;
+      return clamp01(avg / 100);
+    }
   }
 
-  let body = {};
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return json(headers, 400, { ok: false, error: "INVALID_JSON" });
-  }
+  // 3) 없으면 null
+  return null;
+}
 
-  const pageIndex = typeof body.pageIndex === "number" ? body.pageIndex : null;
-
-  // 프론트 호환: imageBase64(순수 base64) 또는 dataURL 둘 다 가능
-  let imageBase64 = body.imageBase64 || body.imageDataUrl || body.dataUrl || body.image || "";
-
-  if (!imageBase64 || typeof imageBase64 !== "string") {
-    return json(headers, 200, {
-      ok: false,
-      error: "NO_IMAGE",
-      message: "imageBase64 필드가 비어 있습니다.",
-      pageIndex,
-      receivedKeys: Object.keys(body),
-    });
-  }
-
-  // data:image/...;base64, 포함이면 잘라서 base64만 남김
-  let base64Part = imageBase64;
-  const idx = imageBase64.indexOf("base64,");
-  if (idx >= 0) base64Part = imageBase64.slice(idx + "base64,".length);
-
-  if (!base64Part || base64Part.length < 50) {
-    return json(headers, 200, {
-      ok: false,
-      error: "NO_IMAGE",
-      message: "base64 데이터가 너무 짧습니다.",
-      pageIndex,
-    });
-  }
-
-  const apiKey = process.env.OCRSPACE_API_KEY;
-  if (!apiKey) {
-    return json(headers, 500, {
-      ok: false,
-      error: "NO_OCRSPACE_API_KEY",
-      message: "Netlify 환경변수 OCRSPACE_API_KEY가 없습니다.",
-      pageIndex,
-    });
-  }
-
-  // PRO 엔드포인트
-  const endpoint = "https://apipro1.ocr.space/parse/image";
-
-  // 기본: dual(한국어+영어)
-  const mode = (body.mode || "dual").toString(); // "kor" | "eng" | "dual"
-  const TIMEOUT_MS = 15000; // 각 언어별 최대 대기 시간 15초
-
-  // kor / eng를 병렬로 호출
-  const korPromise = ocrOnce({
-    endpoint,
-    apiKey,
-    base64Part,
-    language: "kor",
-    engine: 2,
-    timeoutMs: TIMEOUT_MS,
-  });
-
-  let engPromise = Promise.resolve({ ok: false, text: "", conf: 0, error: "SKIP" });
-  if (mode === "dual" || mode === "eng") {
-    engPromise = ocrOnce({
-      endpoint,
-      apiKey,
-      base64Part,
-      language: "eng",
-      engine: 2,
-      timeoutMs: TIMEOUT_MS,
-    });
-  }
-
-  const [korRes, engRes] = await Promise.all([korPromise, engPromise]);
-
-  const korText = korRes.ok ? korRes.text : "";
-  const engText = engRes.ok ? engRes.text : "";
-
-  const merged =
-    mode === "kor"
-      ? korText
-      : mode === "eng"
-      ? engText
-      : mergeTexts(korText, engText);
-
-  const confs = [];
-  if (korRes.ok) confs.push(korRes.conf || 0);
-  if (engRes.ok) confs.push(engRes.conf || 0);
-  const avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0;
-
-  // OCR 실패 처리
-  if (!merged || !merged.trim()) {
-    const msg =
-      (korRes.ok ? "" : (korRes.message || korRes.raw || korRes.error || "")) ||
-      (engRes.ok ? "" : (engRes.message || engRes.raw || engRes.error || "")) ||
-      "OCR 결과가 비어있음";
-
-    return json(headers, 200, {
-      ok: false,
-      error: "EMPTY_OCR_TEXT",
-      message: msg ? String(msg).slice(0, 300) : "OCR 결과가 비어있음",
-      pageIndex,
-      detail: {
-        kor: korRes.ok ? "ok" : (korRes.error || "fail"),
-        eng: engRes.ok ? "ok" : (engRes.error || "fail"),
-      },
-    });
-  }
-
-  return json(headers, 200, {
-    ok: true,
-    text: merged,
-    conf: avgConf,
-    pageIndex,
-    note: mode === "dual" ? "OCR(kor+eng 병렬) 성공" : `OCR(${mode}) 성공`,
-  });
-};
+function clamp01(x) {
+  if (!isFinite(x)) return null;
+  return Math.max(0, Math.min(1, x));
+}
