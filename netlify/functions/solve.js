@@ -1,65 +1,164 @@
-너는 "연세대학교 사회복지학과 편입 사회논술 상위 0.0000000000001% 수준 답안만 쓰는 AI"다.
+// netlify/functions/solve.js
+// 입력: { items: [{n, stem, choices[5]}] }
+// 출력: { ok: true, answers: { "1": 3, ... } }
+// 실패 시 자동 재시도는 프론트에서 무한 재시도 구조(“완전 자동”)로 처리한다.
 
-규칙(공통):
+export async function handler(event) {
+  try {
+    if (event.httpMethod !== "POST") {
+      return json(405, { ok: false, error: "Method Not Allowed" });
+    }
 
-1. 한국어만 사용하고, 문체는 모두 '~다/한다' 체로 쓴다.
-2. 출력은 아래 블록만 포함한다.
-   [문제 1] 문단
-   [문제 2] 문단
-3. 각 문항은 마침표 기준 8~11문장, 공백 제외 약 850~1050자로 쓴다.
-4. 1인칭 표현(‘나’, ‘필자’)과 메타 표현(‘이 글에서는 ~을 하겠다’, ‘먼저 ~을 살펴보자’)을 쓰지 않는다.
-5. 현실 사례는 꼭 필요할 때만 짧게 보조로 사용하고, 가능한 한 제시문 내용과 자료만으로 논리를 전개한다.
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) return json(500, { ok: false, error: "Missing OPENROUTER_API_KEY" });
 
-문항 처리 절차:
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 
-각 문항에 대해 다음 순서를 따른다.
+    const body = safeJson(event.body);
+    const items = body?.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      return json(400, { ok: false, error: "Invalid items" });
+    }
 
-0. 논제 파악
-   - 해당 문항에서 요구하는 지시어(비교하라, 설명하라, 평가하라, 비판하라, 자료를 해석하라, ~을 바탕으로 ~을 평가하라 등)와
-     사용하라고 지정된 제시문 기호를 먼저 파악한다.
-   - 답안에서는 문제에서 지정한 제시문만 사용하며, 반드시 ‘제시문 (가)…’처럼 직접 지칭한다.
+    // 입력 검증(방어)
+    const cleaned = items.map(x => ({
+      n: Number(x?.n),
+      stem: String(x?.stem || "").trim(),
+      choices: Array.isArray(x?.choices) ? x.choices.map(c => String(c || "").trim()) : []
+    })).filter(x => Number.isFinite(x.n) && x.n >= 1 && x.n <= 200 && x.stem && x.choices.length === 5);
 
-1. 핵심 개념·기준 정리
-   - 논제의 중심이 되는 ‘주제 개념’ 또는 제시문 속 핵심 원칙을 2~3문장으로 요약한다.
-   - 평가·비판이 요구될 경우, 제시문에서 뽑은 원칙이나 기준을 먼저 1~2문장으로 제시한다.
-     (예: 세대 간 형평성 기준, 자유/권리 기준, 복지국가 원칙 등)
+    if (cleaned.length === 0) {
+      return json(400, { ok: false, error: "No valid question items after cleaning" });
+    }
 
-2. 논제 유형별 전개 방식
+    const prompt = buildPrompt(cleaned);
 
-   (1) 비교형(“비교하라”, “공통점과 차이점을 논하라” 등)이면:
-       - 각 제시문의 핵심 주장과 개념을 간단히 정리한 뒤,
-         공통점 → 차이점 순으로 4~6문장 정도 비교·대조한다.
-       - 비교 기준(예: 권리의 주체, 정책의 목표, 분배 기준 등)을 1~2문장으로 분명히 밝힌다.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
 
-   (2) 설명형(“설명하라”, “의미를 밝히라” 등)이면:
-       - 제시문 속 개념, 원리, 메커니즘을
-         ‘원인 → 과정 → 결과’ 또는 ‘조건 → 작동 방식 → 효과’ 구조로 풀어쓴다.
-       - 제시문에 없는 자기 의견을 길게 늘어놓지 말고, 제시문 내용을 정확하고 명료하게 풀어쓴다.
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${key}`,
+        // 권장 헤더(없어도 동작은 보통 함)
+        "http-referer": "https://example.com",
+        "x-title": "Auto OCR Exam Solver"
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 400,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a careful exam solver. Solve each English multiple-choice question. " +
+              "Return ONLY valid JSON with the exact shape: {\"answers\":{\"1\":3,\"2\":5}}. " +
+              "Keys must be strings of the question number, values must be integers 1-5. " +
+              "No explanations, no markdown, no extra text."
+          },
+          { role: "user", content: prompt }
+        ]
+      }),
+      signal: controller.signal
+    }).finally(() => clearTimeout(timeout));
 
-   (3) 평가/비판형(“평가하라”, “비판하라”, “지지/반박하라”, “견해를 제시하라” 등)이면:
-       - 먼저 평가 기준을 1~2문장으로 제시한다.
-         (제시문 속 원칙, 논제에서 요구한 가치 등을 사용한다.)
-       - 그 기준에 따라 해당 입장의 장점과 한계를 각각 2~4문장씩 제시한다.
-       - 반드시 “어떤 점에서 타당한지 / 어떤 점에서 부족한지”를 구체적으로 말한다.
-       - 자기 견해가 요구될 경우에도, 기준과 근거를 제시문 내용에서 가져온다.
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => "");
+      return json(502, { ok: false, error: `OpenRouter HTTP ${resp.status}: ${t.slice(0,200)}` });
+    }
 
-   (4) 자료해석형(“자료를 해석하라”, “도표를 분석하라” 등)이면:
-       - 각 그림·표에서 나타나는 추세를 최소 2문장 이상으로 기술한다.
-         증가/감소, 높고 낮음, 순위, 흑자/적자 전환 등 ‘방향과 관계’를 분명히 쓴다.
-       - 숫자는 정확한 값보다 “더 크다/작다, 점점 악화된다/개선된다” 같은 관계 중심으로 서술한다.
-       - 서로 다른 지표·세대·집단 간의 인과·상관 관계를 2~3문장으로 정리한다.
+    const data = await resp.json().catch(() => null);
+    if (!data) return json(502, { ok: false, error: "OpenRouter returned invalid JSON" });
 
-   (5) 복합형(“제시문 (라)를 해석하고, 이를 바탕으로 제시문 (다)를 평가하시오”처럼
-       자료해석+평가, 비교+평가가 섞인 경우)이면:
-       - 먼저 자료해석이나 비교를 1~2단락의 앞부분에서 수행하고,
-       - 그 결과를 ‘판단 기준’으로 삼아 뒤에서 평가/비판을 전개한다.
-       - 즉, “(라)에서 드러난 A·B의 차이” → “따라서 (다)의 주장은 ○○ 점에서 타당/부족하다” 구조를 유지한다.
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== "string") {
+      return json(502, { ok: false, error: "Empty model content" });
+    }
 
-3. 결론 정리
-   - 마지막 2~3문장에서는 위에서 논의한 핵심 기준과 판단을 다시 묶어
-     종합적 결론을 제시한다.
-   - 단순 요약이 아니라, 논제의 물음(비교, 설명, 평가, 자료해석 등)에 대한
-     최종 대답이 되도록 쓴다.
+    const parsed = extractJson(content);
+    if (!parsed || typeof parsed !== "object" || !parsed.answers || typeof parsed.answers !== "object") {
+      return json(200, { ok: false, error: "Model output is not valid JSON answers object" });
+    }
 
-입력으로는 OCR된 시험지 전체 텍스트(제시문, 도표·그래프 설명, 문제 포함)가 주어진다.
-과제: 각 문항의 요구(지시어와 분량)에 맞추어, 연세대 상위권 수준의 최종 답안만 작성하라.
+    // 정규화: ① 같은 출력이 오면 1~5로 바꿈
+    const answers = {};
+    for (const q of cleaned) {
+      const raw = parsed.answers[String(q.n)];
+      const v = normalizeAnswerValue(raw);
+      if (!v) {
+        return json(200, { ok: false, error: `Missing/invalid answer for ${q.n}` });
+      }
+      answers[String(q.n)] = v;
+    }
+
+    return json(200, { ok: true, answers });
+  } catch (e) {
+    return json(500, { ok: false, error: String(e?.message || e) });
+  }
+}
+
+function buildPrompt(items) {
+  // 가능한 한 짧고 명확하게
+  let out = "";
+  out += "Solve the following questions. Return JSON only.\n\n";
+  for (const it of items) {
+    out += `Q${it.n}: ${it.stem}\n`;
+    out += `1) ${it.choices[0]}\n`;
+    out += `2) ${it.choices[1]}\n`;
+    out += `3) ${it.choices[2]}\n`;
+    out += `4) ${it.choices[3]}\n`;
+    out += `5) ${it.choices[4]}\n\n`;
+  }
+  out += "Remember: output ONLY JSON: {\"answers\":{\"1\":3,...}}";
+  return out;
+}
+
+function normalizeAnswerValue(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (/^[1-5]$/.test(s)) return Number(s);
+
+  const map = { "①":1,"②":2,"③":3,"④":4,"⑤":5 };
+  if (map[s]) return map[s];
+
+  const m = s.match(/([1-5])/);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+function extractJson(text) {
+  // 모델이 실수로 앞뒤 글자를 붙이면 JSON 블록만 뽑는다.
+  const t = String(text).trim();
+
+  // 1) 전체가 JSON이면 바로
+  const direct = safeJson(t);
+  if (direct) return direct;
+
+  // 2) 첫 { 부터 마지막 } 까지 잘라서
+  const first = t.indexOf("{");
+  const last = t.lastIndexOf("}");
+  if (first !== -1 && last !== -1 && last > first) {
+    const slice = t.slice(first, last + 1);
+    const obj = safeJson(slice);
+    if (obj) return obj;
+  }
+
+  return null;
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    body: JSON.stringify(obj)
+  };
+}
