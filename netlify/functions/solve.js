@@ -1,86 +1,94 @@
 // netlify/functions/solve.js
-// Netlify Functions (CJS)
-// 필요 환경변수: OPENROUTER_API_KEY
-// 선택: OPENROUTER_MODEL
+// OpenRouter proxy solver (CommonJS)
+// Required env var: OPENROUTER_API_KEY
+// Optional env var: SOLVE_MODEL (default: openai/gpt-4o-mini)
+
+function json(statusCode, obj, extraHeaders = {}) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      ...extraHeaders,
+    },
+    body: JSON.stringify(obj),
+  };
+}
 
 exports.handler = async (event) => {
   try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
+    if (event.httpMethod === "OPTIONS") {
+      return json(204, {}, { "Content-Length": "0" });
     }
 
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch {}
-    const text = (body.text || "").trim();
-
-    if (!text || text.length < 50) {
-      return { statusCode: 400, body: JSON.stringify({ error: "text too short" }) };
+    if (event.httpMethod !== "POST") {
+      return json(405, { error: "POST only" });
     }
 
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      return { statusCode: 500, body: JSON.stringify({ error: "OPENROUTER_API_KEY not set" }) };
+      return json(500, { error: "OPENROUTER_API_KEY not set (Netlify 환경변수에 추가 필요)" });
     }
 
-    const model = process.env.OPENROUTER_MODEL || "openai/gpt-5.2-thinking";
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { error: "Invalid JSON body" });
+    }
 
-    const prompt = `
-You are solving an English multiple-choice exam (1~50).
-Return ONLY valid JSON in this exact schema:
-{"answers":{"1":"A|B|C|D|E|?","2":"A|B|C|D|E|?",...,"50":"A|B|C|D|E|?"}}
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text.trim()) {
+      return json(400, { error: "text required" });
+    }
 
-Rules:
-- Choose A-E.
-- If missing/unclear, output "?".
-- No explanations. No markdown. JSON only.
-- Use ONLY the OCR text.
+    const model = process.env.SOLVE_MODEL || "openai/gpt-4o-mini";
 
-OCR TEXT:
-${text}
-`.trim();
+    const system =
+      "You are an exam answer extractor. Return ONLY valid JSON. " +
+      "Given OCR text of an English multiple-choice test, infer answers 1-50. " +
+      "Output format: {\"answers\": {\"1\": \"A\", ... , \"50\": \"E\"}}. " +
+      "Use only A/B/C/D/E. If uncertain, still pick the most likely.";
+
+    const user = "OCR TEXT:\n" + text + "\n\nReturn ONLY JSON.";
 
     const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://netlify.app",
-        "X-Title": "ocr-solve"
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site",
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0
-      })
+        temperature: 0,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        response_format: { type: "json_object" },
+      }),
     });
 
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      return { statusCode: 502, body: JSON.stringify({ error: "OpenRouter error", raw: data }) };
+      return json(502, { error: "OpenRouter error", status: resp.status, raw: data });
     }
 
-    const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content)
-      ? String(data.choices[0].message.content).trim()
-      : "";
-
-    // JSON만 추출(모델이 실수로 앞뒤 텍스트 붙일 때 방어)
-    let jsonText = content;
-    const firstBrace = content.indexOf("{");
-    const lastBrace = content.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      jsonText = content.slice(firstBrace, lastBrace + 1);
-    }
+    const content = data?.choices?.[0]?.message?.content || "";
 
     let parsed;
-    try { parsed = JSON.parse(jsonText); }
-    catch {
-      return { statusCode: 502, body: JSON.stringify({ error: "Model did not return valid JSON", raw: content }) };
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return json(502, { error: "Model did not return valid JSON", raw: content });
     }
 
-    const answers = parsed.answers || {};
-    return { statusCode: 200, body: JSON.stringify({ answers }) };
-
+    return json(200, parsed);
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e?.message || "SOLVE unknown error" }) };
+    return json(500, { error: e?.message || "Solve unknown error" });
   }
 };
