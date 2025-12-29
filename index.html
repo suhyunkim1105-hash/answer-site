@@ -35,8 +35,8 @@
         <span class="pill" id="pillShot">SHOT -</span>
       </div>
       <div class="hint" style="margin-top:10px">
-        - 마지막 페이지 여백에 <b>DONE</b>을 크게 쓰면 종료 후 자동 풀이로 넘어간다.<br/>
-        - “밑줄(underlined)” 정보는 OCR 텍스트만으로는 100% 복원이 불가능하므로, <b>풀이 단계에서 페이지 사진(비전 모델)</b>을 같이 사용한다.<br/>
+        - 마지막 페이지 여백에 <b>DONE</b>을 크게 쓰면 OCR을 멈추고 자동 풀이로 넘어간다.<br/>
+        - 밑줄은 OCR만으로 완벽 복원 불가 → 풀이 단계에서 페이지 사진(비전)도 같이 본다.<br/>
         - iOS 사파리는 화면 잠금/앱 전환 시 카메라/음성이 멈출 수 있다.
       </div>
     </div>
@@ -70,14 +70,18 @@
 <script>
 (() => {
   // ===== 설정 =====
-  const MAX_PAGES = 30;          // DONE이 나오기 전까지 최대 페이지
-  const SHOTS_PER_PAGE = 3;      // 페이지당 OCR 시도 횟수
-  const MAX_RETAKES = 2;         // "다시 촬영" 루프 최대 횟수(너무 빡빡하지 않게)
-  const NEXT_PAGE_DELAY = 10;    // 다음 페이지 넘기기 대기(초)
-  const MIN_TEXT_LEN = 40;       // 텍스트가 이보다 너무 짧으면 품질 낮다고 판단
-  const AF_WAIT_MS = 600;        // 오토포커스 안정 대기
-  const OCR_LANG = "eng";        // 성대/홍익대 편입영어 기준
-  const USE_VISION_SOLVE = true; // 밑줄 때문에 비전 풀이 사용
+  const MAX_PAGES = 30;
+  const SHOTS_PER_PAGE = 3;
+  const MAX_RETAKES = 2;
+  const NEXT_PAGE_DELAY = 10;
+  const MIN_TEXT_LEN = 40;
+  const AF_WAIT_MS = 600;
+  const OCR_LANG = "eng";
+  const USE_VISION_SOLVE = true;
+
+  // ✅ iOS에서 TTS가 안 나오면 멈추던 문제를 막기 위한 옵션
+  const TTS_ENABLED = true;        // 음성 자체 끄고 싶으면 false
+  const TTS_BLOCKING = false;      // true면 말이 끝날 때까지 기다림(권장X), false면 말하되 진행은 계속
 
   // ===== DOM =====
   const $ = (id) => document.getElementById(id);
@@ -96,8 +100,6 @@
   // ===== 상태 =====
   let running = false;
   let stream = null;
-
-  // 페이지별 데이터(저장 안 한다=서버/DB 저장 없음, 브라우저 메모리만)
   const pages = []; // {page, text, conf, imageDataUrl}
 
   // ===== 유틸 =====
@@ -118,37 +120,51 @@
     pillShot.textContent = shot ? `SHOT ${shot}` : `SHOT -`;
   }
   function setStatus(text) { statusEl.textContent = text; }
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-  // ===== TTS(간단 버전) =====
-  async function speak(text, rate=1.0) {
-    // iOS 사파리: speak가 겹치면 잘 안 나올 때가 있어서, 항상 cancel 후 재생
+  // ===== TTS(절대 멈추지 않는 버전) =====
+  function speakSafe(text, rate=1.0) {
+    if (!TTS_ENABLED) return Promise.resolve();
     return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+
       try {
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
         u.lang = "ko-KR";
         u.rate = rate;
         u.pitch = 1.0;
-        u.onend = resolve;
-        u.onerror = resolve;
+        u.onend = finish;
+        u.onerror = finish;
         window.speechSynthesis.speak(u);
+
+        // ✅ iOS에서 onend가 안 불리는 케이스 대비 타임아웃(최대 8초)
+        const maxMs = Math.min(8000, 1200 + String(text).length * 60);
+        setTimeout(finish, maxMs);
       } catch (_) {
-        resolve();
+        finish();
       }
     });
   }
+
+  async function speak(text, rate=1.0) {
+    if (!TTS_ENABLED) return;
+    if (TTS_BLOCKING) await speakSafe(text, rate);
+    else speakSafe(text, rate); // 진행은 계속
+  }
+
   async function countdown(seconds) {
     for (let i = seconds; i >= 1; i--) {
-      await speak(String(i), 1.0);
-      await wait(400);
+      speak(String(i), 1.0);
+      await wait(350);
     }
   }
-  const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
   // ===== 카메라 =====
   async function startCamera() {
     if (stream) return;
-    setStatus("카메라를 여는 중이다.");
+    setStatus("카메라를 여는 중이다. 권한 팝업이 뜨면 허용해라.");
     const constraints = {
       audio: false,
       video: {
@@ -157,17 +173,20 @@
         height: { ideal: 1080 }
       }
     };
+
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
-    await video.play();
+
+    // iOS에서 play가 튕길 때가 있어서 try/catch
+    try { await video.play(); } catch {}
+
     setStatus("카메라 준비 완료다. 시험지를 화면에 꽉 차게 맞춰라.");
   }
+
   async function stopCamera() {
+    try { if (video) video.pause(); } catch {}
     try {
-      if (video) video.pause();
-      if (stream) {
-        for (const t of stream.getTracks()) t.stop();
-      }
+      if (stream) for (const t of stream.getTracks()) t.stop();
     } catch {}
     stream = null;
   }
@@ -180,21 +199,14 @@
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
-    const ctx = canvas.getContext("2d", { willReadFrequently: false });
+    const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, w, h);
-    // 품질 너무 낮추면 글씨 깨짐. 0.9~0.95 추천
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    return dataUrl;
+    return canvas.toDataURL("image/jpeg", 0.92);
   }
 
   // ===== OCR 호출 =====
   async function callOCR(page, shot, imageDataUrl) {
-    // ✅ 여기서 반드시 imageBase64 로 보낸다 (네 오류의 핵심)
-    const payload = {
-      pageIndex: page,
-      language: OCR_LANG,
-      imageBase64: imageDataUrl
-    };
+    const payload = { pageIndex: page, language: OCR_LANG, imageBase64: imageDataUrl };
 
     const r = await fetch("/.netlify/functions/ocr", {
       method: "POST",
@@ -206,7 +218,7 @@
     let j = null;
     try { j = JSON.parse(t); } catch {}
     if (!r.ok || !j || !j.ok) {
-      const detail = j?.detail ? ` / ${j.detail}` : "";
+      const detail = j?.detail ? ` / ${j.detail}` : (j?.error ? ` / ${j.error}` : "");
       throw new Error(`OCR HTTP ${r.status}${detail}`);
     }
     return j; // {ok:true, text, conf}
@@ -214,16 +226,13 @@
 
   function isDoneText(text) {
     if (!text) return false;
-    // DONE을 대문자로 크게 쓴다고 했으니 DONE 우선
     if (/\bDONE\b/.test(text)) return true;
-    // 혹시 대비용(네가 원하면)
     if (/촬영\s*완료/i.test(text)) return true;
     return false;
   }
 
   function looksLikeQuestions(text) {
     if (!text) return false;
-    // 영어 편입시험: "1." "2." ... / 보기: (a)(b)... 또는 ①② 등
     if (/\b\d{1,2}\.\s/.test(text)) return true;
     if (/[①②③④⑤]/.test(text)) return true;
     if (/\([a-eA-E]\)/.test(text)) return true;
@@ -241,19 +250,17 @@
     logEl.textContent = "";
 
     try {
-      await startCamera();
-      setUIState("READY");
       log("AUTO START");
+      await startCamera();
 
-      await speak("1분 뒤에 자동 오씨알을 시작한다.", 1.0);
-      await wait(1000);
-      // 너무 오래 기다리기 싫으면 여기 10초로 줄여도 됨
-      await speak("10초 뒤에 시작한다.", 1.0);
-      await countdown(10);
+      setUIState("READY");
+      setStatus("3초 뒤에 OCR을 시작한다. 흔들지 말고 잠깐 멈춰라.");
+      speak("3초 뒤에 시작한다.", 1.0);
+      await countdown(3);
 
       for (let page = 1; page <= MAX_PAGES && running; page++) {
         setUIState("OCRING", page);
-        setStatus(`페이지 ${page} OCR 중이다. 시험지를 흔들지 말고 잠깐 멈춰라.`);
+        setStatus(`페이지 ${page} OCR 중이다. 흔들지 말고 멈춰라.`);
         log(`PAGE ${page} START`);
 
         let best = { text:"", conf: -1, imageDataUrl:"" };
@@ -285,60 +292,52 @@
             }
           }
 
-          // best 선택: conf 우선 + 길이 보정
           for (const r of results) {
             const score = (r.conf || 0) + Math.min(r.text.length, 800) / 20;
             const bestScore = (best.conf || 0) + Math.min(best.text.length, 800) / 20;
             if (score > bestScore) best = r;
           }
 
-          // DONE 감지(성공/실패와 무관하게 bestText에서만 판정)
           if (isDoneText(best.text)) {
             log(`DONE DETECTED at page ${page}`);
             pages.push({ page, text: best.text, conf: best.conf, imageDataUrl: best.imageDataUrl });
             ocrBox.value += `\n[PAGE ${page}]\n${best.text}\n`;
-            await speak("촬영이 완료되었다. 이제 자동으로 문제를 푼다.", 1.0);
+            speak("촬영이 완료되었다. 이제 자동으로 문제를 푼다.", 1.0);
             break;
           }
 
-          // 품질 너무 낮으면 재촬영 요구 (기준은 빡빡하지 않게)
           if (!best.text || best.text.length < MIN_TEXT_LEN) {
             retakes++;
             if (retakes <= MAX_RETAKES) {
               setStatus(`페이지 ${page} 인식이 약하다. 다시 촬영해라. (${retakes}/${MAX_RETAKES})`);
-              await speak("인식이 약하다. 같은 페이지를 다시 촬영해라.", 1.0);
+              speak("인식이 약하다. 같은 페이지를 다시 촬영해라.", 1.0);
               continue;
             } else {
               log(`[PAGE ${page}] FORCE-ACCEPT (low text, retakes exceeded)`);
             }
           }
 
-          // 정상 기록
           pages.push({ page, text: best.text, conf: best.conf, imageDataUrl: best.imageDataUrl });
           ocrBox.value += `\n[PAGE ${page}]\n${best.text}\n`;
 
-          // 다음 페이지 안내
           setStatus(`페이지 ${page} 인식 완료다. 다음 페이지를 보여줘라. ${NEXT_PAGE_DELAY}초 뒤에 다음 페이지로 넘어간다.`);
-          await speak(`이 페이지 인식이 끝났다. 다음 페이지를 보여줘라. ${NEXT_PAGE_DELAY}초 뒤에 다음 페이지를 인식한다.`, 1.0);
+          speak(`다음 페이지를 보여줘라. ${NEXT_PAGE_DELAY}초 뒤에 인식한다.`, 1.0);
           await countdown(NEXT_PAGE_DELAY);
           break;
         }
 
-        // DONE이면 for-loop 종료
         if (pages.length && isDoneText(pages[pages.length-1].text)) break;
       }
 
       if (!running) throw new Error("USER_STOP");
 
-      // DONE을 못 찾았으면 여기서 종료
       if (!pages.some(p => isDoneText(p.text))) {
         log("FATAL :: DONE not detected within MAX_PAGES");
         setStatus("DONE을 찾지 못했다. 마지막 페이지에 DONE을 크게 쓰고 다시 실행해라.");
-        await speak("DONE을 찾지 못했다. 마지막 페이지에 DONE을 크게 쓰고 다시 실행해라.", 1.0);
+        speak("DONE을 찾지 못했다. 마지막 페이지에 DONE을 크게 쓰고 다시 실행해라.", 1.0);
         throw new Error("DONE_NOT_FOUND");
       }
 
-      // ===== 자동 풀이 =====
       await solveAll();
 
       setUIState("DONE");
@@ -357,22 +356,20 @@
       btnStop.disabled = true;
       btnAuto.disabled = false;
       running = false;
+      await stopCamera();
     }
   }
 
-  // ===== 풀이(페이지 단위로 작게 쪼개서 타임아웃 줄임) =====
+  // ===== 풀이 =====
   async function solvePage(p) {
-    const payload = {
-      page: p.page,
-      ocrText: p.text || "",
-      imageDataUrl: USE_VISION_SOLVE ? (p.imageDataUrl || "") : ""
-    };
+    const payload = { page: p.page, ocrText: p.text || "", imageDataUrl: USE_VISION_SOLVE ? (p.imageDataUrl || "") : "" };
 
     const r = await fetch("/.netlify/functions/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+
     const t = await r.text();
     let j = null;
     try { j = JSON.parse(t); } catch {}
@@ -380,15 +377,15 @@
       const detail = j?.detail ? ` / ${j.detail}` : "";
       throw new Error(`SOLVE HTTP ${r.status}${detail}`);
     }
-    return j; // {ok:true, answers:[{q,a}], raw}
+    return j;
   }
 
   async function solveAll() {
     setUIState("SOLVING");
-    setStatus("자동 풀이 중이다. (페이지 단위로 빠르게 처리한다)");
+    setStatus("자동 풀이 중이다.");
     log("SOLVE START");
 
-    const answers = new Map(); // q -> a
+    const answers = new Map();
 
     for (const p of pages) {
       if (!looksLikeQuestions(p.text)) {
@@ -399,15 +396,15 @@
       setStatus(`페이지 ${p.page} 풀이 중이다.`);
       log(`SOLVE page=${p.page} START`);
 
-      // 타임아웃/실패 대비: 2회 재시도
       let ok = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           const res = await solvePage(p);
           const arr = Array.isArray(res.answers) ? res.answers : [];
           for (const it of arr) {
-            if (it && Number.isFinite(it.q) && Number.isFinite(it.a)) {
-              answers.set(Number(it.q), Number(it.a));
+            if (it && Number.isFinite(Number(it.q)) && Number.isFinite(Number(it.a))) {
+              const q = Number(it.q), a = Number(it.a);
+              if (a >= 1 && a <= 5) answers.set(q, a);
             }
           }
           log(`SOLVE page=${p.page} OK answers=${arr.length}`);
@@ -415,36 +412,27 @@
           break;
         } catch (e) {
           log(`SOLVE page=${p.page} FAIL attempt=${attempt} :: ${e.message}`);
-          if (attempt === 2) {
-            await speak(`페이지 ${p.page} 풀이에 실패했다. 다시 촬영해라.`, 1.0);
-          } else {
-            await wait(400);
-          }
+          if (attempt === 2) speak(`페이지 ${p.page} 풀이에 실패했다. 다시 촬영해라.`, 1.0);
+          else await wait(300);
         }
       }
       if (!ok) break;
     }
 
-    // 정답 출력
     const list = [...answers.entries()].sort((a,b)=>a[0]-b[0]).map(([q,a]) => `${q}번 ${a}번`).join("\n");
     ansBox.value = list || "정답을 추출하지 못했다.";
 
     if (list) {
-      // TTS: “1번 3번, 2번 5번 …”
-      const speech = [...answers.entries()]
-        .sort((a,b)=>a[0]-b[0])
-        .map(([q,a]) => `${q}번 ${a}번`)
-        .join(", ");
-      await speak("정답을 말한다.", 1.0);
-      await speak(speech, 0.95);
+      const speech = [...answers.entries()].sort((a,b)=>a[0]-b[0]).map(([q,a]) => `${q}번 ${a}번`).join(", ");
+      speak("정답을 말한다.", 1.0);
+      speak(speech, 0.95);
     } else {
-      await speak("정답을 만들지 못했다.", 1.0);
+      speak("정답을 만들지 못했다.", 1.0);
     }
 
     log("SOLVE END");
   }
 
-  // ===== 버튼 =====
   btnAuto.addEventListener("click", () => runAuto());
   btnStop.addEventListener("click", async () => {
     running = false;
@@ -452,14 +440,12 @@
     btnAuto.disabled = false;
     setUIState("STOPPED");
     setStatus("중지 중이다.");
+    speak("중지한다.", 1.0);
     await stopCamera();
   });
 
-  // iOS 안정화(페이지 숨김 시 카메라 멈출 수 있음)
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && running) {
-      log("VISIBILITY hidden (iOS may pause camera/audio)");
-    }
+    if (document.hidden && running) log("VISIBILITY hidden (iOS may pause camera/audio)");
   });
 })();
 </script>
