@@ -1,114 +1,94 @@
 // netlify/functions/ocr.js
-
 export async function handler(event) {
   try {
-    if (event.httpMethod === "OPTIONS") {
-      return {
-        statusCode: 204,
-        headers: cors(),
-        body: "",
-      };
-    }
-
     if (event.httpMethod !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
     }
 
-    const apiKey = (process.env.OCR_SPACE_API_KEY || "").trim();
-    console.log("[ocr] OCR_SPACE_API_KEY length =", apiKey.length);
+    const key = process.env.OCR_SPACE_API_KEY || "";
+    console.log("[ocr] OCR_SPACE_API_KEY length =", key.length);
 
-    if (!apiKey) {
-      return json(500, { ok: false, error: "Server missing OCR_SPACE_API_KEY" });
+    if (!key) return json(500, { ok:false, error:"Missing OCR_SPACE_API_KEY" });
+
+    let body = {};
+    try { body = JSON.parse(event.body || "{}"); } catch {}
+    const imageBase64 = body.imageBase64;
+
+    if (!imageBase64 || typeof imageBase64 !== "string") {
+      return json(400, { ok:false, error:"Missing imageBase64/base64Image" });
     }
 
-    let body;
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      return json(400, { ok: false, error: "Invalid JSON body" });
-    }
+    // OCR.space는 "base64Image=data:image/jpeg;base64,..." 형식 지원
+    const form = new FormData();
+    form.set("apikey", key);
+    form.set("language", "eng");
+    form.set("isOverlayRequired", "false");
+    form.set("detectOrientation", "true");
+    form.set("isCreateSearchablePdf", "false");
+    form.set("isSearchablePdfHideTextLayer", "true");
+    form.set("base64Image", imageBase64);
 
-    const imageBase64Raw = (body.imageBase64 || body.base64Image || "").trim();
-    console.log("[ocr] imageBase64 length =", imageBase64Raw.length);
-
-    if (!imageBase64Raw) {
-      return json(400, { ok: false, error: "Missing imageBase64/base64Image" });
-    }
-
-    const base64Image = imageBase64Raw.startsWith("data:")
-      ? imageBase64Raw
-      : `data:image/jpeg;base64,${imageBase64Raw}`;
-
-    const language = (body.language || "eng").toString();
-
-    const params = new URLSearchParams();
-    params.set("apikey", apiKey);
-    params.set("base64Image", base64Image);
-    params.set("language", language);
-    params.set("isOverlayRequired", "false");
-    params.set("detectOrientation", "true");
-    params.set("scale", "true");
-    params.set("OCREngine", "2");
-
-    const resp = await fetch("https://api.ocr.space/parse/image", {
+    const r = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: params.toString(),
+      body: form
     });
 
-    const rawText = await resp.text();
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      return json(resp.status || 502, {
-        ok: false,
-        error: "OCR upstream non-JSON response",
-        status: resp.status || 502,
-        detail: rawText.slice(0, 500),
+    const raw = await r.text();
+    let data = {};
+    try { data = JSON.parse(raw); } catch {
+      return json(502, { ok:false, error:"OCR non-JSON response", detail: raw.slice(0, 300) });
+    }
+
+    if (!r.ok) {
+      return json(502, { ok:false, error:"OCR HTTP error", status:r.status, detail: data?.ErrorMessage || raw });
+    }
+
+    // OCR.space 표준 응답
+    if (data?.IsErroredOnProcessing) {
+      return json(502, {
+        ok:false,
+        error:"OCR processing error",
+        detail: Array.isArray(data?.ErrorMessage) ? data.ErrorMessage.join(" | ") : (data?.ErrorMessage || "unknown")
       });
     }
 
-    const isErrored = !!data?.IsErroredOnProcessing;
-    const errMsg = Array.isArray(data?.ErrorMessage)
-      ? data.ErrorMessage.filter(Boolean).join(" / ")
-      : (data?.ErrorMessage || "").toString();
+    const parsed = data?.ParsedResults?.[0];
+    const text = (parsed?.ParsedText || "").trim();
 
-    if (!resp.ok || isErrored) {
-      return json(resp.status || 502, {
-        ok: false,
-        error: "OCR HTTP error",
-        status: resp.status || 502,
-        detail: errMsg || data?.ErrorDetails || "Unknown OCR error",
-        rawExitCode: data?.OCRExitCode,
-      });
-    }
+    // confidence 계산(없을 수도 있어서 안전)
+    const confStr = parsed?.TextOverlay?.Lines?.length
+      ? null
+      : (parsed?.MeanConfidenceLevel ?? parsed?.MeanConfidenceLevel ?? null);
 
-    const parsedText = data?.ParsedResults?.[0]?.ParsedText?.toString() || "";
-    const approxConf = clamp(
-      Math.round((Math.min(parsedText.length, 2500) / 2500) * 100),
-      0, 100
-    );
+    let confidence = 0.0;
+    // OCR.space는 MeanConfidenceLevel(0~100)을 주는 경우가 많음
+    const m = parsed?.MeanConfidenceLevel;
+    if (typeof m === "number") confidence = Math.max(0, Math.min(1, m / 100));
+    else confidence = text.length ? 0.55 : 0.0;
 
-    return json(200, { ok: true, text: parsedText, conf: approxConf });
+    const doneDetected = /\bDONE\b/i.test(text);
+
+    return json(200, {
+      ok: true,
+      text,
+      confidence,
+      doneDetected
+    });
+
   } catch (e) {
-    console.error("[ocr] fatal", e);
-    return json(500, { ok: false, error: "Server error", detail: String(e?.message || e) });
+    return json(500, { ok:false, error:"Server error", detail: e?.message || String(e) });
   }
 }
 
-function cors() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-  };
-}
-
 function json(statusCode, obj) {
-  return { statusCode, headers: { ...cors(), "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(obj) };
-}
-
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST,OPTIONS"
+    },
+    body: JSON.stringify(obj)
+  };
 }
