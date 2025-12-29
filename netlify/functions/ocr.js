@@ -1,84 +1,8 @@
 // netlify/functions/ocr.js
-export async function handler(event) {
-  try {
-    if (event.httpMethod !== "POST") {
-      return json(405, { ok: false, error: "Method Not Allowed" });
-    }
+// POST { imageBase64: "...." (raw base64 OR dataURL), language?: "eng" }
+// Returns: { ok, text, meanConfidence, doneDetected, raw }
 
-    const key = process.env.OCR_SPACE_API_KEY || "";
-    console.log("[ocr] OCR_SPACE_API_KEY length =", key.length);
-
-    if (!key) return json(500, { ok:false, error:"Missing OCR_SPACE_API_KEY" });
-
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch {}
-    const imageBase64 = body.imageBase64;
-
-    if (!imageBase64 || typeof imageBase64 !== "string") {
-      return json(400, { ok:false, error:"Missing imageBase64/base64Image" });
-    }
-
-    // OCR.space는 "base64Image=data:image/jpeg;base64,..." 형식 지원
-    const form = new FormData();
-    form.set("apikey", key);
-    form.set("language", "eng");
-    form.set("isOverlayRequired", "false");
-    form.set("detectOrientation", "true");
-    form.set("isCreateSearchablePdf", "false");
-    form.set("isSearchablePdfHideTextLayer", "true");
-    form.set("base64Image", imageBase64);
-
-    const r = await fetch("https://api.ocr.space/parse/image", {
-      method: "POST",
-      body: form
-    });
-
-    const raw = await r.text();
-    let data = {};
-    try { data = JSON.parse(raw); } catch {
-      return json(502, { ok:false, error:"OCR non-JSON response", detail: raw.slice(0, 300) });
-    }
-
-    if (!r.ok) {
-      return json(502, { ok:false, error:"OCR HTTP error", status:r.status, detail: data?.ErrorMessage || raw });
-    }
-
-    // OCR.space 표준 응답
-    if (data?.IsErroredOnProcessing) {
-      return json(502, {
-        ok:false,
-        error:"OCR processing error",
-        detail: Array.isArray(data?.ErrorMessage) ? data.ErrorMessage.join(" | ") : (data?.ErrorMessage || "unknown")
-      });
-    }
-
-    const parsed = data?.ParsedResults?.[0];
-    const text = (parsed?.ParsedText || "").trim();
-
-    // confidence 계산(없을 수도 있어서 안전)
-    const confStr = parsed?.TextOverlay?.Lines?.length
-      ? null
-      : (parsed?.MeanConfidenceLevel ?? parsed?.MeanConfidenceLevel ?? null);
-
-    let confidence = 0.0;
-    // OCR.space는 MeanConfidenceLevel(0~100)을 주는 경우가 많음
-    const m = parsed?.MeanConfidenceLevel;
-    if (typeof m === "number") confidence = Math.max(0, Math.min(1, m / 100));
-    else confidence = text.length ? 0.55 : 0.0;
-
-    const doneDetected = /\bDONE\b/i.test(text);
-
-    return json(200, {
-      ok: true,
-      text,
-      confidence,
-      doneDetected
-    });
-
-  } catch (e) {
-    return json(500, { ok:false, error:"Server error", detail: e?.message || String(e) });
-  }
-}
+const OCR_ENDPOINT = "https://api.ocr.space/parse/image";
 
 function json(statusCode, obj) {
   return {
@@ -87,8 +11,103 @@ function json(statusCode, obj) {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST,OPTIONS"
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Cache-Control": "no-store",
     },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
+
+function ensureDataUrl(b64) {
+  if (!b64) return "";
+  if (b64.startsWith("data:image/")) return b64;
+  // default jpeg
+  return "data:image/jpeg;base64," + b64;
+}
+
+exports.handler = async (event) => {
+  try {
+    if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
+    if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method Not Allowed" });
+
+    const API_KEY = process.env.OCR_SPACE_API_KEY;
+    if (!API_KEY) return json(500, { ok: false, error: "OCR_SPACE_API_KEY missing" });
+
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { ok: false, error: "Invalid JSON body" });
+    }
+
+    const imageBase64 = body.imageBase64 || body.base64Image || body.base64 || "";
+    if (!imageBase64) {
+      return json(400, { ok: false, error: "Missing imageBase64/base64Image" });
+    }
+
+    const language = body.language || "eng";
+
+    const params = new URLSearchParams();
+    params.set("apikey", API_KEY);
+    params.set("language", language);
+    params.set("isOverlayRequired", "false");
+    params.set("detectOrientation", "true");
+    params.set("scale", "true");
+    params.set("OCREngine", "2");
+    params.set("base64Image", ensureDataUrl(imageBase64));
+
+    const resp = await fetch(OCR_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+
+    const textRaw = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(textRaw);
+    } catch {
+      return json(502, {
+        ok: false,
+        error: "OCR non-JSON response",
+        status: resp.status,
+        detail: textRaw.slice(0, 400),
+      });
+    }
+
+    if (!resp.ok) {
+      return json(502, { ok: false, error: "OCR HTTP error", status: resp.status, detail: data });
+    }
+
+    if (data.IsErroredOnProcessing) {
+      return json(502, {
+        ok: false,
+        error: "OCR errored",
+        detail: data.ErrorMessage || data.ErrorDetails || data,
+      });
+    }
+
+    const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
+    const parsedText = (parsed && parsed.ParsedText) ? parsed.ParsedText : "";
+    const meanConfidence = (parsed && typeof parsed.MeanConfidence !== "undefined")
+      ? Number(parsed.MeanConfidence)
+      : null;
+
+    const doneDetected = /\bDONE\b/i.test(parsedText);
+
+    return json(200, {
+      ok: true,
+      text: parsedText,
+      meanConfidence,
+      doneDetected,
+      raw: {
+        OCRExitCode: data.OCRExitCode,
+        ProcessingTimeInMilliseconds: data.ProcessingTimeInMilliseconds,
+        SearchablePDFURL: data.SearchablePDFURL || null,
+      },
+    });
+  } catch (e) {
+    return json(500, { ok: false, error: "Server error", detail: String(e && e.message ? e.message : e) });
+  }
+};
+
