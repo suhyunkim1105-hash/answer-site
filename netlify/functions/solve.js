@@ -1,151 +1,133 @@
 // netlify/functions/solve.js
-// 입력: { items: [{n, context, stem, choices[5], underlined(optional)}] }
-// 출력: { ok:true, answers: { "1":3, "2":5, ... } }
-
-exports.handler = async (event) => {
-  try {
-    if (event.httpMethod !== "POST") return json(405, { ok:false, error:"Method Not Allowed" });
-
-    const key = process.env.OPENROUTER_API_KEY;
-    if (!key) return json(500, { ok:false, error:"Missing OPENROUTER_API_KEY" });
-
-    const model = process.env.OPENROUTER_MODEL;
-    if (!model) return json(500, { ok:false, error:"Missing OPENROUTER_MODEL" });
-
-    const body = safeJson(event.body);
-    const items = Array.isArray(body && body.items) ? body.items : [];
-    if (items.length === 0) return json(400, { ok:false, error:"Invalid items" });
-
-    const cleaned = items.map(x => ({
-      n: Number(x?.n),
-      context: String(x?.context || "").trim(),
-      stem: String(x?.stem || "").trim(),
-      choices: Array.isArray(x?.choices) ? x.choices.map(c => String(c || "").trim()) : [],
-      underlined: String(x?.underlined || "").trim()
-    })).filter(x =>
-      Number.isFinite(x.n) && x.n >= 1 && x.n <= 60 &&
-      x.stem && x.choices.length === 5
-    );
-
-    if (cleaned.length === 0) return json(400, { ok:false, error:"No valid items after cleaning" });
-
-    const system = [
-      "Return ONLY valid JSON. Absolutely no extra text.",
-      "Format exactly: {\"answers\":{\"1\":3,\"2\":5}}",
-      "Keys must be question numbers as strings.",
-      "Values must be integers 1-5.",
-      "Do NOT include explanations."
-    ].join(" ");
-
-    const prompt = buildPrompt(cleaned);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
-
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type":"application/json",
-        "authorization": `Bearer ${key}`
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: 280,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: prompt }
-        ]
-      }),
-      signal: controller.signal
-    }).finally(() => clearTimeout(timeout));
-
-    if (!resp.ok) {
-      const t = await resp.text().catch(()=> "");
-      return json(502, { ok:false, error:`OpenRouter HTTP ${resp.status}: ${t.slice(0,200)}` });
-    }
-
-    const data = await resp.json().catch(() => null);
-    if (!data) return json(502, { ok:false, error:"OpenRouter returned invalid JSON" });
-
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content || typeof content !== "string") return json(502, { ok:false, error:"Empty model content" });
-
-    const obj = extractJson(content);
-    if (!obj || typeof obj !== "object" || !obj.answers || typeof obj.answers !== "object") {
-      return json(200, { ok:false, error:"Model output is not valid JSON {answers:{...}}" });
-    }
-
-    const answers = {};
-    for (const q of cleaned) {
-      const v = normalizeAnswer(obj.answers[String(q.n)]);
-      if (!v) return json(200, { ok:false, error:`Missing/invalid answer for ${q.n}` });
-      answers[String(q.n)] = v;
-    }
-
-    return json(200, { ok:true, answers });
-  } catch (e) {
-    return json(500, { ok:false, error: String(e && (e.message || e)) });
-  }
-};
-
-function buildPrompt(items) {
-  let out = "";
-  out += "Solve the following English multiple-choice questions.\n";
-  out += "If 'Underlined expression' is provided, treat it as the underlined target.\n";
-  out += "Return ONLY JSON: {\"answers\":{\"1\":3}}.\n\n";
-
-  for (const it of items) {
-    out += `Q${it.n}:\n`;
-    if (it.context) out += `PASSAGE/CONTEXT:\n${it.context}\n\n`;
-    if (it.underlined) out += `Underlined expression: ${it.underlined}\n`;
-    out += `${it.stem}\n`;
-    out += `1) ${it.choices[0]}\n`;
-    out += `2) ${it.choices[1]}\n`;
-    out += `3) ${it.choices[2]}\n`;
-    out += `4) ${it.choices[3]}\n`;
-    out += `5) ${it.choices[4]}\n\n`;
-  }
-  out += "Return ONLY JSON.";
-  return out;
-}
-
-function normalizeAnswer(v) {
-  if (v == null) return null;
-  const s = String(v).trim();
-  if (/^[1-5]$/.test(s)) return Number(s);
-  const m = s.match(/([1-5])/);
-  if (m) return Number(m[1]);
-  return null;
-}
-
-function extractJson(text) {
-  const t = String(text).trim();
-  const direct = safeJson(t);
-  if (direct) return direct;
-
-  const first = t.indexOf("{");
-  const last = t.lastIndexOf("}");
-  if (first !== -1 && last !== -1 && last > first) {
-    const slice = t.slice(first, last + 1);
-    const obj = safeJson(slice);
-    if (obj) return obj;
-  }
-  return null;
-}
-
-function safeJson(s) {
-  try { return JSON.parse(s); } catch { return null; }
-}
+// OpenRouter로 5지선다 정답만 JSON으로 받는다.
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "content-type":"application/json; charset=utf-8",
-      "cache-control":"no-store"
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "POST,OPTIONS",
     },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
 
+function extractFirstJsonObject(text) {
+  const s = String(text || "");
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start < 0 || end < 0 || end <= start) return null;
+  const candidate = s.slice(start, end + 1);
+  try { return JSON.parse(candidate); } catch { return null; }
+}
+
+async function openrouterChat({ apiKey, model, messages, maxTokens = 900 }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+
+  try {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: maxTokens,
+        messages,
+      }),
+      signal: controller.signal,
+    });
+
+    const status = resp.status;
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      return { ok: false, status, error: data || { message: "OpenRouter HTTP error" } };
+    }
+    const content = data?.choices?.[0]?.message?.content || "";
+    return { ok: true, status, content };
+  } catch (e) {
+    return { ok: false, status: 0, error: String(e && (e.message || e)) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function handler(event) {
+  if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
+  if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method Not Allowed" });
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const model = process.env.OPENROUTER_MODEL;
+
+  if (!apiKey) return json(500, { ok: false, error: "Missing OPENROUTER_API_KEY env" });
+  if (!model) return json(500, { ok: false, error: "Missing OPENROUTER_MODEL env" });
+
+  let body = {};
+  try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { ok:false, error:"Bad JSON body" }); }
+
+  const items = Array.isArray(body.items) ? body.items : null;
+  if (!items || items.length === 0) return json(400, { ok:false, error:"Missing items" });
+
+  const payload = items.map(it => ({
+    n: it.n,
+    context: String(it.context || "").slice(0, 2200),
+    stem: String(it.stem || "").slice(0, 600),
+    choices: Array.isArray(it.choices) ? it.choices.map(x => String(x).slice(0, 220)) : [],
+    underlined: String(it.underlined || "").slice(0, 220),
+  }));
+
+  const system = [
+    "You are a top-tier Korean transfer-exam English multiple-choice solver.",
+    "You must return ONLY valid JSON with no extra text.",
+    "JSON format: {\"1\":3,\"2\":5,...} mapping question number to answer choice 1-5.",
+    "If unsure, still pick the best answer. Never return 0 or null."
+  ].join(" ");
+
+  const user = [
+    "Solve the following questions. Each is 5-choice.",
+    "Use context if provided. If underlined phrase is provided, treat it as the underlined part of the question.",
+    "Return JSON only.",
+    JSON.stringify(payload)
+  ].join("\n");
+
+  const messages = [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+
+  // 재시도(타임아웃/가끔 JSON 깨짐)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const r = await openrouterChat({ apiKey, model, messages, maxTokens: 900 });
+    if (!r.ok) {
+      if (attempt === 5) return json(502, { ok:false, error:"OpenRouter solve failed", detail: r });
+      continue;
+    }
+
+    const obj = extractFirstJsonObject(r.content);
+    if (!obj) {
+      if (attempt === 5) return json(502, { ok:false, error:"Model did not return JSON", head: String(r.content).slice(0, 220) });
+      continue;
+    }
+
+    // 검증
+    const answers = {};
+    for (const it of payload) {
+      const key = String(it.n);
+      const v = Number(obj[key]);
+      if (![1,2,3,4,5].includes(v)) {
+        if (attempt === 5) return json(502, { ok:false, error:`Invalid answer for ${key}`, got: obj });
+        continue;
+      }
+      answers[key] = v;
+    }
+
+    return json(200, { ok:true, answers });
+  }
+
+  return json(502, { ok:false, error:"Unexpected solve exit" });
+}
