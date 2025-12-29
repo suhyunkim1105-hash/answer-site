@@ -3,809 +3,464 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>편입영어 자동 OCR → 자동 풀이 → TTS</title>
+  <title>Auto OCR → Auto Solve → TTS</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple SD Gothic Neo","Noto Sans KR", sans-serif;
-      margin: 0; padding: 14px; background:#0b0d12; color:#e9eef8; }
+    :root { color-scheme: dark; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Apple SD Gothic Neo, Noto Sans KR, sans-serif; background:#0b0f14; color:#e8eef7; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 14px; }
+    .card { background:#111826; border:1px solid #1f2a3a; border-radius:16px; padding:12px; margin-bottom:12px; }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    button { padding: 12px 14px; border-radius: 12px; border: 0; background: #2b6cff; color: #fff; font-weight: 900; }
-    button.secondary { background:#2a2f3b; }
-    button.danger { background:#ff3b3b; }
-    button:disabled { opacity:0.5; }
-    #status { margin-top:12px; padding:12px; border-radius: 12px; background:#121622; line-height:1.5; white-space:pre-wrap; }
-    video { margin-top:10px; width:100%; max-height:55vh; border-radius:14px; background:#000; }
-    .small { margin-top:10px; opacity:0.9; font-size:13px; line-height:1.55; }
-    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#1b2234; font-size:12px; font-weight:800; }
-    textarea { margin-top:10px; width:100%; min-height:260px; border-radius:12px; border:1px solid #2a2f3b;
-      background:#0f1320; color:#dfe7ff; padding:10px; box-sizing:border-box; }
-    .warn { color:#ffda6b; font-weight:900; }
-    .ok { color:#67ff9a; font-weight:900; }
-    .bad { color:#ff7d7d; font-weight:900; }
+    button { padding:12px 14px; border-radius:14px; border:1px solid #2a3b55; background:#172235; color:#e8eef7; font-weight:700; cursor:pointer; }
+    button:disabled{ opacity:.5; cursor:not-allowed; }
+    .pill { padding:6px 10px; border-radius:999px; border:1px solid #2a3b55; background:#0f1624; font-size:12px; }
+    #status { font-weight:700; line-height:1.35; }
+    #log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.35; max-height: 240px; overflow:auto; }
+    video { width:100%; border-radius:16px; background:#000; }
+    img.thumb { width: 100%; border-radius:16px; border:1px solid #22324a; }
+    textarea { width:100%; min-height:120px; border-radius:12px; border:1px solid #2a3b55; background:#0f1624; color:#e8eef7; padding:10px; }
+    .grid { display:grid; grid-template-columns: 1.3fr .7fr; gap:12px; }
+    @media (max-width: 860px){ .grid{ grid-template-columns: 1fr; } }
+    .hint { color:#9bb0cc; font-size:12px; line-height:1.35; }
   </style>
 </head>
 <body>
-  <div class="row">
-    <button id="btnStart">📸 자동 OCR 시작</button>
-    <button id="btnStop" class="danger" disabled>⛔ 정지</button>
-    <button id="btnVoice" class="secondary">🔊 음성 테스트</button>
+  <div class="wrap">
+    <div class="card">
+      <div id="status">대기 중이다. “자동 시작”을 누르면 카메라를 열고 자동 OCR을 시작한다.</div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnAuto">📸 자동 시작</button>
+        <button id="btnStop" disabled>⛔ 중지</button>
+        <span class="pill" id="pillState">IDLE</span>
+        <span class="pill" id="pillPage">PAGE -</span>
+        <span class="pill" id="pillShot">SHOT -</span>
+      </div>
+      <div class="hint" style="margin-top:10px">
+        - 마지막 페이지 여백에 <b>DONE</b>을 크게 쓰면 종료 후 자동 풀이로 넘어간다.<br/>
+        - “밑줄(underlined)” 정보는 OCR 텍스트만으로는 100% 복원이 불가능하므로, <b>풀이 단계에서 페이지 사진(비전 모델)</b>을 같이 사용한다.<br/>
+        - iOS 사파리는 화면 잠금/앱 전환 시 카메라/음성이 멈출 수 있다.
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <video id="video" playsinline autoplay muted></video>
+      </div>
+      <div class="card">
+        <div class="hint" style="margin-bottom:6px">최근 캡처 샷</div>
+        <img id="lastShot" class="thumb" alt="last shot" />
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hint" style="margin-bottom:6px">OCR 누적 텍스트</div>
+      <textarea id="ocrBox" placeholder="자동 OCR 결과가 여기에 누적된다." readonly></textarea>
+    </div>
+
+    <div class="card">
+      <div class="hint" style="margin-bottom:6px">정답(TTS는 자동으로 읽는다)</div>
+      <textarea id="ansBox" placeholder="자동 풀이 결과가 여기에 표시된다." readonly></textarea>
+    </div>
+
+    <div class="card">
+      <div class="hint" style="margin-bottom:6px">로그</div>
+      <div id="log"></div>
+    </div>
   </div>
-
-  <div id="status">대기 중이다. ‘자동 OCR 시작’을 누르면 카메라를 열고 자동으로 OCR→풀이→정답 낭독까지 진행한다.</div>
-
-  <div class="small">
-    - 마지막 페이지 여백에 <b>DONE</b>을 크게 쓰면 OCR을 멈추고 자동 풀이로 넘어간다.<br>
-    - “불안정 재촬영”은 <b>몇 번까지만</b> 하고, 계속 실패하면 <b>일단 저장하고 다음 페이지로 넘어간다</b>(자동화 멈춤 방지).<br>
-    - 밑줄(underline)은 OCR만으로 100% 불가다. <b>밑줄 문제만</b> 비전 모델로 “밑줄 부분 텍스트”를 보조 추출한다(실패하면 밑줄 없이 풀이 계속 진행).<br>
-    - <span class="warn">iOS 사파리는 화면 잠금/앱 전환 시 카메라/음성이 멈출 수 있다.</span>
-  </div>
-
-  <video id="video" autoplay playsinline muted></video>
-
-  <div class="small">
-    페이지: <span class="pill" id="pillPage">-</span>
-    단계: <span class="pill" id="pillPhase">IDLE</span>
-    시도: <span class="pill" id="pillTry">-</span>
-    샷: <span class="pill" id="pillShot">-</span>
-  </div>
-
-  <textarea id="debug" spellcheck="false" placeholder="디버그(자동으로 채워진다)"></textarea>
 
 <script>
 (() => {
-  "use strict";
+  // ===== 설정 =====
+  const MAX_PAGES = 30;          // DONE이 나오기 전까지 최대 페이지
+  const SHOTS_PER_PAGE = 3;      // 페이지당 OCR 시도 횟수
+  const MAX_RETAKES = 2;         // "다시 촬영" 루프 최대 횟수(너무 빡빡하지 않게)
+  const NEXT_PAGE_DELAY = 10;    // 다음 페이지 넘기기 대기(초)
+  const MIN_TEXT_LEN = 40;       // 텍스트가 이보다 너무 짧으면 품질 낮다고 판단
+  const AF_WAIT_MS = 600;        // 오토포커스 안정 대기
+  const OCR_LANG = "eng";        // 성대/홍익대 편입영어 기준
+  const USE_VISION_SOLVE = true; // 밑줄 때문에 비전 풀이 사용
 
-  // ===================== 설정 =====================
-  const MAX_PAGES = 80;
-
-  // 한 페이지당 OCR 샷 수(초반 3, 잘 안 되면 5까지)
-  const SHOTS_BASE = 3;
-  const SHOTS_MAX  = 5;
-
-  // 페이지 넘김 시간
-  const BETWEEN_PAGE_SEC = 10;
-  const RETRY_SEC = 5;
-
-  // OpenRouter solve 한 번에 몇 문항 묶을지(작게 잡아 타임아웃/오답 감소)
-  const SOLVE_CHUNK = 6;
-
-  // TTS
-  const TTS_LANG = "ko-KR";
-  const TTS_RATE = 0.95;
-
-  // OCR 품질 기준(너무 빡빡하면 끝없이 재촬영)
-  const MIN_LEN_ACCEPT = 30;
-  const MIN_LEN_GOOD   = 140;
-
-  // 엄격 재촬영 몇 번까지만 하고, 이후엔 강제 전진
-  const RETRY_BEFORE_FORCE_ACCEPT = 2;
-  const MAX_RETRY_SAME_PAGE = 14;
-
-  // 촬영 직전 포커스 안정 시간
-  const PRE_SHOT_SETTLE_MS = 650;
-
-  // ===================== 상태 =====================
-  let stream = null;
-  let running = false;
-  let phase = "IDLE";
-  let pageIndex = 1;
-  let triesSamePage = 0;
-  let shotsThisPage = SHOTS_BASE;
-
-  const pageTexts = [];
-  const pageScores = [];
-
-  // ===================== DOM =====================
+  // ===== DOM =====
   const $ = (id) => document.getElementById(id);
-  const video = $("video");
   const statusEl = $("status");
-  const debugEl = $("debug");
-  const pillPage = $("pillPage");
-  const pillPhase = $("pillPhase");
-  const pillTry = $("pillTry");
-  const pillShot = $("pillShot");
-  const btnStart = $("btnStart");
+  const logEl = $("log");
+  const video = $("video");
+  const lastShotImg = $("lastShot");
+  const ocrBox = $("ocrBox");
+  const ansBox = $("ansBox");
+  const btnAuto = $("btnAuto");
   const btnStop = $("btnStop");
-  const btnVoice = $("btnVoice");
+  const pillState = $("pillState");
+  const pillPage = $("pillPage");
+  const pillShot = $("pillShot");
 
-  // ===================== 공용 =====================
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  // ===== 상태 =====
+  let running = false;
+  let stream = null;
 
-  function setPhase(p) {
-    phase = p;
-    pillPhase.textContent = p;
-  }
-  function setStatus(msg) {
-    statusEl.textContent = msg;
-  }
-  function updatePills() {
-    pillPage.textContent = String(pageIndex);
-    pillTry.textContent = String(triesSamePage);
-    pillShot.textContent = String(shotsThisPage);
-  }
+  // 페이지별 데이터(저장 안 한다=서버/DB 저장 없음, 브라우저 메모리만)
+  const pages = []; // {page, text, conf, imageDataUrl}
 
-  function writeDebug(msg) {
-    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    debugEl.value = (debugEl.value + "\n" + line).trim();
-    debugEl.scrollTop = debugEl.scrollHeight;
+  // ===== 유틸 =====
+  function nowK() {
+    const d = new Date();
+    const h = String(d.getHours()).padStart(2,"0");
+    const m = String(d.getMinutes()).padStart(2,"0");
+    const s = String(d.getSeconds()).padStart(2,"0");
+    return `${h}:${m}:${s}`;
   }
+  function log(msg) {
+    logEl.textContent += `[${nowK()}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setUIState(state, page=null, shot=null) {
+    pillState.textContent = state;
+    pillPage.textContent = page ? `PAGE ${page}` : `PAGE -`;
+    pillShot.textContent = shot ? `SHOT ${shot}` : `SHOT -`;
+  }
+  function setStatus(text) { statusEl.textContent = text; }
 
-  // TTS 큐
-  let speakChain = Promise.resolve();
-  function cancelSpeech() {
-    try { window.speechSynthesis.cancel(); } catch {}
-  }
-  function speakOnce(text) {
+  // ===== TTS(간단 버전) =====
+  async function speak(text, rate=1.0) {
+    // iOS 사파리: speak가 겹치면 잘 안 나올 때가 있어서, 항상 cancel 후 재생
     return new Promise((resolve) => {
-      const u = new SpeechSynthesisUtterance(String(text || ""));
-      u.lang = TTS_LANG;
-      u.rate = TTS_RATE;
-      u.pitch = 1.0;
-      u.onend = () => resolve();
-      u.onerror = () => resolve();
-      window.speechSynthesis.speak(u);
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "ko-KR";
+        u.rate = rate;
+        u.pitch = 1.0;
+        u.onend = resolve;
+        u.onerror = resolve;
+        window.speechSynthesis.speak(u);
+      } catch (_) {
+        resolve();
+      }
     });
   }
-  function say(text) {
-    speakChain = speakChain.then(async () => {
-      if (!running) return;
-      await speakOnce(text);
-    });
-    return speakChain;
-  }
-  async function sayCountdown(sec) {
-    for (let i = sec; i >= 1; i--) {
-      if (!running) return;
-      await say(String(i));
-      await sleep(80);
+  async function countdown(seconds) {
+    for (let i = seconds; i >= 1; i--) {
+      await speak(String(i), 1.0);
+      await wait(400);
     }
   }
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-  function normNoSpace(s) {
-    return String(s || "").replace(/\s+/g, "").toLowerCase();
-  }
-  function hasDONE(text) {
-    const n = normNoSpace(text);
-    return !!n && n.includes("done");
-  }
-
-  // ===================== 카메라 =====================
-  async function ensureCamera() {
+  // ===== 카메라 =====
+  async function startCamera() {
     if (stream) return;
-    stream = await navigator.mediaDevices.getUserMedia({
+    setStatus("카메라를 여는 중이다.");
+    const constraints = {
+      audio: false,
       video: {
         facingMode: { ideal: "environment" },
         width: { ideal: 1920 },
         height: { ideal: 1080 }
-      },
-      audio: false
-    });
+      }
+    };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
-
-    await new Promise((resolve) => {
-      if (video.readyState >= 2) return resolve();
-      video.addEventListener("loadedmetadata", () => resolve(), { once: true });
-    });
-    await sleep(150);
+    await video.play();
+    setStatus("카메라 준비 완료다. 시험지를 화면에 꽉 차게 맞춰라.");
   }
-
-  function captureJpegDataUrl() {
-    const vw = video.videoWidth || 0;
-    const vh = video.videoHeight || 0;
-    if (!vw || !vh) return null;
-
-    // ✅ 전송용량 줄이기(이게 OCR 실패의 가장 흔한 원인 중 하나)
-    const maxW = 1280;
-    const scale = Math.min(1, maxW / vw);
-    const cw = Math.floor(vw * scale);
-    const ch = Math.floor(vh * scale);
-
-    const canvas = document.createElement("canvas");
-    canvas.width = cw;
-    canvas.height = ch;
-
-    const ctx = canvas.getContext("2d", { alpha: false });
-    ctx.drawImage(video, 0, 0, cw, ch);
-
-    // ✅ 품질 조금 낮춰도 글자는 충분히 읽힘 + 전송 안정성 증가
-    return canvas.toDataURL("image/jpeg", 0.78);
-  }
-
-  // ===================== OCR 호출 =====================
-  async function callOCR(imageDataUrl) {
-    const res = await fetch("/.netlify/functions/ocr", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ imageDataUrl })
-    });
-
-    let data = null;
-    let raw = "";
+  async function stopCamera() {
     try {
-      raw = await res.text();
-      data = JSON.parse(raw);
-    } catch {
-      // JSON 파싱 실패도 디버그로 보여야 함
-      throw new Error(`OCR 응답 파싱 실패: HTTP ${res.status} / head=${raw.slice(0, 120)}`);
-    }
-
-    if (!res.ok) {
-      throw new Error(`OCR HTTP 실패: ${res.status} / ${JSON.stringify(data).slice(0, 220)}`);
-    }
-
-    if (!data || data.ok !== true) {
-      throw new Error(`OCR 처리 실패: ${JSON.stringify(data).slice(0, 260)}`);
-    }
-
-    return data; // {ok:true, text, conf, approxBytes}
+      if (video) video.pause();
+      if (stream) {
+        for (const t of stream.getTracks()) t.stop();
+      }
+    } catch {}
+    stream = null;
   }
 
-  // ===================== 간단 점수(베스트 선택) =====================
-  function hasChoicesPattern(t) {
-    const s = String(t || "");
-    const circ = ["①","②","③","④","⑤"];
-    let c = 0;
-    for (const x of circ) if (s.includes(x)) c++;
-    if (c >= 3) return true;
-    if (/\(A\).*\(B\).*\(C\)/s.test(s)) return true;
-    if (/\b1\)\s+.*\b2\)\s+.*\b3\)/s.test(s)) return true;
+  // ===== 캡처 =====
+  function captureFrame() {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) return "";
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: false });
+    ctx.drawImage(video, 0, 0, w, h);
+    // 품질 너무 낮추면 글씨 깨짐. 0.9~0.95 추천
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    return dataUrl;
+  }
+
+  // ===== OCR 호출 =====
+  async function callOCR(page, shot, imageDataUrl) {
+    // ✅ 여기서 반드시 imageBase64 로 보낸다 (네 오류의 핵심)
+    const payload = {
+      pageIndex: page,
+      language: OCR_LANG,
+      imageBase64: imageDataUrl
+    };
+
+    const r = await fetch("/.netlify/functions/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const t = await r.text();
+    let j = null;
+    try { j = JSON.parse(t); } catch {}
+    if (!r.ok || !j || !j.ok) {
+      const detail = j?.detail ? ` / ${j.detail}` : "";
+      throw new Error(`OCR HTTP ${r.status}${detail}`);
+    }
+    return j; // {ok:true, text, conf}
+  }
+
+  function isDoneText(text) {
+    if (!text) return false;
+    // DONE을 대문자로 크게 쓴다고 했으니 DONE 우선
+    if (/\bDONE\b/.test(text)) return true;
+    // 혹시 대비용(네가 원하면)
+    if (/촬영\s*완료/i.test(text)) return true;
     return false;
   }
-  function hasQuestionNumberPattern(t) {
-    const s = String(t || "");
-    if (/(^|\n)\s*\d{1,2}\s*[.)]\s+/.test(s)) return true;
-    if (/(^|\n)\s*\d{1,2}\s+/.test(s)) return true;
+
+  function looksLikeQuestions(text) {
+    if (!text) return false;
+    // 영어 편입시험: "1." "2." ... / 보기: (a)(b)... 또는 ①② 등
+    if (/\b\d{1,2}\.\s/.test(text)) return true;
+    if (/[①②③④⑤]/.test(text)) return true;
+    if (/\([a-eA-E]\)/.test(text)) return true;
     return false;
   }
-  function quickScore(text, conf) {
-    const t = String(text || "").trim();
-    const len = t.length;
-    const lenScore = Math.max(0, Math.min(1, (len - 60) / 900));
-    const pat = (hasChoicesPattern(t) ? 0.5 : 0) + (hasQuestionNumberPattern(t) ? 0.5 : 0);
-    const confScore = (typeof conf === "number" && isFinite(conf)) ? conf : 0.45;
-    return Math.max(0, Math.min(1, 0.60*lenScore + 0.25*pat + 0.15*confScore));
-  }
 
-  // ===================== 페이지 OCR(멀티샷) =====================
-  async function ocrPageBest(page) {
-    triesSamePage++;
-    shotsThisPage = (triesSamePage >= 3) ? SHOTS_MAX : SHOTS_BASE;
-    updatePills();
+  // ===== 자동 OCR 루프 =====
+  async function runAuto() {
+    running = true;
+    btnAuto.disabled = true;
+    btnStop.disabled = false;
+    pages.length = 0;
+    ocrBox.value = "";
+    ansBox.value = "";
+    logEl.textContent = "";
 
-    const results = [];
-    for (let s = 1; s <= shotsThisPage; s++) {
-      if (!running) return null;
+    try {
+      await startCamera();
+      setUIState("READY");
+      log("AUTO START");
 
-      setStatus(`페이지 ${page} OCR 중이다. (샷 ${s}/${shotsThisPage})\n촬영 직전 잠깐 멈춰라(자동 초점 안정).`);
-      await sleep(PRE_SHOT_SETTLE_MS);
+      await speak("1분 뒤에 자동 오씨알을 시작한다.", 1.0);
+      await wait(1000);
+      // 너무 오래 기다리기 싫으면 여기 10초로 줄여도 됨
+      await speak("10초 뒤에 시작한다.", 1.0);
+      await countdown(10);
 
-      const img = captureJpegDataUrl();
-      if (!img) throw new Error("카메라 캡처 실패(비디오 준비 전).");
+      for (let page = 1; page <= MAX_PAGES && running; page++) {
+        setUIState("OCRING", page);
+        setStatus(`페이지 ${page} OCR 중이다. 시험지를 흔들지 말고 잠깐 멈춰라.`);
+        log(`PAGE ${page} START`);
 
-      try {
-        const o = await callOCR(img);
-        const text = String(o.text || "");
-        const conf = (typeof o.conf === "number" && isFinite(o.conf)) ? o.conf : 0.45;
-        const score = quickScore(text, conf);
-        results.push({ ok:true, text, conf, score, approxBytes: o.approxBytes || 0 });
-        writeDebug(`OCR OK page=${page} shot=${s} len=${text.trim().length} conf=${conf.toFixed(2)} score=${score.toFixed(3)} bytes~${o.approxBytes||0}`);
-      } catch (e) {
-        const err = String(e && (e.message || e));
-        results.push({ ok:false, text:"", conf:0, score:0, error: err });
-        writeDebug(`OCR FAIL page=${page} shot=${s} :: ${err}`);
-      }
-      await sleep(120);
-    }
+        let best = { text:"", conf: -1, imageDataUrl:"" };
+        let retakes = 0;
 
-    let best = null;
-    for (const r of results) {
-      if (!r.ok) continue;
-      if (!best || r.score > best.score) best = r;
-    }
-    if (!best) return { ok:false, text:"", conf:0, score:0 };
+        while (retakes <= MAX_RETAKES && running) {
+          const results = [];
 
-    return { ok:true, ...best };
-  }
+          for (let shot = 1; shot <= SHOTS_PER_PAGE && running; shot++) {
+            setUIState("OCRING", page, shot);
+            await wait(AF_WAIT_MS);
 
-  function pageLooksVeryBad(text) {
-    const t = String(text || "").trim();
-    return t.length < MIN_LEN_ACCEPT;
-  }
+            const dataUrl = captureFrame();
+            lastShotImg.src = dataUrl;
 
-  // ===================== 전체 텍스트 조립 =====================
-  function buildFullText() {
-    let out = "";
-    for (let i = 1; i < pageTexts.length; i++) {
-      const t = pageTexts[i];
-      if (!t) continue;
-      out += `\n\n[PAGE ${i}]\n` + t;
-    }
-    return out.trim();
-  }
+            if (!dataUrl || !dataUrl.startsWith("data:image")) {
+              log(`CAPTURE FAIL page=${page} shot=${shot} (empty dataUrl)`);
+              continue;
+            }
 
-  // ===================== 문항 파싱(원본 유지) =====================
-  const CHOICE_SETS = [
-    ["①","②","③","④","⑤"],
-    ["(A)","(B)","(C)","(D)","(E)"],
-    ["A.","B.","C.","D.","E."],
-    ["A)","B)","C)","D)","E)"],
-    ["1)","2)","3)","4)","5)"]
-  ];
+            try {
+              const res = await callOCR(page, shot, dataUrl);
+              const txt = (res.text || "").trim();
+              const conf = Number(res.conf || 0);
+              results.push({ text: txt, conf, imageDataUrl: dataUrl });
+              log(`OCR OK page=${page} shot=${shot} conf=${conf} len=${txt.length}`);
+            } catch (e) {
+              log(`OCR FAIL page=${page} shot=${shot} :: ${e.message}`);
+            }
+          }
 
-  function findChoiceSet(seg) {
-    for (const set of CHOICE_SETS) {
-      const ok = set.slice(0,3).every(m => seg.includes(m));
-      if (ok) return set;
-    }
-    return null;
-  }
+          // best 선택: conf 우선 + 길이 보정
+          for (const r of results) {
+            const score = (r.conf || 0) + Math.min(r.text.length, 800) / 20;
+            const bestScore = (best.conf || 0) + Math.min(best.text.length, 800) / 20;
+            if (score > bestScore) best = r;
+          }
 
-  function splitByMarkers(seg, markers) {
-    const idxs = markers.map(m => seg.indexOf(m));
-    if (idxs.some(i => i < 0)) return null;
-    for (let i = 1; i < idxs.length; i++) if (idxs[i] <= idxs[i-1]) return null;
+          // DONE 감지(성공/실패와 무관하게 bestText에서만 판정)
+          if (isDoneText(best.text)) {
+            log(`DONE DETECTED at page ${page}`);
+            pages.push({ page, text: best.text, conf: best.conf, imageDataUrl: best.imageDataUrl });
+            ocrBox.value += `\n[PAGE ${page}]\n${best.text}\n`;
+            await speak("촬영이 완료되었다. 이제 자동으로 문제를 푼다.", 1.0);
+            break;
+          }
 
-    const stem = seg.slice(0, idxs[0]).trim();
-    const c1 = seg.slice(idxs[0] + markers[0].length, idxs[1]).trim();
-    const c2 = seg.slice(idxs[1] + markers[1].length, idxs[2]).trim();
-    const c3 = seg.slice(idxs[2] + markers[2].length, idxs[3]).trim();
-    const c4 = seg.slice(idxs[3] + markers[3].length, idxs[4]).trim();
-    const c5 = seg.slice(idxs[4] + markers[4].length).trim();
-    const choices = [c1,c2,c3,c4,c5].map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean);
-    if (choices.length !== 5) return null;
-    return { stem, choices };
-  }
+          // 품질 너무 낮으면 재촬영 요구 (기준은 빡빡하지 않게)
+          if (!best.text || best.text.length < MIN_TEXT_LEN) {
+            retakes++;
+            if (retakes <= MAX_RETAKES) {
+              setStatus(`페이지 ${page} 인식이 약하다. 다시 촬영해라. (${retakes}/${MAX_RETAKES})`);
+              await speak("인식이 약하다. 같은 페이지를 다시 촬영해라.", 1.0);
+              continue;
+            } else {
+              log(`[PAGE ${page}] FORCE-ACCEPT (low text, retakes exceeded)`);
+            }
+          }
 
-  function normalizeTextForParse(t) {
-    return String(t || "")
-      .replace(/\r/g, "\n")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n{3,}/g, "\n\n");
-  }
+          // 정상 기록
+          pages.push({ page, text: best.text, conf: best.conf, imageDataUrl: best.imageDataUrl });
+          ocrBox.value += `\n[PAGE ${page}]\n${best.text}\n`;
 
-  function detectQuestionAnchors(full) {
-    const lines = full.split("\n");
-    let offset = 0;
-    const anchors = [];
-    for (const line of lines) {
-      const m = line.match(/^\s*(\d{1,2})\s*[.)]\s+/) || line.match(/^\s*(\d{1,2})\s+/);
-      if (m) {
-        const n = Number(m[1]);
-        if (Number.isFinite(n) && n >= 1 && n <= 60) {
-          if (!anchors.some(a => a.n === n)) anchors.push({ n, idx: offset + line.indexOf(m[1]) });
-        }
-      }
-      offset += line.length + 1;
-    }
-    anchors.sort((a,b) => a.idx - b.idx);
-    return anchors;
-  }
-
-  function extractPassageContextBefore(full, qStartIdx) {
-    const endMarkers = ["⑤", "(E)", "E.", "E)", "5)"];
-    let last = -1;
-    for (const m of endMarkers) {
-      const j = full.lastIndexOf(m, qStartIdx);
-      if (j > last) last = j + m.length;
-    }
-    const start = (last >= 0) ? last : Math.max(0, qStartIdx - 2200);
-    const ctx = full.slice(start, qStartIdx).trim();
-    if (ctx.length >= 180) return ctx;
-    return "";
-  }
-
-  function parseQuestions(fullText) {
-    const full = normalizeTextForParse(fullText);
-    const anchors = detectQuestionAnchors(full);
-    const issues = [];
-    const questions = [];
-
-    let currentContext = "";
-    for (let i = 0; i < anchors.length; i++) {
-      const a = anchors[i];
-      const start = a.idx;
-      const end = (i + 1 < anchors.length) ? anchors[i+1].idx : full.length;
-      let seg = full.slice(start, end).trim();
-      seg = seg.replace(/^\s*\d{1,2}\s*[.)]?\s+/, "");
-
-      const ctx = extractPassageContextBefore(full, start);
-      if (ctx) currentContext = ctx;
-
-      const set = findChoiceSet(seg);
-      if (!set) {
-        issues.push({ type:"choices_missing", n:a.n });
-        questions.push({ n:a.n, context: currentContext, stem: seg.slice(0, 260), choices: [], needsUnderline: false });
-        continue;
-      }
-
-      const spl = splitByMarkers(seg, set);
-      if (!spl) {
-        issues.push({ type:"choices_split_fail", n:a.n });
-        questions.push({ n:a.n, context: currentContext, stem: seg.slice(0, 260), choices: [], needsUnderline: false });
-        continue;
-      }
-
-      const stem = spl.stem.replace(/\s+/g, " ").trim();
-      const choices = spl.choices;
-
-      // underline 요구 표현(시험마다 다르므로 약하게 탐지)
-      const needsUnderline = /underlin/i.test(seg) || /underline/i.test(seg) || /underlined/i.test(seg);
-      questions.push({ n:a.n, context: currentContext, stem, choices, needsUnderline });
-    }
-
-    if (questions.length < 10) issues.push({ type:"too_few_questions", got: questions.length });
-    return { questions, issues };
-  }
-
-  function findLikelyPageForQuestion(n) {
-    const n2 = String(n).padStart(2,"0");
-    const re1 = new RegExp(`(^|\\n)\\s*${n2}\\s*[.)]?\\s`, "m");
-    const re2 = new RegExp(`(^|\\n)\\s*${n}\\s*[.)]?\\s`, "m");
-    for (let p = 1; p < pageTexts.length; p++) {
-      const t = pageTexts[p] || "";
-      if (!t) continue;
-      if ((re1.test(t) || re2.test(t)) && hasChoicesPattern(t)) return p;
-    }
-    return Math.max(1, pageTexts.length - 1);
-  }
-
-  // ===================== OpenRouter 호출 =====================
-  async function callUnderline(imageDataUrl, questionNumbers, hintText) {
-    const res = await fetch("/.netlify/functions/underline", {
-      method: "POST",
-      headers: { "content-type":"application/json" },
-      body: JSON.stringify({ imageDataUrl, questionNumbers, hintText })
-    });
-    const raw = await res.text().catch(()=> "");
-    let data = null;
-    try { data = JSON.parse(raw); } catch { throw new Error(`UNDERLINE 응답 파싱 실패: HTTP ${res.status} head=${raw.slice(0,120)}`); }
-    if (!res.ok) throw new Error(`UNDERLINE HTTP 실패: ${res.status} ${JSON.stringify(data).slice(0,220)}`);
-    if (!data.ok) throw new Error(`UNDERLINE 처리 실패: ${JSON.stringify(data).slice(0,220)}`);
-    return data.underlined;
-  }
-
-  async function callSolve(items) {
-    const res = await fetch("/.netlify/functions/solve", {
-      method: "POST",
-      headers: { "content-type":"application/json" },
-      body: JSON.stringify({ items })
-    });
-    const raw = await res.text().catch(()=> "");
-    let data = null;
-    try { data = JSON.parse(raw); } catch { throw new Error(`SOLVE 응답 파싱 실패: HTTP ${res.status} head=${raw.slice(0,120)}`); }
-    if (!res.ok) throw new Error(`SOLVE HTTP 실패: ${res.status} ${JSON.stringify(data).slice(0,220)}`);
-    if (!data.ok) throw new Error(`SOLVE 처리 실패: ${JSON.stringify(data).slice(0,220)}`);
-    return data.answers;
-  }
-
-  // ===================== 밑줄 추출용 촬영 =====================
-  async function captureUnderlineMapForPage(page, qNums) {
-    await say(`밑줄 추출이 필요합니다. ${page}페이지를 화면에 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 자동으로 촬영합니다.`);
-    await sayCountdown(BETWEEN_PAGE_SEC);
-
-    let best = null;
-    for (let s = 1; s <= 2; s++) {
-      if (!running) return null;
-      setStatus(`밑줄 추출용 촬영 중이다. (페이지 ${page}, 샷 ${s}/2)\n촬영 직전 잠깐 멈춰라.`);
-      await sleep(PRE_SHOT_SETTLE_MS);
-
-      const img = captureJpegDataUrl();
-      if (!img) throw new Error("카메라 캡처 실패");
-
-      try {
-        const hint = pageTexts[page] || "";
-        const underlined = await callUnderline(img, qNums, hint);
-        const count = underlined ? Object.keys(underlined).length : 0;
-        const score = count;
-        if (!best || score > best.score) best = { underlined, score };
-        writeDebug(`UNDERLINE OK page=${page} shot=${s} got=${count}`);
-      } catch (e) {
-        writeDebug(`UNDERLINE FAIL page=${page} shot=${s} :: ${String(e && (e.message||e))}`);
-      }
-      await sleep(200);
-    }
-    return best ? best.underlined : null;
-  }
-
-  // ===================== OCR 루프 =====================
-  async function ocrLoopUntilDONE() {
-    setPhase("OCRING");
-    pageIndex = 1;
-    triesSamePage = 0;
-    updatePills();
-
-    await say("자동 오씨알을 시작합니다. 첫 페이지를 화면에 보여 주세요.");
-
-    while (running && pageIndex <= MAX_PAGES) {
-      updatePills();
-      setStatus(`페이지 ${pageIndex}를 화면에 꽉 차게 맞추고 가만히 유지하라.`);
-
-      const r = await ocrPageBest(pageIndex);
-      if (!running) return false;
-
-      if (!r || !r.ok) {
-        if (triesSamePage <= RETRY_BEFORE_FORCE_ACCEPT) {
-          await say(`인식에 실패했습니다. 다시 촬영해 주세요. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
-          await sayCountdown(RETRY_SEC);
-          continue;
+          // 다음 페이지 안내
+          setStatus(`페이지 ${page} 인식 완료다. 다음 페이지를 보여줘라. ${NEXT_PAGE_DELAY}초 뒤에 다음 페이지로 넘어간다.`);
+          await speak(`이 페이지 인식이 끝났다. 다음 페이지를 보여줘라. ${NEXT_PAGE_DELAY}초 뒤에 다음 페이지를 인식한다.`, 1.0);
+          await countdown(NEXT_PAGE_DELAY);
+          break;
         }
 
-        pageTexts[pageIndex] = "";
-        pageScores[pageIndex] = 0;
-        writeDebug(`[PAGE ${pageIndex}] FORCE-ACCEPT (OCR failed too many times)`);
-        await say(`이 페이지 인식이 계속 실패합니다. 일단 넘어갑니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
-        await sayCountdown(BETWEEN_PAGE_SEC);
-        triesSamePage = 0;
-        pageIndex++;
-        continue;
+        // DONE이면 for-loop 종료
+        if (pages.length && isDoneText(pages[pages.length-1].text)) break;
       }
 
-      const text = String(r.text || "");
-      pageScores[pageIndex] = r.score;
-      writeDebug(`[PAGE ${pageIndex}] BEST score=${r.score.toFixed(3)} conf=${r.conf.toFixed(2)} len=${text.trim().length}`);
+      if (!running) throw new Error("USER_STOP");
 
-      if (hasDONE(text)) {
-        pageTexts[pageIndex] = text;
-        await say("DONE을 확인했습니다. 촬영을 종료하고 자동 풀이를 시작합니다.");
-        return true;
+      // DONE을 못 찾았으면 여기서 종료
+      if (!pages.some(p => isDoneText(p.text))) {
+        log("FATAL :: DONE not detected within MAX_PAGES");
+        setStatus("DONE을 찾지 못했다. 마지막 페이지에 DONE을 크게 쓰고 다시 실행해라.");
+        await speak("DONE을 찾지 못했다. 마지막 페이지에 DONE을 크게 쓰고 다시 실행해라.", 1.0);
+        throw new Error("DONE_NOT_FOUND");
       }
 
-      if (pageLooksVeryBad(text)) {
-        if (triesSamePage <= RETRY_BEFORE_FORCE_ACCEPT) {
-          await say(`지금 페이지 인식이 약합니다. 다시 촬영해 주세요. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
-          await sayCountdown(RETRY_SEC);
-          continue;
-        }
-        pageTexts[pageIndex] = text;
-        await say(`이 페이지 인식이 약하지만 자동화를 위해 저장하고 넘어갑니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
+      // ===== 자동 풀이 =====
+      await solveAll();
+
+      setUIState("DONE");
+      setStatus("전체 과정이 끝났다.");
+      btnStop.disabled = true;
+      btnAuto.disabled = false;
+      running = false;
+
+    } catch (e) {
+      if (String(e.message) === "USER_STOP") {
+        setStatus("사용자가 중지했다.");
       } else {
-        pageTexts[pageIndex] = text;
-        if (text.trim().length >= MIN_LEN_GOOD) {
-          await say(`이 페이지 인식이 완료되었습니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
-        } else {
-          await say(`이 페이지를 저장했습니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
-        }
+        setStatus(`오류다: ${e.message}`);
       }
-
-      await sayCountdown(BETWEEN_PAGE_SEC);
-      triesSamePage = 0;
-      pageIndex++;
+      setUIState("ERROR");
+      btnStop.disabled = true;
+      btnAuto.disabled = false;
+      running = false;
     }
-
-    return false;
   }
 
-  async function validateAndFix(fullText) {
-    setPhase("VALIDATING");
-    setStatus("문항 구조를 검증 중이다…");
-    await say("문항 구조를 검증합니다.");
+  // ===== 풀이(페이지 단위로 작게 쪼개서 타임아웃 줄임) =====
+  async function solvePage(p) {
+    const payload = {
+      page: p.page,
+      ocrText: p.text || "",
+      imageDataUrl: USE_VISION_SOLVE ? (p.imageDataUrl || "") : ""
+    };
 
-    for (let loop = 0; loop < 12 && running; loop++) {
-      const { questions, issues } = parseQuestions(fullText);
-
-      const bad = issues.find(x => x.type === "choices_missing" || x.type === "choices_split_fail");
-      const tooFew = issues.find(x => x.type === "too_few_questions");
-
-      if (!bad && !tooFew) return questions;
-
-      let targetN = null;
-      if (bad) targetN = bad.n;
-      else if (questions.length > 0) targetN = questions[Math.max(0, questions.length - 1)].n;
-
-      if (!targetN) throw new Error("Parsing failed");
-
-      const targetPage = findLikelyPageForQuestion(targetN);
-      await say(`${targetN}번 문제 텍스트가 이상합니다. ${targetPage}페이지를 다시 촬영해 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 자동 촬영합니다.`);
-      await sayCountdown(BETWEEN_PAGE_SEC);
-
-      triesSamePage = 0;
-      for (let t = 0; t < MAX_RETRY_SAME_PAGE && running; t++) {
-        const r = await ocrPageBest(targetPage);
-        if (!r || !r.ok) {
-          await say(`재촬영 인식에 실패했습니다. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
-          await sayCountdown(RETRY_SEC);
-          continue;
-        }
-        const tx = String(r.text || "");
-        if (tx.trim().length < MIN_LEN_ACCEPT) {
-          await say(`재촬영 인식이 약합니다. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
-          await sayCountdown(RETRY_SEC);
-          continue;
-        }
-        pageTexts[targetPage] = tx;
-        writeDebug(`[RECAPTURE PAGE ${targetPage}] score=${r.score.toFixed(3)} len=${tx.trim().length}`);
-        break;
-      }
-
-      fullText = buildFullText();
-      await sleep(200);
+    const r = await fetch("/.netlify/functions/solve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const t = await r.text();
+    let j = null;
+    try { j = JSON.parse(t); } catch {}
+    if (!r.ok || !j || !j.ok) {
+      const detail = j?.detail ? ` / ${j.detail}` : "";
+      throw new Error(`SOLVE HTTP ${r.status}${detail}`);
     }
-
-    throw new Error("Validation loop exceeded");
+    return j; // {ok:true, answers:[{q,a}], raw}
   }
 
-  async function extractUnderlinesIfNeeded(questions) {
-    const needs = questions.filter(q => q.needsUnderline).map(q => q.n);
-    if (needs.length === 0) return {};
+  async function solveAll() {
+    setUIState("SOLVING");
+    setStatus("자동 풀이 중이다. (페이지 단위로 빠르게 처리한다)");
+    log("SOLVE START");
 
-    setPhase("UNDERLINE");
-    await say("밑줄 표현을 추출합니다.");
+    const answers = new Map(); // q -> a
 
-    const byPage = new Map();
-    for (const n of needs) {
-      const p = findLikelyPageForQuestion(n);
-      if (!byPage.has(p)) byPage.set(p, []);
-      byPage.get(p).push(n);
-    }
-
-    const underlineMap = {};
-    for (const [p, nums] of byPage.entries()) {
-      if (!running) break;
-
-      let got = null;
-      for (let attempt = 0; attempt < 4 && running; attempt++) {
-        got = await captureUnderlineMapForPage(p, nums);
-        if (got && Object.keys(got).length > 0) break;
-        await say("밑줄 추출에 실패했습니다. 다시 시도합니다.");
-        await sleep(400);
-      }
-
-      // ✅ 여기서 멈추지 말고(자동화 유지), 밑줄 없이 진행
-      if (!got || Object.keys(got).length === 0) {
-        writeDebug(`UNDERLINE GIVEUP page=${p} nums=${nums.join(",")}`);
-        await say("밑줄 추출이 불안정합니다. 밑줄 없이 풀이를 계속합니다.");
+    for (const p of pages) {
+      if (!looksLikeQuestions(p.text)) {
+        log(`SOLVE SKIP page=${p.page} (no question patterns)`);
         continue;
       }
 
-      for (const k of Object.keys(got)) underlineMap[Number(k)] = String(got[k] || "").trim();
-    }
+      setStatus(`페이지 ${p.page} 풀이 중이다.`);
+      log(`SOLVE page=${p.page} START`);
 
-    return underlineMap;
-  }
-
-  async function solveAll(questions, underlineMap) {
-    setPhase("SOLVING");
-    setStatus("자동 풀이 중이다…");
-    await say("자동 풀이를 시작합니다.");
-
-    const qs = questions
-      .filter(q => q && q.choices && q.choices.length === 5 && q.stem)
-      .sort((a,b)=>a.n-b.n);
-
-    const answers = {};
-    for (let i = 0; i < qs.length && running; i += SOLVE_CHUNK) {
-      const chunk = qs.slice(i, i + SOLVE_CHUNK);
-      const range = `${chunk[0].n}번부터 ${chunk[chunk.length-1].n}번까지`;
-      setStatus(`풀이 중이다. (${Math.floor(i/SOLVE_CHUNK)+1}/${Math.ceil(qs.length/SOLVE_CHUNK)}) ${range}`);
-      await say(`${range}를 풉니다.`);
-
-      const items = chunk.map(q => ({
-        n: q.n,
-        context: q.context || "",
-        stem: q.stem,
-        choices: q.choices,
-        underlined: underlineMap[q.n] || ""
-      }));
-
-      let got = null;
-      for (let attempt = 0; attempt < 6 && running; attempt++) {
+      // 타임아웃/실패 대비: 2회 재시도
+      let ok = false;
+      for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          got = await callSolve(items);
-          writeDebug(`SOLVE OK ${range} -> ${JSON.stringify(got)}`);
+          const res = await solvePage(p);
+          const arr = Array.isArray(res.answers) ? res.answers : [];
+          for (const it of arr) {
+            if (it && Number.isFinite(it.q) && Number.isFinite(it.a)) {
+              answers.set(Number(it.q), Number(it.a));
+            }
+          }
+          log(`SOLVE page=${p.page} OK answers=${arr.length}`);
+          ok = true;
           break;
         } catch (e) {
-          const msg = String(e && (e.message || e));
-          writeDebug(`SOLVE FAIL ${range} :: ${msg}`);
-          setStatus(`풀이 실패(${range}). 자동 재시도 중이다.\n${msg}`);
-          await say("풀이에 실패했습니다. 다시 시도합니다.");
-          await sleep(700);
+          log(`SOLVE page=${p.page} FAIL attempt=${attempt} :: ${e.message}`);
+          if (attempt === 2) {
+            await speak(`페이지 ${p.page} 풀이에 실패했다. 다시 촬영해라.`, 1.0);
+          } else {
+            await wait(400);
+          }
         }
       }
-      if (!got) throw new Error("Solve failed persistently");
-
-      for (const q of chunk) {
-        const v = Number(got[String(q.n)]);
-        if (![1,2,3,4,5].includes(v)) throw new Error(`Invalid answer for ${q.n}`);
-        answers[q.n] = v;
-      }
+      if (!ok) break;
     }
 
-    return answers;
-  }
+    // 정답 출력
+    const list = [...answers.entries()].sort((a,b)=>a[0]-b[0]).map(([q,a]) => `${q}번 ${a}번`).join("\n");
+    ansBox.value = list || "정답을 추출하지 못했다.";
 
-  async function speakAnswers(answers) {
-    setPhase("SPEAK");
-    setStatus("정답을 음성으로 읽는다.");
-    await say("정답을 읽습니다.");
-
-    const nums = Object.keys(answers).map(Number).filter(n => Number.isFinite(n)).sort((a,b)=>a-b);
-    for (const n of nums) {
-      if (!running) return;
-      await say(`${n}번 정답은 ${answers[n]}번입니다.`);
-      await sleep(140);
-    }
-    await say("정답 낭독이 끝났습니다.");
-  }
-
-  async function runAll() {
-    debugEl.value = "";
-    pageTexts.length = 0;
-    pageScores.length = 0;
-    pageIndex = 1;
-    triesSamePage = 0;
-    shotsThisPage = SHOTS_BASE;
-    updatePills();
-
-    setStatus("카메라를 여는 중이다…");
-    await ensureCamera();
-
-    await say("주의. 마지막 페이지에 DONE을 크게 쓰면 자동으로 종료됩니다.");
-    await say("이제 첫 페이지를 화면에 보여 주세요.");
-
-    const okDone = await ocrLoopUntilDONE();
-    if (!okDone) {
-      await say("DONE을 찾지 못했습니다. 자동을 중단합니다.");
-      throw new Error("DONE not detected within MAX_PAGES");
+    if (list) {
+      // TTS: “1번 3번, 2번 5번 …”
+      const speech = [...answers.entries()]
+        .sort((a,b)=>a[0]-b[0])
+        .map(([q,a]) => `${q}번 ${a}번`)
+        .join(", ");
+      await speak("정답을 말한다.", 1.0);
+      await speak(speech, 0.95);
+    } else {
+      await speak("정답을 만들지 못했다.", 1.0);
     }
 
-    let fullText = buildFullText().replace(/DONE/gi, "");
-
-    const questions = await validateAndFix(fullText);
-    const underlineMap = await extractUnderlinesIfNeeded(questions);
-    const answers = await solveAll(questions, underlineMap);
-
-    const nums = Object.keys(answers).map(Number).sort((a,b)=>a-b);
-    writeDebug("\n[ANSWERS]");
-    for (const n of nums) writeDebug(`${n}=${answers[n]}`);
-
-    await speakAnswers(answers);
-
-    setPhase("IDLE");
-    setStatus("완료.");
+    log("SOLVE END");
   }
 
-  async function stopAll(msg) {
-    running = false;
-    setPhase("IDLE");
-    btnStart.disabled = false;
-    btnStop.disabled = true;
-    cancelSpeech();
-    setStatus(msg || "정지했다.");
-    pillPage.textContent = "-";
-    pillTry.textContent = "-";
-    pillShot.textContent = "-";
-  }
-
-  // ===================== 버튼 =====================
-  btnVoice.addEventListener("click", async () => {
-    running = true;
-    await say("음성 테스트입니다. 자동 오씨알 시작 버튼을 누를 수 있습니다.");
-    running = false;
-    cancelSpeech();
-  });
-
+  // ===== 버튼 =====
+  btnAuto.addEventListener("click", () => runAuto());
   btnStop.addEventListener("click", async () => {
-    await stopAll("정지했다. 다시 시작하려면 ‘자동 OCR 시작’을 누르라.");
+    running = false;
+    btnStop.disabled = true;
+    btnAuto.disabled = false;
+    setUIState("STOPPED");
+    setStatus("중지 중이다.");
+    await stopCamera();
   });
 
-  btnStart.addEventListener("click", async () => {
-    if (running) return;
-    running = true;
-    btnStart.disabled = true;
-    btnStop.disabled = false;
-    cancelSpeech();
-
-    try {
-      await runAll();
-    } catch (e) {
-      const msg = String(e && (e.message || e));
-      writeDebug(`FATAL :: ${msg}`);
-      setStatus("오류:\n" + msg);
-      try { await say("오류가 발생했습니다. 다시 시작해 주세요."); } catch {}
-    } finally {
-      await stopAll(statusEl.textContent);
+  // iOS 안정화(페이지 숨김 시 카메라 멈출 수 있음)
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && running) {
+      log("VISIBILITY hidden (iOS may pause camera/audio)");
     }
   });
-
 })();
 </script>
 </body>
