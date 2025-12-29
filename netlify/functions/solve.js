@@ -1,102 +1,6 @@
 // netlify/functions/solve.js
-export async function handler(event) {
-  try {
-    if (event.httpMethod !== "POST") {
-      return json(405, { ok:false, error:"Method Not Allowed" });
-    }
-
-    const apiKey = process.env.OPENROUTER_API_KEY || "";
-    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4.1";
-
-    if (!apiKey) return json(500, { ok:false, error:"Missing OPENROUTER_API_KEY" });
-
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch {}
-    const text = (body.text || "").toString();
-
-    if (!text || text.trim().length < 200) {
-      return json(400, { ok:false, error:"Text too short" });
-    }
-
-    // 성대/홍대 편입영어 스타일에 맞춰 “번호→선택지(A-E)”로만 출력시키기
-    const system = [
-      "You are a meticulous solver for Korean university transfer English multiple-choice exams.",
-      "Use ONLY the provided OCR text. Do NOT assume missing passages.",
-      "Output must be strict JSON only: {\"answers\": {\"1\":\"A\", \"2\":\"C\", ...}, \"notes\": \"...\"}",
-      "If a question is not solvable due to missing text, set its value to \"?\".",
-      "Prefer accuracy over completeness."
-    ].join(" ");
-
-    const user = [
-      "OCR TEXT (may contain page markers like [PAGE 1] ...).",
-      "Tasks:",
-      "1) Detect all question numbers (e.g., 01-50).",
-      "2) For each question, choose the best option A/B/C/D/E based on the text.",
-      "3) Return JSON only. No prose outside JSON.",
-      "",
-      text
-    ].join("\n");
-
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "auto-ocr-solver"
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
-        ]
-      })
-    });
-
-    const raw = await resp.text();
-    let data = {};
-    try { data = JSON.parse(raw); } catch {
-      return json(502, { ok:false, error:"OpenRouter non-JSON response", detail: raw.slice(0, 300) });
-    }
-
-    if (!resp.ok) {
-      return json(502, { ok:false, error:"OpenRouter HTTP error", detail: data });
-    }
-
-    const content = data?.choices?.[0]?.message?.content || "";
-    let parsed = null;
-    try { parsed = JSON.parse(content); } catch {
-      // 모델이 JSON만 내라 했는데도 깨면, 강제로 정리 시도
-      return json(502, { ok:false, error:"Model output not JSON", detail: content.slice(0, 500) });
-    }
-
-    const answers = parsed?.answers || {};
-    const nums = Object.keys(answers)
-      .map(k => parseInt(k, 10))
-      .filter(n => Number.isFinite(n))
-      .sort((a,b)=>a-b);
-
-    // 화면 표시용 텍스트
-    const lines = nums.map(n => `${n}번: ${answers[String(n)]}`);
-    const answerText = lines.length ? lines.join("\n") : "정답을 추출하지 못했다.";
-
-    // TTS는 너무 길면 앞 20개만
-    const ttsLines = nums.slice(0, 20).map(n => `${n}번 ${answers[String(n)]}`);
-    const ttsText = ttsLines.length ? `정답 읽는다. ${ttsLines.join(", ")}.` : "정답을 추출하지 못했다.";
-
-    return json(200, {
-      ok: true,
-      answerText,
-      ttsText,
-      notes: (parsed?.notes || "").toString().slice(0, 600)
-    });
-
-  } catch (e) {
-    return json(500, { ok:false, error:"Server error", detail: e?.message || String(e) });
-  }
-}
+// POST { ocrText: "..." }
+// Returns { ok, answers: { "1":"A"|...|"?" }, rawModelText }
 
 function json(statusCode, obj) {
   return {
@@ -105,8 +9,129 @@ function json(statusCode, obj) {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST,OPTIONS"
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Cache-Control": "no-store",
     },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
+
+function normalizeText(t) {
+  return (t || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractJsonObject(text) {
+  const m = text.match(/\{[\s\S]*\}/);
+  return m ? m[0] : null;
+}
+
+function coerceAnswers(obj) {
+  const out = {};
+  for (let i = 1; i <= 50; i++) out[String(i)] = "?";
+
+  if (obj && typeof obj === "object") {
+    for (const [k, v] of Object.entries(obj)) {
+      const kk = String(k).replace(/[^\d]/g, "");
+      if (!kk) continue;
+      const n = Number(kk);
+      if (!Number.isFinite(n) || n < 1 || n > 50) continue;
+
+      const vv = String(v || "").trim().toUpperCase();
+      if (["A", "B", "C", "D", "E", "?"].includes(vv)) out[String(n)] = vv;
+    }
+  }
+  return out;
+}
+
+exports.handler = async (event) => {
+  try {
+    if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
+    if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method Not Allowed" });
+
+    const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+    const MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4.1";
+
+    if (!OPENROUTER_API_KEY) return json(500, { ok: false, error: "OPENROUTER_API_KEY missing" });
+
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { ok: false, error: "Invalid JSON body" });
+    }
+
+    const ocrText = normalizeText(body.ocrText || body.text || "");
+    if (!ocrText) return json(400, { ok: false, error: "Missing ocrText" });
+
+    const system = [
+      "You are a strict multiple-choice exam solver.",
+      "You will receive messy OCR text of an English exam page set.",
+      "Return ONLY a JSON object mapping question numbers 1..50 to one of: A, B, C, D, E, or ?.",
+      "Rules:",
+      "1) If you cannot be confident, output ? for that number.",
+      "2) Do not include any extra keys, commentary, markdown, or explanations.",
+      "3) Output must be valid JSON.",
+    ].join("\n");
+
+    const user = [
+      "OCR TEXT START",
+      ocrText,
+      "OCR TEXT END",
+      "",
+      "Now output ONLY JSON like:",
+      '{"1":"A","2":"?","3":"C",...,"50":"D"}',
+    ].join("\n");
+
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://netlify.app",
+        "X-Title": "answer-site",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        temperature: 0,
+      }),
+    });
+
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
+      return json(502, { ok: false, error: "OpenRouter error", status: resp.status, detail: data });
+    }
+
+    const rawModelText =
+      data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
+        ? String(data.choices[0].message.content)
+        : "";
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(rawModelText);
+    } catch {
+      const j = extractJsonObject(rawModelText);
+      if (j) {
+        try {
+          parsed = JSON.parse(j);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+
+    const answers = coerceAnswers(parsed);
+
+    return json(200, { ok: true, answers, rawModelText });
+  } catch (e) {
+    return json(500, { ok: false, error: "Server error", detail: String(e && e.message ? e.message : e) });
+  }
+};
