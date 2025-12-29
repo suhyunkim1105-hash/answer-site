@@ -1,7 +1,4 @@
-# netlify.toml (루트에 그대로 저장)
+# netlify.toml
 [build]
   publish = "."
   functions = "netlify/functions"
-
-[functions]
-  node_bundler = "esbuild"
