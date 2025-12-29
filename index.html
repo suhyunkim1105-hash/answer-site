@@ -1,438 +1,59 @@
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>answer-site (OCR→Solve)</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: -apple-system, system-ui, Segoe UI, Roboto, "Apple SD Gothic Neo", sans-serif;
-      background:#0b1220;
-      color:#e5e7eb;
+// netlify/functions/ocr.js
+// Netlify Functions (CJS)
+// 필요 환경변수: OCR_SPACE_API_KEY
+
+exports.handler = async (event) => {
+  try {
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
     }
-    .wrap { max-width: 920px; margin: 0 auto; padding: 14px; }
-    .card {
-      background:#0f1a33;
-      border:1px solid rgba(255,255,255,.08);
-      border-radius:16px;
-      padding:14px;
-      margin:12px 0;
+
+    let body = {};
+    try { body = JSON.parse(event.body || "{}"); } catch {}
+    const imageBase64 = body.imageBase64;
+
+    if (!imageBase64) {
+      return { statusCode: 400, body: JSON.stringify({ error: "imageBase64 required" }) };
     }
-    h2 { margin:0 0 10px 0; font-size:16px; font-weight:700; }
-    button {
-      border:0;
-      border-radius:12px;
-      padding:10px 12px;
-      background:#2a3b73;
-      color:#fff;
-      font-weight:700;
-      cursor:pointer;
+
+    const apiKey = process.env.OCR_SPACE_API_KEY;
+    if (!apiKey) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "OCR_SPACE_API_KEY not set (Netlify 환경변수에 추가 필요)" })
+      };
     }
-    button:disabled { opacity:.45; cursor:default; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    video, img { width:100%; border-radius:12px; background:#000; }
-    textarea {
-      width:100%;
-      min-height:180px;
-      border-radius:12px;
-      border:1px solid rgba(255,255,255,.12);
-      background:#0b1022;
-      color:#e5e7eb;
-      padding:12px;
-      box-sizing:border-box;
-      font-family: -apple-system, system-ui, "Apple SD Gothic Neo", sans-serif;
-    }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size:12px;
-      white-space:pre-wrap;
-    }
-    .pill {
-      display:inline-block;
-      padding:6px 10px;
-      border-radius:999px;
-      background:rgba(255,255,255,.08);
-      font-size:12px;
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <h2>컨트롤</h2>
-      <div class="row">
-        <button id="btnCam">카메라 시작</button>
-        <button id="btnAuto" disabled>자동 시작</button>
-        <button id="btnStop" disabled>중지</button>
-        <button id="btnAudio">오디오 활성화(1회)</button>
-        <span class="pill" id="status">idle</span>
-        <span class="pill" id="pageInfo">page -</span>
-      </div>
-      <div style="height:10px"></div>
-      <video id="video" playsinline autoplay muted></video>
-    </div>
 
-    <div class="card">
-      <h2>최근 캡쳐 샷</h2>
-      <img id="lastImg" alt="last shot"/>
-    </div>
+    // OCR.Space form
+    const form = new URLSearchParams();
+    form.set("apikey", apiKey);
+    form.set("base64Image", "data:image/jpeg;base64," + imageBase64);
+    form.set("language", "eng");
+    form.set("isOverlayRequired", "false");
+    form.set("detectOrientation", "true");
+    form.set("scale", "true");
+    form.set("OCREngine", "2");
 
-    <div class="card">
-      <h2>OCR 누적 텍스트</h2>
-      <textarea id="ocrAll" placeholder="자동 OCR 결과가 여기에 누적된다."></textarea>
-    </div>
-
-    <div class="card">
-      <h2>정답(TTS는 자동으로 읽는다)</h2>
-      <textarea id="answers" placeholder="자동 풀이 결과가 여기에 표시된다."></textarea>
-    </div>
-
-    <div class="card">
-      <h2>로그</h2>
-      <div class="mono" id="log"></div>
-    </div>
-  </div>
-
-<script>
-(() => {
-  const $ = (id) => document.getElementById(id);
-  const video    = $("video");
-  const lastImg  = $("lastImg");
-  const ocrAll   = $("ocrAll");
-  const answersBox = $("answers");
-  const logBox   = $("log");
-  const statusPill = $("status");
-  const pageInfoPill = $("pageInfo");
-
-  const btnCam   = $("btnCam");
-  const btnAuto  = $("btnAuto");
-  const btnStop  = $("btnStop");
-  const btnAudio = $("btnAudio");
-
-  let stream = null;
-  let running = false;
-  let pageNo = 1;
-  let audioUnlocked = false;
-
-  function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
-  }
-
-  function now() {
-    const d = new Date();
-    const hh = String(d.getHours()).padStart(2,"0");
-    const mm = String(d.getMinutes()).padStart(2,"0");
-    const ss = String(d.getSeconds()).padStart(2,"0");
-    return `[${hh}:${mm}:${ss}]`;
-  }
-
-  function log(msg) {
-    logBox.textContent = `${now()} ${msg}\n` + logBox.textContent;
-  }
-
-  function setStatus(s) {
-    statusPill.textContent = s;
-  }
-
-  function setPageInfo(page, shot, maxShots) {
-    if (!page) {
-      pageInfoPill.textContent = "page -";
-      return;
-    }
-    if (!shot) {
-      pageInfoPill.textContent = `p${page} 준비`;
-    } else {
-      pageInfoPill.textContent = `p${page} / 샷 ${shot}/${maxShots}`;
-    }
-  }
-
-  async function startCamera() {
-    if (stream) return true;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "environment",
-          width:  { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
-      video.srcObject = stream;
-      await video.play();
-      log("카메라 OK");
-      btnAuto.disabled = false;
-      return true;
-    } catch (e) {
-      log("카메라 실패: " + (e?.message || e));
-      return false;
-    }
-  }
-
-  function stopAll() {
-    running = false;
-    setStatus("stopped");
-    setPageInfo(null, null, null);
-    btnStop.disabled = true;
-    btnAuto.disabled = false;
-    log("중지");
-  }
-
-  function captureBase64(quality = 0.92) {
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, w, h);
-    const dataUrl = canvas.toDataURL("image/jpeg", quality);
-    lastImg.src = dataUrl;
-    return dataUrl;
-  }
-
-  function scoreOcrText(t) {
-    const text = (t || "").replace(/\r/g, "\n");
-    const len = text.length;
-
-    const qNums = new Set();
-    const qRe = /\b(0?[1-9]|[1-4][0-9]|50)\b/g;
-    let m;
-    while ((m = qRe.exec(text)) !== null) {
-      const n = Number(m[1]);
-      if (n >= 1 && n <= 50) qNums.add(n);
-    }
-    const qCount = qNums.size;
-
-    const choiceCount =
-      (text.match(/[①②③④⑤]/g) || []).length +
-      (text.match(/\b[A-E]\b/g) || []).length +
-      (text.match(/\b[1-5]\)/g) || []).length;
-
-    const nonWord = (text.match(/[^A-Za-z0-9\s\.\,\-\:\;\?\!\(\)\[\]'"\/]/g) || []).length;
-    const noiseRatio = len ? (nonWord / len) : 0;
-
-    const doneBonus = /\bDONE\b/i.test(text) ? 50 : 0;
-
-    const score =
-      (qCount * 10) +
-      (choiceCount * 0.6) +
-      (Math.min(len, 6000) * 0.001) +
-      doneBonus -
-      (noiseRatio * 20);
-
-    return { score, qCount, choiceCount, len, noiseRatio };
-  }
-
-  async function callOCR(imageBase64, language="eng") {
-    const resp = await fetch("/.netlify/functions/ocr", {
+    const resp = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64, language })
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString()
     });
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || !data || !data.ok) {
-      const detail = data?.error ? `${data.error}` : "unknown";
-      throw new Error(`OCR 실패: HTTP ${resp.status} / ${detail}`);
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return { statusCode: 502, body: JSON.stringify({ error: "OCR API error", raw: data }) };
     }
-    return data;
+
+    const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
+    const text = (parsed && parsed.ParsedText ? parsed.ParsedText : "").trim();
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ text })
+    };
+
+  } catch (e) {
+    return { statusCode: 500, body: JSON.stringify({ error: e?.message || "OCR unknown error" }) };
   }
-
-  async function callSolve(fullText) {
-    const resp = await fetch("/.netlify/functions/solve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText: fullText })
-    });
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || !data || !data.ok) {
-      throw new Error(`SOLVE 실패: HTTP ${resp.status}`);
-    }
-    return data;
-  }
-
-  // ====== TTS ======
-
-  function speak(text) {
-    if (!audioUnlocked) {
-      log("TTS blocked (audio not unlocked). '오디오 활성화(1회)' 버튼을 먼저 눌러야 함.");
-      return;
-    }
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "ko-KR";
-      u.rate = 1.0;
-      u.pitch = 1.0;
-      window.speechSynthesis.speak(u);
-    } catch (e) {
-      log("TTS 오류: " + (e?.message || e));
-    }
-  }
-
-  async function speakCountdownForPage(page) {
-    if (audioUnlocked) {
-      const msg = `페이지 ${page}, 5초 뒤에 촬영을 시작합니다. 시험지를 화면 안에 맞춰 주세요. 5, 4, 3, 2, 1.`;
-      speak(msg);
-    }
-    await sleep(5000); // 실제 카운트다운 동안 대기
-  }
-
-  function speakPageDone(page, isLast) {
-    if (!audioUnlocked) return;
-    let msg = `페이지 ${page} 촬영이 완료되었습니다.`;
-    if (isLast) {
-      msg += " 모든 페이지 촬영이 끝났습니다. 이제 정답을 계산합니다.";
-    } else {
-      msg += " 다음 페이지로 넘기고 준비해 주세요.";
-    }
-    speak(msg);
-  }
-
-  function speakAnswers(ansObj) {
-    if (!audioUnlocked) {
-      log("TTS blocked (audio not unlocked) (정답 읽기).");
-      return;
-    }
-    const name = { A:"에이", B:"비", C:"씨", D:"디", E:"이", "?":"모름" };
-    let text = "정답을 말하겠습니다. ";
-    for (let i = 1; i <= 50; i++) {
-      const v = ansObj[String(i)] || "?";
-      const vv = name[v] || v;
-      text += `${i}번, ${vv}. `;
-    }
-    speak(text);
-  }
-
-  function formatAnswers(ansObj) {
-    const lines = [];
-    for (let i=1; i<=50; i++) {
-      const v = ansObj[String(i)] || "?";
-      lines.push(`${i}번: ${v}`);
-    }
-    return lines.join("\n");
-  }
-
-  // ====== AUTO FLOW ======
-
-  async function autoRun() {
-    if (!stream) {
-      const ok = await startCamera();
-      if (!ok) return;
-    }
-
-    running = true;
-    pageNo = 1;
-    btnAuto.disabled = true;
-    btnStop.disabled = false;
-    setStatus("running");
-    setPageInfo(pageNo, 0, 3);
-    log("AUTO START");
-
-    const maxPages = 20; // 안전 상한
-
-    while (running && pageNo <= maxPages) {
-      log(`페이지 ${pageNo} OCR 시작 (3샷 중 베스트 1개 채택)`);
-      setPageInfo(pageNo, 0, 3);
-
-      // 페이지 시작 안내 & 카운트다운
-      await speakCountdownForPage(pageNo);
-
-      const tries = 3;
-      const results = [];
-
-      for (let s = 1; s <= tries; s++) {
-        if (!running) break;
-
-        setPageInfo(pageNo, s, tries);
-        log(`페이지 ${pageNo} 촬영/전송 (샷 ${s}/${tries})`);
-        await sleep(900); // 자동초점 안정 시간
-
-        const img = captureBase64(0.92);
-
-        try {
-          const o = await callOCR(img, "eng");
-          const t = (o.text || "").trim();
-          const sc = scoreOcrText(t);
-          results.push({
-            shot: s,
-            text: t,
-            doneDetected: !!o.doneDetected,
-            meanConfidence: o.meanConfidence,
-            sc
-          });
-          log(`OCR OK page=${pageNo} shot=${s} q=${sc.qCount} choice=${sc.choiceCount} len=${sc.len} score=${sc.score.toFixed(2)} done=${o.doneDetected ? "Y":"N"}`);
-        } catch (e) {
-          log(`OCR FAIL page=${pageNo} shot=${s} :: ${e?.message || e}`);
-        }
-      }
-
-      if (results.length === 0) {
-        log(`[PAGE ${pageNo}] FORCE-ACCEPT (all OCR failed)`);
-        pageNo++;
-        continue;
-      }
-
-      results.sort((a,b) => b.sc.score - a.sc.score);
-      const best = results[0];
-
-      const pageBlock = `[PAGE ${pageNo}]\n` + best.text + "\n\n";
-      ocrAll.value += pageBlock;
-
-      if (best.doneDetected || /\bDONE\b/i.test(best.text)) {
-        log(`DONE detected on page=${pageNo}. 이제 자동 풀이로 넘어간다.`);
-        speakPageDone(pageNo, true);
-        break;
-      } else {
-        speakPageDone(pageNo, false);
-      }
-
-      pageNo++;
-      setPageInfo(pageNo, 0, 3);
-    }
-
-    try {
-      setStatus("solving");
-      log("SOLVE START");
-      const solved = await callSolve(ocrAll.value);
-      const out = formatAnswers(solved.answers);
-      answersBox.value = out;
-      log("SOLVE OK");
-      speakAnswers(solved.answers);
-    } catch (e) {
-      log("SOLVE FAIL :: " + (e?.message || e));
-      answersBox.value = "정답을 추측하지 못했다.";
-    }
-
-    running = false;
-    setStatus("idle");
-    setPageInfo(null, null, null);
-    btnStop.disabled = true;
-    btnAuto.disabled = false;
-  }
-
-  // ====== BUTTONS ======
-
-  btnCam.addEventListener("click", startCamera);
-  btnAuto.addEventListener("click", autoRun);
-  btnStop.addEventListener("click", stopAll);
-
-  btnAudio.addEventListener("click", () => {
-    audioUnlocked = true;
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance("오디오 활성화 완료. 이제 촬영 안내와 정답을 음성으로 읽어 주겠습니다.");
-      u.lang = "ko-KR";
-      u.rate = 1.0;
-      u.pitch = 1.0;
-      window.speechSynthesis.speak(u);
-      log("오디오 활성화 OK");
-    } catch (e) {
-      log("오디오 활성화 실패: " + (e?.message || e));
-    }
-  });
-
-})();
-</script>
-</body>
-</html>
+};
