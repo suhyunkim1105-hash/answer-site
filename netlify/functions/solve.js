@@ -1,131 +1,112 @@
 // netlify/functions/solve.js
-
 export async function handler(event) {
   try {
-    if (event.httpMethod === "OPTIONS") {
-      return { statusCode: 204, headers: cors(), body: "" };
-    }
     if (event.httpMethod !== "POST") {
-      return json(405, { ok: false, error: "Method Not Allowed" });
+      return json(405, { ok:false, error:"Method Not Allowed" });
     }
 
-    const apiKey = (process.env.OPENROUTER_API_KEY || "").trim();
-    const visionModel = (process.env.OPENROUTER_VISION_MODEL || "").trim();
-    const textModel = (process.env.OPENROUTER_MODEL || "").trim();
+    const apiKey = process.env.OPENROUTER_API_KEY || "";
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4.1";
 
-    if (!apiKey) return json(500, { ok: false, error: "Missing OPENROUTER_API_KEY" });
+    if (!apiKey) return json(500, { ok:false, error:"Missing OPENROUTER_API_KEY" });
 
-    let body;
-    try { body = JSON.parse(event.body || "{}"); }
-    catch { return json(400, { ok: false, error: "Invalid JSON body" }); }
+    let body = {};
+    try { body = JSON.parse(event.body || "{}"); } catch {}
+    const text = (body.text || "").toString();
 
-    const page = Number(body.page || 0);
-    const ocrText = (body.ocrText || "").toString();
-    const imageDataUrl = (body.imageDataUrl || "").toString();
-
-    // 이미지가 있으면 비전 모델 사용
-    const useVision = !!imageDataUrl && imageDataUrl.startsWith("data:image");
-    const model = useVision ? visionModel : textModel;
-
-    if (!model) {
-      return json(500, { ok:false, error: useVision ? "Missing OPENROUTER_VISION_MODEL" : "Missing OPENROUTER_MODEL" });
+    if (!text || text.trim().length < 200) {
+      return json(400, { ok:false, error:"Text too short" });
     }
 
+    // 성대/홍대 편입영어 스타일에 맞춰 “번호→선택지(A-E)”로만 출력시키기
     const system = [
-      "You solve Korean university transfer English multiple-choice exams.",
-      "Return ONLY valid JSON. No extra text.",
-      "JSON schema: {\"answers\":[{\"q\":number,\"a\":number}]} where a is 1..5 (option number).",
-      "Only include questions that are clearly visible in the provided page.",
-      "If uncertain, omit that question from answers (do NOT guess).",
-      "Underlined parts may be important; use the image to interpret underlines even if OCR text loses them."
+      "You are a meticulous solver for Korean university transfer English multiple-choice exams.",
+      "Use ONLY the provided OCR text. Do NOT assume missing passages.",
+      "Output must be strict JSON only: {\"answers\": {\"1\":\"A\", \"2\":\"C\", ...}, \"notes\": \"...\"}",
+      "If a question is not solvable due to missing text, set its value to \"?\".",
+      "Prefer accuracy over completeness."
     ].join(" ");
 
-    const userText =
-      `Page: ${page}\n` +
-      `OCR text (may be imperfect):\n` +
-      `${ocrText}\n\n` +
-      `Task: Identify the questions on this page and output correct option numbers (1..5).`;
-
-    const messages = [
-      { role: "system", content: system },
-      useVision
-        ? {
-            role: "user",
-            content: [
-              { type: "text", text: userText },
-              { type: "image_url", image_url: { url: imageDataUrl } }
-            ]
-          }
-        : { role: "user", content: userText }
-    ];
-
-    const controller = new AbortController();
-    const timeoutMs = 9500; // Netlify 함수 타임아웃 위험 줄이려고 9.5초로 자름
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const user = [
+      "OCR TEXT (may contain page markers like [PAGE 1] ...).",
+      "Tasks:",
+      "1) Detect all question numbers (e.g., 01-50).",
+      "2) For each question, choose the best option A/B/C/D/E based on the text.",
+      "3) Return JSON only. No prose outside JSON.",
+      "",
+      text
+    ].join("\n");
 
     const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      signal: controller.signal,
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "auto-ocr-solver"
       },
       body: JSON.stringify({
         model,
-        messages,
         temperature: 0,
-        max_tokens: 200
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user }
+        ]
       })
-    }).catch((e) => { throw e; })
-      .finally(() => clearTimeout(timer));
+    });
 
     const raw = await resp.text();
-    let data;
-    try { data = JSON.parse(raw); }
-    catch { return json(502, { ok:false, error:"Upstream non-JSON", detail: raw.slice(0,400) }); }
+    let data = {};
+    try { data = JSON.parse(raw); } catch {
+      return json(502, { ok:false, error:"OpenRouter non-JSON response", detail: raw.slice(0, 300) });
+    }
 
     if (!resp.ok) {
-      return json(resp.status, { ok:false, error:"OpenRouter error", detail: data?.error?.message || raw.slice(0,400) });
+      return json(502, { ok:false, error:"OpenRouter HTTP error", detail: data });
     }
 
     const content = data?.choices?.[0]?.message?.content || "";
-    const parsed = safeJson(content);
-
-    if (!parsed || !Array.isArray(parsed.answers)) {
-      return json(502, { ok:false, error:"Bad model output", detail: String(content).slice(0,400) });
+    let parsed = null;
+    try { parsed = JSON.parse(content); } catch {
+      // 모델이 JSON만 내라 했는데도 깨면, 강제로 정리 시도
+      return json(502, { ok:false, error:"Model output not JSON", detail: content.slice(0, 500) });
     }
 
-    // 정규화
-    const answers = parsed.answers
-      .map(x => ({ q: Number(x.q), a: Number(x.a) }))
-      .filter(x => Number.isFinite(x.q) && Number.isFinite(x.a) && x.a>=1 && x.a<=5);
+    const answers = parsed?.answers || {};
+    const nums = Object.keys(answers)
+      .map(k => parseInt(k, 10))
+      .filter(n => Number.isFinite(n))
+      .sort((a,b)=>a-b);
 
-    return json(200, { ok:true, answers, raw: content });
+    // 화면 표시용 텍스트
+    const lines = nums.map(n => `${n}번: ${answers[String(n)]}`);
+    const answerText = lines.length ? lines.join("\n") : "정답을 추출하지 못했다.";
+
+    // TTS는 너무 길면 앞 20개만
+    const ttsLines = nums.slice(0, 20).map(n => `${n}번 ${answers[String(n)]}`);
+    const ttsText = ttsLines.length ? `정답 읽는다. ${ttsLines.join(", ")}.` : "정답을 추출하지 못했다.";
+
+    return json(200, {
+      ok: true,
+      answerText,
+      ttsText,
+      notes: (parsed?.notes || "").toString().slice(0, 600)
+    });
+
   } catch (e) {
-    const msg = String(e?.message || e);
-    if (msg.includes("aborted") || msg.includes("AbortError")) {
-      return json(504, { ok:false, error:"Solve timeout" });
-    }
-    return json(500, { ok:false, error:"Server error", detail: msg });
+    return json(500, { ok:false, error:"Server error", detail: e?.message || String(e) });
   }
 }
 
-function cors() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-  };
-}
 function json(statusCode, obj) {
-  return { statusCode, headers: { ...cors(), "Content-Type":"application/json; charset=utf-8" }, body: JSON.stringify(obj) };
-}
-
-// 모델이 JSON만 주게 했지만 혹시 깨지면 JSON만 뽑아냄
-function safeJson(s) {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch {}
-  const m = String(s).match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST,OPTIONS"
+    },
+    body: JSON.stringify(obj)
+  };
 }
