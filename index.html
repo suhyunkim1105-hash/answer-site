@@ -16,9 +16,11 @@
     video { margin-top:10px; width:100%; max-height:55vh; border-radius:14px; background:#000; }
     .small { margin-top:10px; opacity:0.9; font-size:13px; line-height:1.55; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#1b2234; font-size:12px; font-weight:800; }
-    textarea { margin-top:10px; width:100%; min-height:220px; border-radius:12px; border:1px solid #2a2f3b;
+    textarea { margin-top:10px; width:100%; min-height:260px; border-radius:12px; border:1px solid #2a2f3b;
       background:#0f1320; color:#dfe7ff; padding:10px; box-sizing:border-box; }
-    .warn { color:#ffda6b; font-weight:800; }
+    .warn { color:#ffda6b; font-weight:900; }
+    .ok { color:#67ff9a; font-weight:900; }
+    .bad { color:#ff7d7d; font-weight:900; }
   </style>
 </head>
 <body>
@@ -28,12 +30,12 @@
     <button id="btnVoice" class="secondary">🔊 음성 테스트</button>
   </div>
 
-  <div id="status">대기 중이다. ‘자동 OCR 시작’을 누르면 카메라를 열고 자동으로 OCR을 돌린다.</div>
+  <div id="status">대기 중이다. ‘자동 OCR 시작’을 누르면 카메라를 열고 자동으로 OCR→풀이→정답 낭독까지 진행한다.</div>
 
   <div class="small">
     - 마지막 페이지 여백에 <b>DONE</b>을 크게 쓰면 OCR을 멈추고 자동 풀이로 넘어간다.<br>
-    - “불안정 재촬영”은 <b>몇 번까지만</b> 하고, 계속 실패하면 <b>일단 저장하고 다음 페이지로 넘어간다(자동화 멈춤 방지)</b>.<br>
-    - 밑줄(underlined)은 OCR만으로 100% 불가능하므로, <b>밑줄 문제에서만</b> 사진을 AI가 보고 밑줄 표현을 추출한다.<br>
+    - “불안정 재촬영”은 <b>몇 번까지만</b> 하고, 계속 실패하면 <b>일단 저장하고 다음 페이지로 넘어간다</b>(자동화 멈춤 방지).<br>
+    - 밑줄(underline)은 OCR만으로 100% 불가다. <b>밑줄 문제만</b> 비전 모델로 “밑줄 부분 텍스트”를 보조 추출한다(실패하면 밑줄 없이 풀이 계속 진행).<br>
     - <span class="warn">iOS 사파리는 화면 잠금/앱 전환 시 카메라/음성이 멈출 수 있다.</span>
   </div>
 
@@ -46,7 +48,7 @@
     샷: <span class="pill" id="pillShot">-</span>
   </div>
 
-  <textarea id="debug" spellcheck="false" placeholder="디버그(자동으로 채워짐)"></textarea>
+  <textarea id="debug" spellcheck="false" placeholder="디버그(자동으로 채워진다)"></textarea>
 
 <script>
 (() => {
@@ -55,27 +57,30 @@
   // ===================== 설정 =====================
   const MAX_PAGES = 80;
 
+  // 한 페이지당 OCR 샷 수(초반 3, 잘 안 되면 5까지)
   const SHOTS_BASE = 3;
   const SHOTS_MAX  = 5;
 
+  // 페이지 넘김 시간
   const BETWEEN_PAGE_SEC = 10;
   const RETRY_SEC = 5;
 
-  const SOLVE_CHUNK = 10;
+  // OpenRouter solve 한 번에 몇 문항 묶을지(작게 잡아 타임아웃/오답 감소)
+  const SOLVE_CHUNK = 6;
 
+  // TTS
   const TTS_LANG = "ko-KR";
   const TTS_RATE = 0.95;
 
-  // ✅ 핵심 변경 1: 기준을 확 낮춤(지문 페이지/조명/흔들림에도 안 멈추게)
-  const MIN_LEN_ACCEPT = 30;          // 예전 80 → 30
-  const MIN_LEN_GOOD   = 140;         // 예전 220 → 140
+  // OCR 품질 기준(너무 빡빡하면 끝없이 재촬영)
+  const MIN_LEN_ACCEPT = 30;
+  const MIN_LEN_GOOD   = 140;
 
-  // ✅ 핵심 변경 2: 몇 번 실패하면 “강제 통과”해서 다음 페이지로 넘어감(자동화 멈춤 방지)
-  const RETRY_BEFORE_FORCE_ACCEPT = 2; // 같은 페이지 2회까지만 엄격 재촬영, 이후엔 저장하고 전진
+  // 엄격 재촬영 몇 번까지만 하고, 이후엔 강제 전진
+  const RETRY_BEFORE_FORCE_ACCEPT = 2;
+  const MAX_RETRY_SAME_PAGE = 14;
 
-  const MAX_RETRY_SAME_PAGE = 14;      // 무한루프 방지
-
-  // ✅ 핵심 변경 3: 촬영 직전 포커스 안정 시간(흔들림/초점 미세 흔들림 잡기)
+  // 촬영 직전 포커스 안정 시간
   const PRE_SHOT_SETTLE_MS = 650;
 
   // ===================== 상태 =====================
@@ -116,6 +121,12 @@
     pillPage.textContent = String(pageIndex);
     pillTry.textContent = String(triesSamePage);
     pillShot.textContent = String(shotsThisPage);
+  }
+
+  function writeDebug(msg) {
+    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    debugEl.value = (debugEl.value + "\n" + line).trim();
+    debugEl.scrollTop = debugEl.scrollHeight;
   }
 
   // TTS 큐
@@ -182,7 +193,8 @@
     const vh = video.videoHeight || 0;
     if (!vw || !vh) return null;
 
-    const maxW = 1800;
+    // ✅ 전송용량 줄이기(이게 OCR 실패의 가장 흔한 원인 중 하나)
+    const maxW = 1280;
     const scale = Math.min(1, maxW / vw);
     const cw = Math.floor(vw * scale);
     const ch = Math.floor(vh * scale);
@@ -194,7 +206,8 @@
     const ctx = canvas.getContext("2d", { alpha: false });
     ctx.drawImage(video, 0, 0, cw, ch);
 
-    return canvas.toDataURL("image/jpeg", 0.92);
+    // ✅ 품질 조금 낮춰도 글자는 충분히 읽힘 + 전송 안정성 증가
+    return canvas.toDataURL("image/jpeg", 0.78);
   }
 
   // ===================== OCR 호출 =====================
@@ -204,13 +217,26 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ imageDataUrl })
     });
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      throw new Error(`OCR HTTP ${res.status}: ${t.slice(0,200)}`);
+
+    let data = null;
+    let raw = "";
+    try {
+      raw = await res.text();
+      data = JSON.parse(raw);
+    } catch {
+      // JSON 파싱 실패도 디버그로 보여야 함
+      throw new Error(`OCR 응답 파싱 실패: HTTP ${res.status} / head=${raw.slice(0, 120)}`);
     }
-    const data = await res.json();
-    if (!data || !data.ok) throw new Error(data?.error || "OCR failed");
-    return data;
+
+    if (!res.ok) {
+      throw new Error(`OCR HTTP 실패: ${res.status} / ${JSON.stringify(data).slice(0, 220)}`);
+    }
+
+    if (!data || data.ok !== true) {
+      throw new Error(`OCR 처리 실패: ${JSON.stringify(data).slice(0, 260)}`);
+    }
+
+    return data; // {ok:true, text, conf, approxBytes}
   }
 
   // ===================== 간단 점수(베스트 선택) =====================
@@ -260,9 +286,12 @@
         const text = String(o.text || "");
         const conf = (typeof o.conf === "number" && isFinite(o.conf)) ? o.conf : 0.45;
         const score = quickScore(text, conf);
-        results.push({ ok:true, text, conf, score });
+        results.push({ ok:true, text, conf, score, approxBytes: o.approxBytes || 0 });
+        writeDebug(`OCR OK page=${page} shot=${s} len=${text.trim().length} conf=${conf.toFixed(2)} score=${score.toFixed(3)} bytes~${o.approxBytes||0}`);
       } catch (e) {
-        results.push({ ok:false, text:"", conf:0, score:0, error:String(e) });
+        const err = String(e && (e.message || e));
+        results.push({ ok:false, text:"", conf:0, score:0, error: err });
+        writeDebug(`OCR FAIL page=${page} shot=${s} :: ${err}`);
       }
       await sleep(120);
     }
@@ -278,7 +307,6 @@
   }
 
   function pageLooksVeryBad(text) {
-    // ✅ 이제 길이만 아주 약하게 본다(지문 페이지도 통과)
     const t = String(text || "").trim();
     return t.length < MIN_LEN_ACCEPT;
   }
@@ -399,6 +427,7 @@
       const stem = spl.stem.replace(/\s+/g, " ").trim();
       const choices = spl.choices;
 
+      // underline 요구 표현(시험마다 다르므로 약하게 탐지)
       const needsUnderline = /underlin/i.test(seg) || /underline/i.test(seg) || /underlined/i.test(seg);
       questions.push({ n:a.n, context: currentContext, stem, choices, needsUnderline });
     }
@@ -419,23 +448,18 @@
     return Math.max(1, pageTexts.length - 1);
   }
 
-  // ===================== underline/solve 호출(원본 유지) =====================
+  // ===================== OpenRouter 호출 =====================
   async function callUnderline(imageDataUrl, questionNumbers, hintText) {
     const res = await fetch("/.netlify/functions/underline", {
       method: "POST",
       headers: { "content-type":"application/json" },
-      body: JSON.stringify({
-        imageDataUrl,
-        questionNumbers,
-        hintText: String(hintText || "").slice(0, 6000)
-      })
+      body: JSON.stringify({ imageDataUrl, questionNumbers, hintText })
     });
-    if (!res.ok) {
-      const t = await res.text().catch(()=>"");
-      throw new Error(`UNDERLINE HTTP ${res.status}: ${t.slice(0,200)}`);
-    }
-    const data = await res.json();
-    if (!data || !data.ok) throw new Error(data?.error || "Underline extraction failed");
+    const raw = await res.text().catch(()=> "");
+    let data = null;
+    try { data = JSON.parse(raw); } catch { throw new Error(`UNDERLINE 응답 파싱 실패: HTTP ${res.status} head=${raw.slice(0,120)}`); }
+    if (!res.ok) throw new Error(`UNDERLINE HTTP 실패: ${res.status} ${JSON.stringify(data).slice(0,220)}`);
+    if (!data.ok) throw new Error(`UNDERLINE 처리 실패: ${JSON.stringify(data).slice(0,220)}`);
     return data.underlined;
   }
 
@@ -445,15 +469,15 @@
       headers: { "content-type":"application/json" },
       body: JSON.stringify({ items })
     });
-    if (!res.ok) {
-      const t = await res.text().catch(()=> "");
-      throw new Error(`SOLVE HTTP ${res.status}: ${t.slice(0,200)}`);
-    }
-    const data = await res.json();
-    if (!data || !data.ok) throw new Error(data?.error || "Solve failed");
+    const raw = await res.text().catch(()=> "");
+    let data = null;
+    try { data = JSON.parse(raw); } catch { throw new Error(`SOLVE 응답 파싱 실패: HTTP ${res.status} head=${raw.slice(0,120)}`); }
+    if (!res.ok) throw new Error(`SOLVE HTTP 실패: ${res.status} ${JSON.stringify(data).slice(0,220)}`);
+    if (!data.ok) throw new Error(`SOLVE 처리 실패: ${JSON.stringify(data).slice(0,220)}`);
     return data.answers;
   }
 
+  // ===================== 밑줄 추출용 촬영 =====================
   async function captureUnderlineMapForPage(page, qNums) {
     await say(`밑줄 추출이 필요합니다. ${page}페이지를 화면에 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 자동으로 촬영합니다.`);
     await sayCountdown(BETWEEN_PAGE_SEC);
@@ -473,18 +497,16 @@
         const count = underlined ? Object.keys(underlined).length : 0;
         const score = count;
         if (!best || score > best.score) best = { underlined, score };
-      } catch {}
+        writeDebug(`UNDERLINE OK page=${page} shot=${s} got=${count}`);
+      } catch (e) {
+        writeDebug(`UNDERLINE FAIL page=${page} shot=${s} :: ${String(e && (e.message||e))}`);
+      }
       await sleep(200);
     }
     return best ? best.underlined : null;
   }
 
-  function writeDebug(msg) {
-    debugEl.value = (debugEl.value + "\n" + msg).trim();
-    debugEl.scrollTop = debugEl.scrollHeight;
-  }
-
-  // ===================== OCR 루프(핵심 수정) =====================
+  // ===================== OCR 루프 =====================
   async function ocrLoopUntilDONE() {
     setPhase("OCRING");
     pageIndex = 1;
@@ -501,14 +523,12 @@
       if (!running) return false;
 
       if (!r || !r.ok) {
-        // ✅ 너무 오래 같은 페이지에서 못 빠져나오지 않게: 몇 번만 재시도, 이후엔 강제 전진
         if (triesSamePage <= RETRY_BEFORE_FORCE_ACCEPT) {
           await say(`인식에 실패했습니다. 다시 촬영해 주세요. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
           await sayCountdown(RETRY_SEC);
           continue;
         }
 
-        // 강제 저장(빈 텍스트) 후 다음 페이지로 전진
         pageTexts[pageIndex] = "";
         pageScores[pageIndex] = 0;
         writeDebug(`[PAGE ${pageIndex}] FORCE-ACCEPT (OCR failed too many times)`);
@@ -521,27 +541,23 @@
 
       const text = String(r.text || "");
       pageScores[pageIndex] = r.score;
-      writeDebug(`[PAGE ${pageIndex}] score=${r.score.toFixed(3)} conf=${r.conf.toFixed(2)} len=${text.trim().length}`);
+      writeDebug(`[PAGE ${pageIndex}] BEST score=${r.score.toFixed(3)} conf=${r.conf.toFixed(2)} len=${text.trim().length}`);
 
-      // DONE 감지
       if (hasDONE(text)) {
         pageTexts[pageIndex] = text;
         await say("DONE을 확인했습니다. 촬영을 종료하고 자동 풀이를 시작합니다.");
         return true;
       }
 
-      // 텍스트가 너무 짧으면: 몇 번만 재촬영, 이후엔 강제 저장하고 전진
       if (pageLooksVeryBad(text)) {
         if (triesSamePage <= RETRY_BEFORE_FORCE_ACCEPT) {
           await say(`지금 페이지 인식이 약합니다. 다시 촬영해 주세요. ${RETRY_SEC}초 뒤에 자동으로 다시 촬영합니다.`);
           await sayCountdown(RETRY_SEC);
           continue;
         }
-        // 강제 저장
-        pageTexts[pageIndex] = text; // 짧아도 저장
-        await say(`이 페이지 인식이 약하지만, 자동화를 위해 일단 저장하고 넘어갑니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
+        pageTexts[pageIndex] = text;
+        await say(`이 페이지 인식이 약하지만 자동화를 위해 저장하고 넘어갑니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
       } else {
-        // 정상 저장
         pageTexts[pageIndex] = text;
         if (text.trim().length >= MIN_LEN_GOOD) {
           await say(`이 페이지 인식이 완료되었습니다. 다음 페이지를 보여 주세요. ${BETWEEN_PAGE_SEC}초 뒤에 다음 페이지를 인식합니다.`);
@@ -626,16 +642,18 @@
       if (!running) break;
 
       let got = null;
-      for (let attempt = 0; attempt < 6 && running; attempt++) {
+      for (let attempt = 0; attempt < 4 && running; attempt++) {
         got = await captureUnderlineMapForPage(p, nums);
         if (got && Object.keys(got).length > 0) break;
         await say("밑줄 추출에 실패했습니다. 다시 시도합니다.");
-        await sleep(500);
+        await sleep(400);
       }
 
+      // ✅ 여기서 멈추지 말고(자동화 유지), 밑줄 없이 진행
       if (!got || Object.keys(got).length === 0) {
-        await say("밑줄 추출이 계속 실패했습니다. 비전 모델 설정을 확인해야 합니다. 자동을 중단합니다.");
-        throw new Error("Underline extraction failed persistently");
+        writeDebug(`UNDERLINE GIVEUP page=${p} nums=${nums.join(",")}`);
+        await say("밑줄 추출이 불안정합니다. 밑줄 없이 풀이를 계속합니다.");
+        continue;
       }
 
       for (const k of Object.keys(got)) underlineMap[Number(k)] = String(got[k] || "").trim();
@@ -670,11 +688,16 @@
 
       let got = null;
       for (let attempt = 0; attempt < 6 && running; attempt++) {
-        try { got = await callSolve(items); break; }
-        catch (e) {
-          setStatus(`풀이 실패(${range}). 자동 재시도 중이다.\n${String(e)}`);
+        try {
+          got = await callSolve(items);
+          writeDebug(`SOLVE OK ${range} -> ${JSON.stringify(got)}`);
+          break;
+        } catch (e) {
+          const msg = String(e && (e.message || e));
+          writeDebug(`SOLVE FAIL ${range} :: ${msg}`);
+          setStatus(`풀이 실패(${range}). 자동 재시도 중이다.\n${msg}`);
           await say("풀이에 실패했습니다. 다시 시도합니다.");
-          await sleep(800);
+          await sleep(700);
         }
       }
       if (!got) throw new Error("Solve failed persistently");
@@ -774,7 +797,9 @@
     try {
       await runAll();
     } catch (e) {
-      setStatus("오류:\n" + String(e && (e.message || e)));
+      const msg = String(e && (e.message || e));
+      writeDebug(`FATAL :: ${msg}`);
+      setStatus("오류:\n" + msg);
       try { await say("오류가 발생했습니다. 다시 시작해 주세요."); } catch {}
     } finally {
       await stopAll(statusEl.textContent);
@@ -785,3 +810,4 @@
 </script>
 </body>
 </html>
+
