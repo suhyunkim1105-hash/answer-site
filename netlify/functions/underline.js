@@ -1,132 +1,125 @@
 // netlify/functions/underline.js
-// 밑줄(underlined expression)만 "사진을 보고" 추출한다.
-// 입력: { imageDataUrl, questionNumbers: [6,7,...], hintText(optional) }
-// 출력: { ok:true, underlined: { "6":"...", "7":"..." } }
-
-exports.handler = async (event) => {
-  try {
-    if (event.httpMethod !== "POST") return json(405, { ok:false, error:"Method Not Allowed" });
-
-    const key = process.env.OPENROUTER_API_KEY;
-    if (!key) return json(500, { ok:false, error:"Missing OPENROUTER_API_KEY" });
-
-    const model = process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_MODEL;
-    if (!model) return json(500, { ok:false, error:"Missing OPENROUTER_MODEL (and/or OPENROUTER_VISION_MODEL)" });
-
-    const body = safeJson(event.body);
-    const imageDataUrl = body && body.imageDataUrl;
-    const questionNumbers = Array.isArray(body && body.questionNumbers) ? body.questionNumbers : [];
-    const hintText = String((body && body.hintText) || "").slice(0, 6000);
-
-    if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
-      return json(400, { ok:false, error:"Invalid imageDataUrl" });
-    }
-
-    const qNums = questionNumbers.map(n => Number(n)).filter(n => Number.isFinite(n) && n >= 1 && n <= 60);
-    if (qNums.length === 0) {
-      return json(400, { ok:false, error:"questionNumbers is required" });
-    }
-
-    const system = [
-      "Return ONLY valid JSON. No extra text.",
-      "Output format exactly: {\"underlined\":{\"6\":\"...\",\"7\":\"...\"}}",
-      "Keys must be question numbers as strings.",
-      "Values must be the EXACT underlined word/phrase as printed. If you can't see one, use an empty string."
-    ].join(" ");
-
-    const userText =
-      `You are looking at a photo of an English multiple-choice exam page.\n` +
-      `Task: For the following question numbers, extract ONLY the underlined expression (the text that is underlined).\n` +
-      `Question numbers: ${qNums.join(", ")}\n` +
-      `If the page contains multiple underlines, map each underline to the correct question number.\n` +
-      `If helpful, here is OCR hint text (may contain errors):\n` +
-      hintText;
-
-    // OpenRouter: message.content can be array with text + image_url (OpenAI-compatible)
-    const payload = {
-      model,
-      temperature: 0,
-      max_tokens: 220,
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: userText },
-            { type: "image_url", image_url: { url: imageDataUrl } }
-          ]
-        }
-      ]
-    };
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
-
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type":"application/json",
-        "authorization": `Bearer ${key}`
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    }).finally(() => clearTimeout(timeout));
-
-    if (!resp.ok) {
-      const t = await resp.text().catch(()=> "");
-      return json(502, { ok:false, error:`OpenRouter HTTP ${resp.status}: ${t.slice(0,200)}` });
-    }
-
-    const data = await resp.json().catch(() => null);
-    if (!data) return json(502, { ok:false, error:"OpenRouter returned invalid JSON" });
-
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content || typeof content !== "string") return json(502, { ok:false, error:"Empty model content" });
-
-    const obj = extractJson(content);
-    if (!obj || typeof obj !== "object" || !obj.underlined || typeof obj.underlined !== "object") {
-      return json(200, { ok:false, error:"Model output is not valid JSON {underlined:{...}}" });
-    }
-
-    // 정리: 요청한 q만 유지
-    const underlined = {};
-    for (const n of qNums) {
-      const v = obj.underlined[String(n)];
-      underlined[String(n)] = (v == null) ? "" : String(v).trim();
-    }
-
-    return json(200, { ok:true, underlined });
-  } catch (e) {
-    return json(500, { ok:false, error: String(e && (e.message || e)) });
-  }
-};
+// 비전 모델로 "밑줄 친 부분" 텍스트를 보조 추출.
+// (주의) OPENROUTER_VISION_MODEL은 반드시 "이미지 입력 가능한 모델"이어야 함.
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "content-type":"application/json; charset=utf-8",
-      "cache-control":"no-store"
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "POST,OPTIONS",
     },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
 
-function safeJson(s) {
-  try { return JSON.parse(s || "{}"); } catch { return null; }
+function extractFirstJsonObject(text) {
+  const s = String(text || "");
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start < 0 || end < 0 || end <= start) return null;
+  const candidate = s.slice(start, end + 1);
+  try { return JSON.parse(candidate); } catch { return null; }
 }
 
-function extractJson(text) {
-  const t = String(text).trim();
-  const direct = safeJson(t);
-  if (direct) return direct;
+async function openrouterVision({ apiKey, model, imageDataUrl, prompt, maxTokens = 700 }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
 
-  const first = t.indexOf("{");
-  const last = t.lastIndexOf("}");
-  if (first !== -1 && last !== -1 && last > first) {
-    const slice = t.slice(first, last + 1);
-    const obj = safeJson(slice);
-    if (obj) return obj;
+  try {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: maxTokens,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              { type: "image_url", image_url: { url: imageDataUrl } }
+            ]
+          }
+        ]
+      }),
+      signal: controller.signal,
+    });
+
+    const status = resp.status;
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) return { ok:false, status, error: data || { message:"OpenRouter HTTP error" } };
+    const content = data?.choices?.[0]?.message?.content || "";
+    return { ok:true, status, content };
+  } catch (e) {
+    return { ok:false, status:0, error: String(e && (e.message || e)) };
+  } finally {
+    clearTimeout(timeout);
   }
-  return null;
 }
+
+export async function handler(event) {
+  if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
+  if (event.httpMethod !== "POST") return json(405, { ok: false, error: "Method Not Allowed" });
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  const model = process.env.OPENROUTER_VISION_MODEL;
+
+  if (!apiKey) return json(500, { ok:false, error:"Missing OPENROUTER_API_KEY env" });
+  if (!model) return json(500, { ok:false, error:"Missing OPENROUTER_VISION_MODEL env" });
+
+  let body = {};
+  try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { ok:false, error:"Bad JSON body" }); }
+
+  const imageDataUrl = body.imageDataUrl;
+  const questionNumbers = Array.isArray(body.questionNumbers) ? body.questionNumbers : [];
+  const hintText = String(body.hintText || "").slice(0, 4000);
+
+  if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
+    return json(400, { ok:false, error:"Missing imageDataUrl" });
+  }
+  if (questionNumbers.length === 0) return json(400, { ok:false, error:"Missing questionNumbers" });
+
+  const prompt = [
+    "You are extracting UNDERLINED text from a photographed English multiple-choice exam page.",
+    "I will give you the question numbers to target.",
+    "Return ONLY valid JSON. No extra text.",
+    "JSON format: {\"13\":\"<underlined phrase>\",\"14\":\"<underlined phrase>\"}.",
+    "If a question's underlined part is not visible, return empty string for that number.",
+    "Use the provided OCR hint text ONLY to locate the question; rely on the image for underline.",
+    `Target question numbers: ${questionNumbers.join(", ")}`,
+    "OCR hint text (may be imperfect):",
+    hintText
+  ].join("\n");
+
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const r = await openrouterVision({ apiKey, model, imageDataUrl, prompt, maxTokens: 700 });
+    if (!r.ok) {
+      if (attempt === 4) return json(502, { ok:false, error:"OpenRouter vision failed", detail: r });
+      continue;
+    }
+
+    const obj = extractFirstJsonObject(r.content);
+    if (!obj) {
+      if (attempt === 4) return json(502, { ok:false, error:"Vision model did not return JSON", head: String(r.content).slice(0, 220) });
+      continue;
+    }
+
+    const underlined = {};
+    for (const n of questionNumbers) {
+      const key = String(n);
+      underlined[key] = String(obj[key] || "").trim();
+    }
+
+    return json(200, { ok:true, underlined });
+  }
+
+  return json(502, { ok:false, error:"Unexpected underline exit" });
+}
+
