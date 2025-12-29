@@ -1,59 +1,332 @@
-// netlify/functions/ocr.js
-// Netlify Functions (CJS)
-// 필요 환경변수: OCR_SPACE_API_KEY
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OCR 누적 테스트</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+    video { width: 100%; max-width: 520px; border-radius: 10px; background: #000; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button.primary { background: #111; color: #fff; border-color: #111; }
+    button.danger { background: #b00020; color: #fff; border-color: #b00020; }
+    input { padding: 8px; border: 1px solid #ccc; border-radius: 10px; width: 90px; }
+    label { font-size: 14px; }
+    #status { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    #log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-height: 260px; overflow: auto; background:#fafafa; padding: 10px; border-radius:10px; border:1px solid #eee;}
+    textarea { width: 100%; min-height: 180px; border-radius: 10px; border: 1px solid #ddd; padding: 10px; }
+    .small { font-size: 12px; color: #444; }
+  </style>
+</head>
+<body>
+  <h2>OCR 누적 테스트</h2>
 
-exports.handler = async (event) => {
-  try {
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
+  <div class="row">
+    <div class="card">
+      <div class="row" style="margin-bottom:10px;">
+        <button id="btnAudio" class="primary">오디오 활성화(1회)</button>
+        <button id="btnStart" class="primary">시작</button>
+        <button id="btnStop" class="danger">중지</button>
+      </div>
+
+      <div class="row">
+        <label>시작 페이지 <input id="startPage" type="number" value="1" min="1"></label>
+        <label>샷/페이지 <input id="shotsPerPage" type="number" value="3" min="1" max="5"></label>
+        <label>카운트다운(초) <input id="countdownSec" type="number" value="5" min="0" max="30"></label>
+        <label>최대 페이지(비우면 DONE로 종료) <input id="maxPages" type="number" placeholder=""></label>
+      </div>
+
+      <div class="row" style="margin-top:8px;">
+        <label>최대 가로(px) <input id="maxWidth" type="number" value="1600" min="800" max="3000"></label>
+        <label>JPEG 품질(0~1) <input id="jpegQ" type="number" value="0.85" step="0.05" min="0.4" max="0.95"></label>
+      </div>
+
+      <p class="small">
+        ✅ 화면에 “페이지/샷/진행상태” 표시 + TTS로 “넘겨라/카운트다운/완료/종료” 안내<br/>
+        ✅ 페이지당 3샷 OCR 후 “가장 좋은 1개” 자동 채택
+      </p>
+    </div>
+
+    <div class="card">
+      <video id="video" autoplay playsinline></video>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <div class="card" style="flex:1; min-width: 320px;">
+      <h3 style="margin:0 0 8px 0;">로그</h3>
+      <div id="log"></div>
+    </div>
+
+    <div class="card" style="flex:1; min-width: 320px;">
+      <h3 style="margin:0 0 8px 0;">누적 OCR 텍스트(베스트만)</h3>
+      <textarea id="allText" placeholder="여기에 페이지별 베스트 OCR 텍스트가 누적됩니다."></textarea>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const video = document.getElementById("video");
+  const statusEl = document.getElementById("status");
+  const logEl = document.getElementById("log");
+  const allTextEl = document.getElementById("allText");
+
+  const btnAudio = document.getElementById("btnAudio");
+  const btnStart = document.getElementById("btnStart");
+  const btnStop  = document.getElementById("btnStop");
+
+  const startPageEl = document.getElementById("startPage");
+  const shotsPerPageEl = document.getElementById("shotsPerPage");
+  const countdownSecEl = document.getElementById("countdownSec");
+  const maxPagesEl = document.getElementById("maxPages");
+  const maxWidthEl = document.getElementById("maxWidth");
+  const jpegQEl = document.getElementById("jpegQ");
+
+  let stream = null;
+  let running = false;
+  let audioUnlocked = false;
+
+  let totalOcrCalls = 0;
+  let pagesDone = 0;
+
+  function now() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2,"0");
+    const mm = String(d.getMinutes()).padStart(2,"0");
+    const ss = String(d.getSeconds()).padStart(2,"0");
+    return `${hh}:${mm}:${ss}`;
+  }
+  function log(msg) {
+    logEl.textContent += `[${now()}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setStatus(obj) {
+    statusEl.textContent = Object.entries(obj).map(([k,v]) => `${k}: ${v}`).join("\n");
+  }
+
+  function speak(text) {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
+
+  async function countdown(sec, prefixSpeak) {
+    sec = Number(sec) || 0;
+    if (sec <= 0) return;
+    if (prefixSpeak) speak(prefixSpeak);
+    for (let i = sec; i >= 1; i--) {
+      setStatus({ ...currentStatus(), "카운트다운": i });
+      if (audioUnlocked) speak(String(i));
+      await sleep(1000);
+      if (!running) return;
     }
+  }
 
-    let body = {};
-    try { body = JSON.parse(event.body || "{}"); } catch {}
-    const imageBase64 = body.imageBase64;
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-    if (!imageBase64) {
-      return { statusCode: 400, body: JSON.stringify({ error: "imageBase64 required" }) };
-    }
+  function currentStatus() {
+    return {
+      "실행중": running ? "Y" : "N",
+      "총 OCR 호출": totalOcrCalls,
+      "완료 페이지": pagesDone
+    };
+  }
 
-    const apiKey = process.env.OCR_SPACE_API_KEY;
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "OCR_SPACE_API_KEY not set (Netlify 환경변수에 추가 필요)" })
-      };
-    }
-
-    // OCR.Space form
-    const form = new URLSearchParams();
-    form.set("apikey", apiKey);
-    form.set("base64Image", "data:image/jpeg;base64," + imageBase64);
-    form.set("language", "eng");
-    form.set("isOverlayRequired", "false");
-    form.set("detectOrientation", "true");
-    form.set("scale", "true");
-    form.set("OCREngine", "2");
-
-    const resp = await fetch("https://api.ocr.space/parse/image", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString()
+  async function initCamera() {
+    if (stream) return;
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
     });
+    video.srcObject = stream;
+    await video.play();
+    log("카메라 OK");
+  }
 
+  function captureBase64Jpeg() {
+    const maxW = Math.max(800, Math.min(3000, Number(maxWidthEl.value) || 1600));
+    const q = Math.max(0.4, Math.min(0.95, Number(jpegQEl.value) || 0.85));
+
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 720;
+
+    const scale = Math.min(1, maxW / vw);
+    const cw = Math.round(vw * scale);
+    const ch = Math.round(vh * scale);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, cw, ch);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", q);
+    const base64 = dataUrl.split("base64,")[1] || "";
+    return base64;
+  }
+
+  async function postJSON(url, payload) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      return { statusCode: 502, body: JSON.stringify({ error: "OCR API error", raw: data }) };
+      throw new Error(data?.error || `HTTP ${resp.status}`);
+    }
+    return data;
+  }
+
+  // OCR 품질 점수(대충 “쓸모 있는 글자 비율 + 길이”)
+  function scoreText(text) {
+    if (!text) return 0;
+    const len = text.length;
+    const letters = (text.match(/[A-Za-z0-9]/g) || []).length;
+    const goodRatio = letters / Math.max(1, len);
+    return Math.round(len * 0.2 + goodRatio * 100);
+  }
+
+  // DONE 오탐 방지: DONE + (정답/answers/1번:) 같이 있을 때만 종료
+  function isDone(text) {
+    if (!text) return false;
+    const hasDone = /\bDONE\b/i.test(text);
+    if (!hasDone) return false;
+
+    const hasKey = /(정답|answers?\b|1번\s*:)/i.test(text);
+    if (!hasKey) return false;
+
+    // DONE가 문서 끝쪽에 있어야 진짜 종료로 판단(끝에서 600자 이내)
+    const idx = text.toUpperCase().lastIndexOf("DONE");
+    return idx >= Math.max(0, text.length - 600);
+  }
+
+  async function runOCR() {
+    running = true;
+    totalOcrCalls = 0;
+    pagesDone = 0;
+    allTextEl.value = "";
+    log("AUTO START");
+
+    await initCamera();
+
+    const startPage = Math.max(1, Number(startPageEl.value) || 1);
+    const shotsPerPage = Math.max(1, Math.min(5, Number(shotsPerPageEl.value) || 3));
+    const countdownSec = Math.max(0, Math.min(30, Number(countdownSecEl.value) || 5));
+    const maxPages = Number(maxPagesEl.value) ? Math.max(1, Number(maxPagesEl.value)) : null;
+
+    let page = startPage;
+
+    while (running) {
+      if (maxPages && pagesDone >= maxPages) {
+        log(`최대 페이지(${maxPages}) 도달 -> 종료`);
+        break;
+      }
+
+      setStatus({ ...currentStatus(), "현재 페이지": page, "단계": "페이지 시작" });
+      if (audioUnlocked) speak(`${page}페이지. ${countdownSec}초 뒤에 촬영 시작합니다.`);
+      await countdown(countdownSec, null);
+      if (!running) break;
+
+      let best = { score: -1, text: "", shot: 0 };
+
+      for (let shot = 1; shot <= shotsPerPage; shot++) {
+        setStatus({ ...currentStatus(), "현재 페이지": page, "현재 샷": `${shot}/${shotsPerPage}`, "단계": "촬영/전송" });
+        if (audioUnlocked) speak(`${page}페이지. ${shot}샷 촬영합니다.`);
+        await sleep(250); // autofocus 안정
+        if (!running) break;
+
+        const base64 = captureBase64Jpeg();
+
+        totalOcrCalls++;
+        setStatus({ ...currentStatus(), "현재 페이지": page, "현재 샷": `${shot}/${shotsPerPage}`, "단계": "OCR 중" });
+
+        let text = "";
+        try {
+          const out = await postJSON("/.netlify/functions/ocr", { imageBase64: base64, language: "eng", ocrEngine: "2" });
+          text = (out?.text || "").trim();
+        } catch (e) {
+          log(`OCR FAIL page=${page} shot=${shot} err=${e.message}`);
+          text = "";
+        }
+
+        const sc = scoreText(text);
+        log(`OCR OK page=${page} shot=${shot} len=${text.length} score=${sc}`);
+
+        if (sc > best.score) best = { score: sc, text, shot };
+
+        if (!running) break;
+        await sleep(200);
+      }
+
+      if (!running) break;
+
+      pagesDone++;
+      setStatus({ ...currentStatus(), "현재 페이지": page, "단계": `페이지 베스트 채택(샷 ${best.shot})`, "베스트 점수": best.score });
+
+      if (best.text) {
+        allTextEl.value += (allTextEl.value ? "\n\n" : "") + `[PAGE ${page}]` + "\n" + best.text;
+      } else {
+        allTextEl.value += (allTextEl.value ? "\n\n" : "") + `[PAGE ${page}]` + "\n" + "(OCR 실패/빈 텍스트)";
+      }
+
+      if (audioUnlocked) speak(`${page}페이지 촬영 완료. 다음 페이지로 넘기세요.`);
+      log(`페이지 ${page} 완료 (best shot=${best.shot}, score=${best.score})`);
+
+      if (isDone(best.text)) {
+        log(`DONE 감지 -> 종료`);
+        if (audioUnlocked) speak("DONE을 감지했습니다. OCR을 종료합니다.");
+        break;
+      }
+
+      // 다음 페이지 안내
+      if (audioUnlocked) speak(`다음 페이지. ${countdownSec}초 뒤에 촬영 시작합니다.`);
+      page++;
+      await sleep(300);
     }
 
-    const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
-    const text = (parsed && parsed.ParsedText ? parsed.ParsedText : "").trim();
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ text })
-    };
-
-  } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e?.message || "OCR unknown error" }) };
+    running = false;
+    setStatus({ ...currentStatus(), "단계": "종료" });
+    log("OCR END");
+    if (audioUnlocked) speak("전체 OCR이 끝났습니다.");
   }
-};
+
+  btnAudio.addEventListener("click", () => {
+    // iOS/모바일은 “사용자 클릭 1회”가 있어야 음성 가능
+    audioUnlocked = true;
+    speak("오디오 활성화 완료.");
+    log("오디오 활성화 OK");
+  });
+
+  btnStart.addEventListener("click", async () => {
+    if (running) return;
+    try {
+      await runOCR();
+    } catch (e) {
+      running = false;
+      log("치명 오류: " + (e?.message || e));
+      setStatus({ ...currentStatus(), "단계": "치명 오류" });
+    }
+  });
+
+  btnStop.addEventListener("click", () => {
+    running = false;
+    log("STOP 요청");
+    if (audioUnlocked) speak("중지합니다.");
+  });
+
+})();
+</script>
+</body>
+</html>
