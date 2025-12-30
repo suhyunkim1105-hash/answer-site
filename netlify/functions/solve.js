@@ -1,94 +1,109 @@
 // netlify/functions/solve.js
-// OpenRouter proxy solver (CommonJS)
-// Required env var: OPENROUTER_API_KEY
-// Optional env var: SOLVE_MODEL (default: openai/gpt-4o-mini)
-
-function json(statusCode, obj, extraHeaders = {}) {
-  return {
-    statusCode,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      ...extraHeaders,
-    },
-    body: JSON.stringify(obj),
-  };
-}
+// OpenRouter로 정답 산출. body.text 누락 시 "text required"를 확실히 막음.
 
 exports.handler = async (event) => {
   try {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    };
     if (event.httpMethod === "OPTIONS") {
-      return json(204, {}, { "Content-Length": "0" });
+      return { statusCode: 200, headers: corsHeaders, body: "" };
     }
-
     if (event.httpMethod !== "POST") {
-      return json(405, { error: "POST only" });
+      return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: "POST only" }) };
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return json(500, { error: "OPENROUTER_API_KEY not set (Netlify 환경변수에 추가 필요)" });
+    const body = JSON.parse(event.body || "{}");
+    const text = (body.text || "").trim();
+    if (!text) {
+      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "text required" }) };
     }
 
-    let body = {};
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      return json(400, { error: "Invalid JSON body" });
+    const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+    const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+    const OPENROUTER_URL = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
+
+    if (!OPENROUTER_API_KEY) {
+      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "OPENROUTER_API_KEY missing" }) };
     }
 
-    const text = typeof body.text === "string" ? body.text : "";
-    if (!text.trim()) {
-      return json(400, { error: "text required" });
-    }
+    const system = [
+      "You are a multiple-choice exam solver.",
+      "You MUST return ONLY valid JSON.",
+      'Format: {"answers":{"1":"A","2":"B",...}}',
+      "Use ONLY uppercase letters A, B, C, D, E.",
+      "Answer ONLY for questions you can find in the provided text; omit others.",
+      "No commentary, no markdown, no extra keys."
+    ].join(" ");
 
-    const model = process.env.SOLVE_MODEL || "openai/gpt-4o-mini";
+    const user = [
+      "Solve the questions from the OCR text below.",
+      "OCR TEXT START",
+      text,
+      "OCR TEXT END"
+    ].join("\n");
 
-    const system =
-      "You are an exam answer extractor. Return ONLY valid JSON. " +
-      "Given OCR text of an English multiple-choice test, infer answers 1-50. " +
-      "Output format: {\"answers\": {\"1\": \"A\", ... , \"50\": \"E\"}}. " +
-      "Use only A/B/C/D/E. If uncertain, still pick the most likely.";
+    const payload = {
+      model: OPENROUTER_MODEL,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user }
+      ],
+      temperature: 0.0,
+      max_tokens: 800,
+    };
 
-    const user = "OCR TEXT:\n" + text + "\n\nReturn ONLY JSON.";
-
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const resp = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site",
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        response_format: { type: "json_object" },
-      }),
+      body: JSON.stringify(payload),
     });
 
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      return json(502, { error: "OpenRouter error", status: resp.status, raw: data });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
+      return {
+        statusCode: 502,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: "LLM upstream error", status: resp.status, raw: data }),
+      };
     }
 
     const content = data?.choices?.[0]?.message?.content || "";
-
-    let parsed;
+    // JSON만 추출 시도
+    let parsed = null;
     try {
       parsed = JSON.parse(content);
-    } catch {
-      return json(502, { error: "Model did not return valid JSON", raw: content });
+    } catch (_) {
+      // content 안에 JSON이 섞여 나오는 경우 대비: 첫 { ... } 블록만 추출
+      const m = content.match(/\{[\s\S]*\}/);
+      if (m) {
+        try { parsed = JSON.parse(m[0]); } catch (_) {}
+      }
     }
 
-    return json(200, parsed);
+    if (!parsed || !parsed.answers || typeof parsed.answers !== "object") {
+      return {
+        statusCode: 200,
+        headers: corsHeaders,
+        body: JSON.stringify({
+          error: "Failed to parse JSON answers from model",
+          raw: content,
+        }),
+      };
+    }
+
+    return {
+      statusCode: 200,
+      headers: corsHeaders,
+      body: JSON.stringify({ answers: parsed.answers }),
+    };
   } catch (e) {
-    return json(500, { error: e?.message || "Solve unknown error" });
+    return { statusCode: 500, headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ error: String(e) }) };
   }
 };
+
