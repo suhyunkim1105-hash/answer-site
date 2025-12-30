@@ -1,106 +1,99 @@
 // netlify/functions/ocr.js
-// Netlify Functions (CJS)
-// 필요 환경변수: OCR_SPACE_API_KEY
+// Server-side OCR (OCR.space PRO) - API Key 절대 프론트에 노출하지 않음
 
 exports.handler = async (event) => {
   try {
+    // CORS + preflight
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    };
+    if (event.httpMethod === "OPTIONS") {
+      return { statusCode: 200, headers: corsHeaders, body: "" };
+    }
     if (event.httpMethod !== "POST") {
-      return {
-        statusCode: 405,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "POST only" }),
-      };
+      return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: "POST only" }) };
     }
 
-    let body = {};
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      body = {};
-    }
-
-    let imageBase64 = body.imageBase64 || body.image || "";
+    const { imageBase64, language = "eng", ocrEngine = 2 } = JSON.parse(event.body || "{}");
     if (!imageBase64 || typeof imageBase64 !== "string") {
-      return {
-        statusCode: 400,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "imageBase64 required" }),
-      };
+      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "imageBase64 required" }) };
     }
 
-    // 허용 형태:
-    // - "data:image/jpeg;base64,...."
-    // - "....(순수 base64)..."
-    imageBase64 = imageBase64.trim();
-    if (imageBase64.startsWith("data:")) {
-      const idx = imageBase64.indexOf("base64,");
-      if (idx !== -1) imageBase64 = imageBase64.slice(idx + "base64,".length).trim();
+    const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY;
+    const OCR_SPACE_ENDPOINT = process.env.OCR_SPACE_ENDPOINT; // ex) https://apipro1.ocr.space/parse/image
+    if (!OCR_SPACE_API_KEY) {
+      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "OCR_SPACE_API_KEY missing" }) };
     }
-    // 공백 제거(간혹 줄바꿈 섞임)
-    imageBase64 = imageBase64.replace(/\s+/g, "");
-
-    const apiKey = process.env.OCR_SPACE_API_KEY;
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "OCR_SPACE_API_KEY not set (Netlify 환경변수에 추가 필요)" }),
-      };
+    if (!OCR_SPACE_ENDPOINT) {
+      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "OCR_SPACE_ENDPOINT missing" }) };
     }
 
-    const language = (body.language && String(body.language)) || "eng";
-    const ocrEngine = (body.ocrEngine && String(body.ocrEngine)) || "2";
-
+    // OCR.space expects multipart/form-data OR x-www-form-urlencoded.
+    // 여기서는 URLSearchParams로 간단히 보냄.
     const form = new URLSearchParams();
-    form.set("apikey", apiKey);
-    form.set("base64Image", "data:image/jpeg;base64," + imageBase64);
+    form.set("apikey", OCR_SPACE_API_KEY);
+    form.set("base64Image", imageBase64);               // data:image/jpeg;base64,...
     form.set("language", language);
-    form.set("isOverlayRequired", "false");
-    form.set("detectOrientation", "true");
+    form.set("OCREngine", String(ocrEngine));           // 1 or 2
     form.set("scale", "true");
-    form.set("OCREngine", ocrEngine);
+    form.set("detectOrientation", "true");
+    form.set("isOverlayRequired", "true");              // WordConfidence 받기
+    form.set("filetype", "JPG");
 
-    const resp = await fetch("https://api.ocr.space/parse/image", {
+    const resp = await fetch(OCR_SPACE_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
     });
 
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
       return {
         statusCode: 502,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ error: "OCR API error", raw: data }),
+        headers: corsHeaders,
+        body: JSON.stringify({ error: "OCR upstream error", status: resp.status, raw: data }),
       };
     }
 
-    const parsed = data?.ParsedResults?.[0] || null;
+    if (data.IsErroredOnProcessing) {
+      return {
+        statusCode: 200,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: data.ErrorMessage || "OCR processing error", raw: data }),
+      };
+    }
+
+    const parsed = data?.ParsedResults?.[0];
     const text = (parsed?.ParsedText || "").trim();
 
-    // OCR.Space는 성공이어도 IsErroredOnProcessing=true인 경우가 있음
-    if (data?.IsErroredOnProcessing) {
-      return {
-        statusCode: 502,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({
-          error: "OCR processing error",
-          message: data?.ErrorMessage || null,
-          text,
-        }),
-      };
-    }
+    // avg word confidence 계산
+    let avgConfidence = null;
+    try {
+      const words = [];
+      const lines = parsed?.TextOverlay?.Lines || [];
+      for (const line of lines) {
+        for (const w of (line?.Words || [])) {
+          const c = Number(w?.WordConfidence);
+          if (!Number.isNaN(c)) words.push(c);
+        }
+      }
+      if (words.length) {
+        avgConfidence = words.reduce((a, b) => a + b, 0) / words.length;
+      }
+    } catch (_) {}
 
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ text }),
+      headers: corsHeaders,
+      body: JSON.stringify({
+        text,
+        avgConfidence,          // null or number (0~100)
+        length: text.length,
+      }),
     };
   } catch (e) {
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ error: e?.message || "OCR unknown error" }),
-    };
+    return { statusCode: 500, headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ error: String(e) }) };
   }
 };
