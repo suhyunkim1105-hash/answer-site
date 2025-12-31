@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Reader</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px; margin: 12px 0; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; }
+    button.primary { background: #111; color: #fff; border-color: #111; }
+    pre { white-space: pre-wrap; word-break: break-word; margin: 0; }
+    .muted { color:#666; font-size:13px; }
+    .ok { color:#16a34a; font-weight:700; }
+  </style>
+</head>
+<body>
+  <h2>정답 리더 (자동 4회 낭독)</h2>
+
+  <div class="card">
+    <button id="btnUnlock" class="primary">🔊 음성 시작(1회 클릭)</button>
+    <div id="ttsState" class="muted" style="margin-top:8px;">아직 음성 권한이 활성화되지 않음</div>
+  </div>
+
+  <div class="card">
+    <h3>정답</h3>
+    <pre id="out" class="muted">아직 정답 없음</pre>
+  </div>
+
+<script>
+(() => {
+  const out = document.getElementById("out");
+  const btnUnlock = document.getElementById("btnUnlock");
+  const ttsState = document.getElementById("ttsState");
+
+  const bc = new BroadcastChannel("answers_channel");
+
+  let unlocked = false;
+  let pendingSpeakText = null;
+
+  function formatAnswers(ansObj) {
+    // ansObj: {answers:{ "1":"A"...}}
+    const m = ansObj?.answers || {};
+    const keys = Object.keys(m).sort((a,b)=>Number(a)-Number(b));
+    return keys.map(k => `${k}번: ${String(m[k]).toUpperCase()}`).join("\n");
+  }
+
+  function speakRepeated(text, times = 4) {
+    if (!unlocked) {
+      pendingSpeakText = text;
+      return;
+    }
+    if (!("speechSynthesis" in window)) {
+      ttsState.textContent = "이 브라우저는 speechSynthesis(TTS)를 지원하지 않음";
+      return;
+    }
+    window.speechSynthesis.cancel();
+
+    let i = 0;
+    const speakOnce = () => {
+      i++;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      u.onend = () => {
+        if (i < times) speakOnce();
+      };
+      window.speechSynthesis.speak(u);
+    };
+    speakOnce();
+  }
+
+  function renderPayload(payload) {
+    const ansObj = payload?.answers;
+    if (!ansObj || !ansObj.answers) return;
+
+    const text = formatAnswers(ansObj);
+    out.textContent = text;
+    out.className = "ok";
+
+    ttsState.textContent = unlocked ? "음성 활성화됨 → 4회 낭독 중" : "정답 수신됨(음성 시작 버튼을 눌러야 낭독됨)";
+    speakRepeated(text, 4);
+  }
+
+  // 버튼 1회 클릭으로 iOS TTS 권한 트리거
+  btnUnlock.onclick = () => {
+    unlocked = true;
+    ttsState.textContent = "음성 활성화됨";
+    // 무음(짧은) 발화로 unlock 강화
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.lang = "ko-KR";
+      window.speechSynthesis.speak(u);
+    } catch(e) {}
+    if (pendingSpeakText) {
+      const t = pendingSpeakText;
+      pendingSpeakText = null;
+      speakRepeated(t, 4);
+    }
+  };
+
+  // 브로드캐스트 수신
+  bc.onmessage = (ev) => {
+    renderPayload(ev.data);
+  };
+
+  // 새로고침 대비: localStorage에서 마지막 정답 복원
+  try {
+    const s = localStorage.getItem("last_answers_payload");
+    if (s) renderPayload(JSON.parse(s));
+  } catch(e) {}
+
+})();
+</script>
+</body>
+</html>
