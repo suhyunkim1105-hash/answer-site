@@ -3,7 +3,7 @@
 //
 // 입력(둘 다 지원):
 // A) { questions: [{ number, stem, choices:[...] }...] }
-// B) { text: "OCR 전체 텍스트" }  <-- 이번 index.html이 사용
+// B) { text: "OCR 전체 텍스트" }  <-- index.html이 사용
 //
 // 출력:
 // { ok:true, answers:{ "1":3, ... }, meta:{...} }
@@ -35,7 +35,7 @@ export async function handler(event) {
       return json(200, { ok: false, error: "Question parse failed (need recapture)", bad_questions: [], meta: { parsed: 0 } });
     }
 
-    // 2) 파싱 품질 검사 (너무 약하면 자동 재촬영 유도)
+    // 2) 파싱 품질 검사(너무 약하면 자동 재촬영 유도)
     const bad = qList
       .filter(q => q.stem.length < 10 || q.choices.filter(x => x.length > 0).length < 5)
       .map(q => q.number);
@@ -336,4 +336,5 @@ function json(statusCode, obj) {
 function safeJson(s) {
   try { return JSON.parse(s || "{}"); } catch (_) { return {}; }
 }
+
 
