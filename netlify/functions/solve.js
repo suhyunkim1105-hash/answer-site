@@ -1,175 +1,339 @@
 // netlify/functions/solve.js
-export const handler = async (event) => {
+// OpenRouter를 호출해 5지선다 정답 번호(1~5)만 JSON으로 반환한다.
+//
+// 입력(둘 다 지원):
+// A) { questions: [{ number, stem, choices:[...] }...] }
+// B) { text: "OCR 전체 텍스트" }  <-- 이번 index.html이 사용
+//
+// 출력:
+// { ok:true, answers:{ "1":3, ... }, meta:{...} }
+// { ok:false, error:"...", bad_questions:[...], meta:{...} }
+
+export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
+      return json(405, { ok: false, error: "Method Not Allowed" });
     }
 
-    // ✅ 변수명 두 개 다 허용
-    const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-    if (!apiKey) return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENROUTER_API_KEY" }) };
-
-    const model = process.env.OPENROUTER_MODEL || "openai/gpt-5.2-thinking";
-    let body;
-    try { body = JSON.parse(event.body || "{}"); } catch { body = {}; }
-
-    const text = body.text;
-    if (!text || typeof text !== "string" || text.trim().length < 300) {
-      return { statusCode: 400, body: JSON.stringify({ error: "text required" }) };
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return json(500, { ok: false, error: "Missing OPENROUTER_API_KEY env var" });
     }
 
-    // ====== 핵심: OCR 텍스트 구조 복원(1~5 밑줄/라벨, 6~ 선지 라벨링) ======
-    function normalizeForModel(raw) {
-      let s = raw;
+    const body = safeJson(event.body);
 
-      // 노이즈 줄(광고/짧은 숫자 뭉치) 완화
-      s = s.replace(/^\s*\d{6,}\s*$/gm, "");
-      s = s.replace(/^\s*(Biscoff|Available in a\s*supermarket near you)\s*$/gmi, "");
-      s = s.replace(/[^\S\r\n]+/g, " ");
-      s = s.replace(/\n{3,}/g, "\n\n");
+    // 1) questions 우선, 없으면 OCR text 파싱
+    let qList = normalizeQuestions(body?.questions);
 
-      // (1) 1~5: 문장 내 마커(@ © ® O 0 • *)를 등장 순서대로 (A)(B)(C)(D)(E)로 치환
-      // 문제마다 01~05 라인을 찾아서 해당 줄만 치환
-      const markerRe = /[@©®ΟO0•\*]/g; // 그럴듯한 후보들(완전무결은 아님)
-      s = s.replace(/(^\s*0?[1-5]\s+.*$)/gm, (line) => {
-        let idx = 0;
-        const labels = ["(A)","(B)","(C)","(D)","(E)"];
-        return line.replace(markerRe, () => labels[idx++] || "(E)");
+    if (!qList || qList.length === 0) {
+      const rawText = String(body?.text || "").trim();
+      if (!rawText) return json(400, { ok: false, error: "Missing questions or text" });
+      qList = parseQuestionsFromOcrText(rawText);
+    }
+
+    if (!qList || qList.length === 0) {
+      return json(200, { ok: false, error: "Question parse failed (need recapture)", bad_questions: [], meta: { parsed: 0 } });
+    }
+
+    // 2) 파싱 품질 검사 (너무 약하면 자동 재촬영 유도)
+    const bad = qList
+      .filter(q => q.stem.length < 10 || q.choices.filter(x => x.length > 0).length < 5)
+      .map(q => q.number);
+
+    if (bad.length > 0) {
+      return json(200, {
+        ok: false,
+        error: "Question parse too weak (need recapture)",
+        bad_questions: bad.slice(0, 25),
+        meta: { parsed: qList.length }
       });
-
-      // (2) 선지 라벨이 깨진 경우: "• , @, ®, ©, *" 등으로 시작하는 짧은 줄 5개를 A~E로 재라벨
-      // 완벽 파서 대신, 모델이 보기 좋게 "A) ..." 형태를 강제로 만들어줌
-      const lines = s.split("\n");
-      const out = [];
-      let optBuf = [];
-
-      function flushOpts() {
-        if (optBuf.length >= 3) {
-          const labels = ["A) ","B) ","C) ","D) ","E) "];
-          const trimmed = optBuf.slice(0,5).map(x => x.trim().replace(/^[•\*@©®\d]+\s*/,""));
-          for (let i=0;i<trimmed.length;i++) out.push(labels[i] + trimmed[i]);
-        } else {
-          for (const x of optBuf) out.push(x);
-        }
-        optBuf = [];
-      }
-
-      for (let i=0;i<lines.length;i++) {
-        const L = lines[i];
-
-        // 다음 문제 번호가 나오면 옵션 버퍼를 털어줌
-        if (/^\s*(?:0?\d|1\d|2[0-5])\b/.test(L) && optBuf.length) {
-          flushOpts();
-        }
-
-        const isOptionLike =
-          /^[\s•\*@©®\d]{0,3}[A-Za-z][^\n]{0,60}$/.test(L.trim()) &&
-          !/^\s*\[PAGE\s+\d+\]/i.test(L);
-
-        // "선지처럼 보이는 짧은 라인"을 모으되, 문장 길면 제외
-        if (isOptionLike && L.trim().length <= 45) {
-          optBuf.push(L);
-          continue;
-        }
-
-        // 옵션이 끝난 뒤 일반 문장이 나오면 털기
-        if (optBuf.length && L.trim().length > 60) {
-          flushOpts();
-        }
-
-        out.push(L);
-      }
-      if (optBuf.length) flushOpts();
-
-      return out.join("\n");
     }
 
-    const normalized = normalizeForModel(text);
+    // 3) 타임아웃 방지: 10문항씩 끊어서 풀이
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+    const fallbackModel = process.env.OPENROUTER_MODEL_FALLBACK || ""; // 옵션
+    const timeoutMs = Number(process.env.OPENROUTER_TIMEOUT_MS || 18000);
 
-    const system = `
-너는 영어 객관식 시험 풀이 AI다.
-반드시 아래 형식의 "유효한 JSON만" 출력한다. 그 외 텍스트 금지.
+    qList.sort((a, b) => a.number - b.number);
+    const chunks = chunkBy(qList, 10);
 
-{"answers":{"1":"A","2":"B",...}}
+    const merged = {};
+    const rawSnippets = [];
 
-규칙:
-- 답은 A,B,C,D,E만.
-- 모르면 추측하지 말고 그 번호는 "생략".
-- 1~5번은 (A)(B)(C)(D)로 표시된 밑줄/구간 중 "오류"를 고르는 문제다.
-- 나머지는 문맥+선지로 정답을 고른다.
-`;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const prompt = buildPrompt(chunk);
 
-    const user = `다음 OCR 텍스트를 보고 1~25번을 풀어라. 오직 JSON만 반환하라.\n\n${normalized}`;
+      const res1 = await callOpenRouter({ apiKey, model, timeoutMs, prompt });
+      rawSnippets.push(res1.raw.slice(0, 800));
 
-    async function callOR(messages) {
-      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      let parsed = parseAnswers(res1.raw);
+
+      // 1회 재시도(같은 모델)
+      if (!parsed) {
+        const res2 = await callOpenRouter({
+          apiKey,
           model,
-          temperature: 0,
-          messages,
-        }),
+          timeoutMs,
+          prompt: prompt + "\n\n다시 말한다. JSON 이외의 글자 1개라도 출력하면 실패다. 반드시 JSON만 출력하라."
+        });
+        rawSnippets.push(res2.raw.slice(0, 800));
+        parsed = parseAnswers(res2.raw);
+      }
+
+      // (옵션) fallback 모델 1회
+      if (!parsed && fallbackModel) {
+        const res3 = await callOpenRouter({ apiKey, model: fallbackModel, timeoutMs, prompt });
+        rawSnippets.push(res3.raw.slice(0, 800));
+        parsed = parseAnswers(res3.raw);
+      }
+
+      if (!parsed) {
+        return json(200, {
+          ok: false,
+          error: "Failed to parse answers",
+          raw: rawSnippets.join("\n---\n").slice(0, 2000),
+          meta: { chunk: i + 1, chunks: chunks.length }
+        });
+      }
+
+      Object.assign(merged, parsed);
+    }
+
+    // 4) 누락 검사
+    const expected = new Set(qList.map(q => String(q.number)));
+    const got = new Set(Object.keys(merged));
+    const missing = [];
+    for (const k of expected) if (!got.has(k)) missing.push(Number(k));
+
+    if (missing.length > 0) {
+      return json(200, {
+        ok: false,
+        error: "Some answers missing (need recapture or retry)",
+        bad_questions: missing.slice(0, 25),
+        partial: merged,
+        meta: { parsed: qList.length, answered: Object.keys(merged).length }
       });
-      const j = await r.json().catch(() => null);
-      if (!r.ok || !j) throw new Error(j?.error?.message || "OpenRouter failed");
-      return j.choices?.[0]?.message?.content ?? "";
     }
 
-    function extractJson(s) {
-      const t = (s || "").trim();
-      try { return JSON.parse(t); } catch {}
-      const a = t.indexOf("{"), b = t.lastIndexOf("}");
-      if (a !== -1 && b !== -1 && b > a) {
-        try { return JSON.parse(t.slice(a, b+1)); } catch {}
-      }
-      return null;
-    }
+    return json(200, {
+      ok: true,
+      answers: merged,
+      meta: { parsed: qList.length, answered: Object.keys(merged).length, chunks: chunks.length },
+      raw: rawSnippets.join("\n---\n").slice(0, 4000)
+    });
 
-    function normalizeAnswers(obj) {
-      const answers = obj?.answers;
-      if (!answers || typeof answers !== "object") return null;
-      const out = {};
-      for (const [k,v] of Object.entries(answers)) {
-        const kk = String(k).replace(/\D/g,"");
-        const vv = String(v).trim().toUpperCase();
-        if (!kk) continue;
-        if (!["A","B","C","D","E"].includes(vv)) continue;
-        out[String(Number(kk))] = vv;
-      }
-      return Object.keys(out).length ? out : null;
-    }
-
-    // 1차
-    const c1 = await callOR([{role:"system",content:system},{role:"user",content:user}]);
-    let obj = extractJson(c1);
-    let answers = normalizeAnswers(obj);
-
-    // 2차(형식 실패 시)
-    if (!answers) {
-      const c2 = await callOR([
-        {role:"system",content:system},
-        {role:"user",content:user},
-        {role:"assistant",content:c1},
-        {role:"user",content:"유효한 JSON만 다시 출력해. 스키마를 반드시 지켜."},
-      ]);
-      obj = extractJson(c2);
-      answers = normalizeAnswers(obj);
-      if (!answers) {
-        return { statusCode: 502, body: JSON.stringify({ error: "Model output not parseable", raw: c2 }) };
-      }
-    }
-
-    const keys = Object.keys(answers).map(Number).filter(n=>!Number.isNaN(n)).sort((a,b)=>a-b);
-    const answer_text = keys.map(k => `${k}번: ${answers[String(k)]}`).join("\n");
-
-    return { statusCode: 200, body: JSON.stringify({ answers, answer_text }) };
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message || "unknown" }) };
+    const msg = String(e?.name === "AbortError" ? "OpenRouter timeout" : (e?.message || e));
+    return json(200, { ok: false, error: msg });
   }
-};
+}
 
+/* -------------------- OpenRouter call -------------------- */
+
+async function callOpenRouter({ apiKey, model, timeoutMs, prompt }) {
+  const payload = {
+    model,
+    temperature: 0,
+    max_tokens: 450,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a careful exam solver. Output MUST be valid JSON only, nothing else. " +
+          'Return only: {"answers":{"1":3,"2":5,...}} with all questions included.'
+      },
+      { role: "user", content: prompt }
+    ]
+  };
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    signal: controller.signal,
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  }).catch((e) => ({ ok: false, _fetchError: e }));
+
+  clearTimeout(t);
+
+  if (resp && resp.ok === false && resp._fetchError) {
+    throw new Error("OpenRouter fetch failed: " + String(resp._fetchError?.message || resp._fetchError));
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error("OpenRouter upstream error: " + JSON.stringify(data).slice(0, 1200));
+  }
+
+  const raw = String(data?.choices?.[0]?.message?.content ?? "");
+  return { raw };
+}
+
+/* -------------------- parsing -------------------- */
+
+function normalizeQuestions(questions) {
+  if (!Array.isArray(questions)) return null;
+  const qList = questions
+    .map(q => ({
+      number: Number(q?.number),
+      stem: String(q?.stem || "").trim(),
+      choices: Array.isArray(q?.choices) ? q.choices.map(c => String(c || "").trim()) : []
+    }))
+    .filter(q => Number.isFinite(q.number) && q.number >= 1 && q.number <= 50);
+  return qList.length ? qList : null;
+}
+
+function parseQuestionsFromOcrText(fullText) {
+  const t = String(fullText || "").replace(/\r/g, "\n");
+
+  // 문항 시작점: 줄 시작의 01~50
+  const re = /(?:^|\n)\s*(0[1-9]|[1-4][0-9]|50)\b/g;
+  const hits = [];
+  let m;
+  while ((m = re.exec(t)) !== null) hits.push({ q: parseInt(m[1], 10), idx: m.index });
+  hits.sort((a, b) => a.idx - b.idx);
+
+  const blocks = new Map();
+  for (let i = 0; i < hits.length; i++) {
+    const q = hits[i].q;
+    const start = hits[i].idx;
+    const end = (i + 1 < hits.length) ? hits[i + 1].idx : t.length;
+    const block = t.slice(start, end).trim();
+    if (!blocks.has(q) || block.length > blocks.get(q).length) blocks.set(q, block);
+  }
+
+  const out = [];
+  for (let q = 1; q <= 50; q++) {
+    if (!blocks.has(q)) continue;
+    const parsed = parseOneQuestionBlock(q, blocks.get(q));
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+function parseOneQuestionBlock(number, block) {
+  const s = String(block || "").replace(/\r/g, "\n");
+
+  // 선택지 마커 후보: "1)" / "2)" / A) / 특수기호(•®@©*^ 등)
+  const markerRe = /(?:^|\n)\s*(?:[1-5][\)\.\]]|[A-E][\)\.\]]|[•@©®\*\^])\s+/gm;
+  const marks = [];
+  let m;
+  while ((m = markerRe.exec(s)) !== null) marks.push({ idx: m.index, len: m[0].length });
+
+  let stem = "";
+  let choices = [];
+
+  if (marks.length >= 5) {
+    stem = s.slice(0, marks[0].idx).replace(/^\s*(0[1-9]|[1-4][0-9]|50)\b/, "").trim();
+    for (let i = 0; i < 5; i++) {
+      const start = marks[i].idx + marks[i].len;
+      const end = (i + 1 < marks.length) ? marks[i + 1].idx : s.length;
+      choices.push(s.slice(start, end).trim());
+    }
+  } else {
+    // 라인 기반 보정
+    const lines = s.split("\n").map(x => x.trim()).filter(Boolean);
+    const choiceLines = lines.filter(isChoiceLine);
+    if (choiceLines.length >= 5) {
+      const firstChoice = choiceLines[0];
+      const idx = lines.indexOf(firstChoice);
+      const stemLines = lines.slice(0, Math.max(1, idx));
+      stem = stemLines.join(" ").replace(/^\s*(0[1-9]|[1-4][0-9]|50)\b/, "").trim();
+      choices = choiceLines.slice(0, 5).map(stripChoiceMarker);
+    }
+  }
+
+  stem = oneLine(stem);
+  choices = choices.map(oneLine);
+
+  if (stem.length < 10) return null;
+  if (choices.length < 5) return null;
+  if (choices.filter(x => x.length > 0).length < 5) return null;
+
+  return { number, stem, choices };
+}
+
+function isChoiceLine(line) {
+  return /^\s*([1-5][\)\.\]]|[A-E][\)\.\]]|[•@©®\*\^])\s+/.test(line);
+}
+
+function stripChoiceMarker(line) {
+  return line.replace(/^\s*([1-5][\)\.\]]|[A-E][\)\.\]]|[•@©®\*\^])\s+/, "").trim();
+}
+
+function buildPrompt(qList) {
+  let s = "";
+  s += "다음은 편입영어 5지선다 객관식 문제이다. 각 문항의 정답 번호(1~5)만 JSON으로 출력하라.\n";
+  s += "규칙:\n";
+  s += "1) 출력은 오직 JSON 한 덩어리만. 다른 텍스트 금지.\n";
+  s += '2) 형식: {"answers":{"1":3,"2":5,...}} (키는 문항번호, 값은 정답 번호 1~5)\n';
+  s += "3) 문항 수만큼 키를 모두 포함하라.\n\n";
+
+  for (const q of qList) {
+    s += `문항 ${q.number}\n`;
+    s += `${q.stem}\n`;
+    for (let i = 0; i < 5; i++) s += `${i + 1}) ${q.choices[i]}\n`;
+    s += "\n";
+  }
+  s += "JSON만 출력하라.\n";
+  return s;
+}
+
+function parseAnswers(text) {
+  const t = String(text || "").trim();
+
+  const firstBrace = t.indexOf("{");
+  const lastBrace = t.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const jsonStr = t.slice(firstBrace, lastBrace + 1);
+    try {
+      const obj = JSON.parse(jsonStr);
+      const ans = obj?.answers;
+      if (ans && typeof ans === "object") {
+        const out = {};
+        for (const [k, v] of Object.entries(ans)) {
+          const q = parseInt(k, 10);
+          const c = parseInt(v, 10);
+          if (Number.isFinite(q) && Number.isFinite(c) && c >= 1 && c <= 5) out[String(q)] = c;
+        }
+        if (Object.keys(out).length > 0) return out;
+      }
+    } catch (_) {}
+  }
+
+  // fallback: "1:3"
+  const out = {};
+  const re = /\b(0?[1-9]|[1-4][0-9]|50)\s*[:=]\s*([1-5])\b/g;
+  let m;
+  while ((m = re.exec(t)) !== null) out[String(parseInt(m[1], 10))] = parseInt(m[2], 10);
+  return Object.keys(out).length ? out : null;
+}
+
+function chunkBy(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+function oneLine(s) {
+  return String(s || "").replace(/\s+/g, " ").trim();
+}
+
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    body: JSON.stringify(obj),
+  };
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s || "{}"); } catch (_) { return {}; }
+}
 
