@@ -1,6 +1,6 @@
+# netlify.toml (루트에 이미 있으면 이 값들만 확인)
 [build]
   publish = "."
-  functions = "netlify/functions"
 
 [functions]
-  node_bundler = "esbuild"
+  directory = "netlify/functions"
