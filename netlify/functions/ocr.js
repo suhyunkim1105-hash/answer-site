@@ -1,21 +1,20 @@
-// netlify/functions/ocr.js  (그대로 덮어쓰기)
-// OCR.Space PRO endpoint(apipro1/apipro2) + base64 업로드
+// netlify/functions/ocr.js
 export const handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
       return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
     }
 
-    const { OCR_SPACE_API_KEY, OCR_SPACE_ENDPOINT } = process.env;
-    if (!OCR_SPACE_API_KEY) {
+    // ✅ 변수명 두 개 다 허용(네 Netlify에 OCR_SPACE_API_KEY로 되어있음)
+    const key = process.env.OCR_SPACE_API_KEY || process.env.OCR_SPACE_API_KEY;
+    const endpoint = process.env.OCR_SPACE_ENDPOINT || "https://apipro2.ocr.space/parse/image";
+
+    if (!key) {
       return { statusCode: 500, body: JSON.stringify({ error: "Missing OCR_SPACE_API_KEY" }) };
     }
 
-    const endpoint = OCR_SPACE_ENDPOINT || "https://apipro2.ocr.space/parse/image";
-
     let body;
-    try { body = JSON.parse(event.body || "{}"); }
-    catch { body = {}; }
+    try { body = JSON.parse(event.body || "{}"); } catch { body = {}; }
 
     const image = body.image;
     if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
@@ -23,10 +22,10 @@ export const handler = async (event) => {
     }
 
     const form = new URLSearchParams();
-    form.set("apikey", OCR_SPACE_API_KEY);
+    form.set("apikey", key);
     form.set("base64Image", image);
     form.set("language", "eng");
-    form.set("OCREngine", "2");              // 보통 엔진2가 더 안정적
+    form.set("OCREngine", "2");
     form.set("scale", "true");
     form.set("detectOrientation", "true");
     form.set("isOverlayRequired", "false");
@@ -44,20 +43,13 @@ export const handler = async (event) => {
     }
 
     if (data.IsErroredOnProcessing) {
-      return { statusCode: 502, body: JSON.stringify({ error: data.ErrorMessage || "OCR error", raw: data }) };
+      return { statusCode: 502, body: JSON.stringify({ error: data.ErrorMessage || "OCR error" }) };
     }
 
-    const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
-    const text = (parsed && parsed.ParsedText) ? parsed.ParsedText : "";
+    const parsed = data.ParsedResults?.[0];
+    const text = parsed?.ParsedText || "";
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        text,
-        // 필요하면 raw 열어볼 수 있게 유지(디버그용)
-        raw: { OCRExitCode: data.OCRExitCode, ErrorMessage: data.ErrorMessage, ProcessingTimeInMilliseconds: data.ProcessingTimeInMilliseconds }
-      }),
-    };
+    return { statusCode: 200, body: JSON.stringify({ text }) };
   } catch (e) {
     return { statusCode: 500, body: JSON.stringify({ error: e.message || "unknown" }) };
   }
