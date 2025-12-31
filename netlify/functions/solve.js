@@ -1,109 +1,87 @@
-// netlify/functions/solve.js
-// OpenRouter로 정답 산출. body.text 누락 시 "text required"를 확실히 막음.
-
-exports.handler = async (event) => {
+export default async (req, context) => {
   try {
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-    };
-    if (event.httpMethod === "OPTIONS") {
-      return { statusCode: 200, headers: corsHeaders, body: "" };
-    }
-    if (event.httpMethod !== "POST") {
-      return { statusCode: 405, headers: corsHeaders, body: JSON.stringify({ error: "POST only" }) };
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
     }
 
-    const body = JSON.parse(event.body || "{}");
-    const text = (body.text || "").trim();
+    const body = await req.json().catch(() => ({}));
+    const text = (body?.text ?? body?.ocrText ?? "").toString().trim();
     if (!text) {
-      return { statusCode: 400, headers: corsHeaders, body: JSON.stringify({ error: "text required" }) };
+      return new Response(JSON.stringify({ error: "text required" }), { status: 400 });
     }
 
     const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-    const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
-    const OPENROUTER_URL = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions";
-
+    const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini"; // 필요하면 바꿔
     if (!OPENROUTER_API_KEY) {
-      return { statusCode: 500, headers: corsHeaders, body: JSON.stringify({ error: "OPENROUTER_API_KEY missing" }) };
+      return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY missing" }), { status: 500 });
     }
 
-    const system = [
-      "You are a multiple-choice exam solver.",
-      "You MUST return ONLY valid JSON.",
-      'Format: {"answers":{"1":"A","2":"B",...}}',
-      "Use ONLY uppercase letters A, B, C, D, E.",
-      "Answer ONLY for questions you can find in the provided text; omit others.",
-      "No commentary, no markdown, no extra keys."
-    ].join(" ");
+    // 시험 풀이 정확도 올리는 핵심: "형식 강제 + 불필요 문장 금지 + 답만"
+    const system = `
+You are an expert English exam solver.
+Return ONLY valid JSON. No explanations.
+You must output in this exact shape:
+{"answers":{"1":"A","2":"B",...}}
 
-    const user = [
-      "Solve the questions from the OCR text below.",
-      "OCR TEXT START",
-      text,
-      "OCR TEXT END"
-    ].join("\n");
+Rules:
+- Answers must be A/B/C/D/E only.
+- If a question is missing, do not guess. Omit it.
+- Use only the provided OCR text; do not invent unseen options.
+`;
+
+    const user = `
+Solve the multiple-choice exam from the OCR text below.
+Important: The OCR may contain symbols like @ © ® •. Ignore those.
+Return only the JSON.
+
+[OCR TEXT START]
+${text}
+[OCR TEXT END]
+`;
 
     const payload = {
       model: OPENROUTER_MODEL,
       messages: [
-        { role: "system", content: system },
-        { role: "user", content: user }
+        { role: "system", content: system.trim() },
+        { role: "user", content: user.trim() }
       ],
       temperature: 0.0,
-      max_tokens: 800,
+      max_tokens: 800
     };
 
-    const resp = await fetch(OPENROUTER_URL, {
+    const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
 
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || !data) {
-      return {
-        statusCode: 502,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: "LLM upstream error", status: resp.status, raw: data }),
-      };
+    const raw = await r.json();
+
+    if (!r.ok) {
+      return new Response(JSON.stringify({ error: raw?.error?.message || "OpenRouter error", raw }), { status: 500 });
     }
 
-    const content = data?.choices?.[0]?.message?.content || "";
-    // JSON만 추출 시도
-    let parsed = null;
+    const content = raw?.choices?.[0]?.message?.content ?? "";
+    let parsed;
     try {
       parsed = JSON.parse(content);
-    } catch (_) {
-      // content 안에 JSON이 섞여 나오는 경우 대비: 첫 { ... } 블록만 추출
-      const m = content.match(/\{[\s\S]*\}/);
-      if (m) {
-        try { parsed = JSON.parse(m[0]); } catch (_) {}
-      }
+    } catch {
+      // JSON 파싱 실패 시: 내용 그대로 반환 (디버깅)
+      return new Response(JSON.stringify({ error: "Model did not return valid JSON", content }), { status: 500 });
     }
 
-    if (!parsed || !parsed.answers || typeof parsed.answers !== "object") {
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: "Failed to parse JSON answers from model",
-          raw: content,
-        }),
-      };
-    }
+    // 최종 형태 정리
+    const answers = parsed?.answers || {};
+    return new Response(JSON.stringify({ answers }), {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" }
+    });
 
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({ answers: parsed.answers }),
-    };
   } catch (e) {
-    return { statusCode: 500, headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ error: String(e) }) };
+    return new Response(JSON.stringify({ error: e?.message || String(e) }), { status: 500 });
   }
 };
 
