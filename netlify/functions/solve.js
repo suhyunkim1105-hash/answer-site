@@ -1,87 +1,104 @@
-export default async (req, context) => {
+export async function handler(event) {
   try {
-    if (req.method !== "POST") {
-      return new Response(JSON.stringify({ error: "POST only" }), { status: 405 });
+    if (event.httpMethod !== "POST") {
+      return json(405, { error: "method not allowed" });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const text = (body?.text ?? body?.ocrText ?? "").toString().trim();
-    if (!text) {
-      return new Response(JSON.stringify({ error: "text required" }), { status: 400 });
+    const { text } = safeJson(event.body);
+
+    // ✅ 여기서 "text required" 방어
+    if (!text || typeof text !== "string" || text.trim().length < 50) {
+      return json(400, { error: "text required (min length 50)" });
     }
 
-    const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-    const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini"; // 필요하면 바꿔
-    if (!OPENROUTER_API_KEY) {
-      return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY missing" }), { status: 500 });
-    }
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    const model = process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
+    if (!apiKey) return json(500, { error: "OPENROUTER_API_KEY missing" });
 
-    // 시험 풀이 정확도 올리는 핵심: "형식 강제 + 불필요 문장 금지 + 답만"
-    const system = `
-You are an expert English exam solver.
-Return ONLY valid JSON. No explanations.
-You must output in this exact shape:
-{"answers":{"1":"A","2":"B",...}}
-
-Rules:
-- Answers must be A/B/C/D/E only.
-- If a question is missing, do not guess. Omit it.
-- Use only the provided OCR text; do not invent unseen options.
-`;
-
-    const user = `
-Solve the multiple-choice exam from the OCR text below.
-Important: The OCR may contain symbols like @ © ® •. Ignore those.
-Return only the JSON.
-
-[OCR TEXT START]
-${text}
-[OCR TEXT END]
-`;
-
-    const payload = {
-      model: OPENROUTER_MODEL,
-      messages: [
-        { role: "system", content: system.trim() },
-        { role: "user", content: user.trim() }
-      ],
-      temperature: 0.0,
-      max_tokens: 800
-    };
+    const prompt = [
+      "You are a strict answer extractor.",
+      "Given an English multiple-choice exam OCR text, output ONLY valid JSON in the exact format:",
+      '{"answers":{"1":"A","2":"B"}}',
+      "",
+      "Rules:",
+      "- Keys must be question numbers as strings.",
+      "- Values must be one of A,B,C,D,E.",
+      "- Do not include any other text.",
+      "",
+      "OCR TEXT:",
+      text
+    ].join("\n");
 
     const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json"
+        "content-type": "application/json",
+        "authorization": `Bearer ${apiKey}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          { role: "user", content: prompt }
+        ]
+      })
     });
 
-    const raw = await r.json();
-
+    const j = await r.json().catch(() => null);
     if (!r.ok) {
-      return new Response(JSON.stringify({ error: raw?.error?.message || "OpenRouter error", raw }), { status: 500 });
+      return json(r.status, { error: `openrouter failed (${r.status})`, raw: j });
     }
 
-    const content = raw?.choices?.[0]?.message?.content ?? "";
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      // JSON 파싱 실패 시: 내용 그대로 반환 (디버깅)
-      return new Response(JSON.stringify({ error: "Model did not return valid JSON", content }), { status: 500 });
+    const content = j?.choices?.[0]?.message?.content ?? "";
+    const extracted = extractJsonObject(content);
+
+    if (!extracted) {
+      return json(502, { error: "model did not return valid JSON", raw: content });
     }
 
-    // 최종 형태 정리
-    const answers = parsed?.answers || {};
-    return new Response(JSON.stringify({ answers }), {
-      status: 200,
-      headers: { "content-type": "application/json; charset=utf-8" }
-    });
+    // answers 정규화
+    const answers = extracted.answers || {};
+    const norm = {};
+    for (const [k,v] of Object.entries(answers)) {
+      const kk = String(parseInt(k, 10));
+      const vv = String(v || "").trim().toUpperCase();
+      if (!kk || !["A","B","C","D","E"].includes(vv)) continue;
+      norm[kk] = vv;
+    }
+
+    return json(200, { answers: norm });
 
   } catch (e) {
-    return new Response(JSON.stringify({ error: e?.message || String(e) }), { status: 500 });
+    return json(500, { error: e.message || String(e) });
   }
-};
+}
 
+function json(statusCode, body) {
+  return {
+    statusCode,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(body)
+  };
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s || "{}"); } catch { return {}; }
+}
+
+function extractJsonObject(text) {
+  // 모델이 앞뒤로 말을 섞어도 첫 JSON 오브젝트만 뽑아내기
+  const s = String(text || "").trim();
+
+  // 1) 그대로 JSON인 경우
+  try { return JSON.parse(s); } catch {}
+
+  // 2) 텍스트 중 {...} 구간 추출
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    const chunk = s.slice(first, last + 1);
+    try { return JSON.parse(chunk); } catch {}
+  }
+
+  return null;
+}
