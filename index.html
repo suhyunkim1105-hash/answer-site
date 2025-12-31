@@ -7,12 +7,37 @@
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; margin: 16px; }
     #status { white-space: pre-wrap; padding: 10px; border: 1px solid #ddd; border-radius: 8px; min-height: 96px; }
-    video { width: 100%; max-width: 520px; border-radius: 12px; background: #000; }
     button { padding: 12px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; font-size: 16px; }
     button:disabled { opacity: 0.5; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     textarea { width: 100%; min-height: 140px; margin-top: 10px; }
     .small { font-size: 12px; color: #666; line-height: 1.45; }
+
+    /* Video + overlay */
+    .camWrap { position: relative; width: 100%; max-width: 520px; }
+    video { width: 100%; border-radius: 12px; background: #000; display:block; }
+    .roiBox {
+      position: absolute;
+      left: 9%;
+      top: 6%;
+      width: 82%;
+      height: 88%;
+      border: 2px solid rgba(255,255,255,0.9);
+      border-radius: 10px;
+      box-shadow: 0 0 0 2000px rgba(0,0,0,0.25) inset;
+      pointer-events: none;
+    }
+    .roiHint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 10px;
+      text-align: center;
+      color: rgba(255,255,255,0.95);
+      font-size: 13px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -28,13 +53,17 @@
   </div>
 
   <div class="small">
+    - 시험지를 <b>흰 박스에 꽉 차게</b> 맞춰라(이게 OCR 성능 90% 결정).<br/>
     - 마지막 페이지에 <b>XVRTH</b> 를 굵고 크게 적으면 자동으로 OCR 종료 후 풀이로 넘어간다.<br/>
-    - iOS 무음모드(사일런트)면 TTS가 안 들릴 수 있다. 무음 해제 + 볼륨 올려라.<br/>
-    - 카메라 권한이 거부돼 있으면 Safari 설정에서 이 사이트 카메라 “허용”으로 바꿔야 한다.
+    - iOS 무음모드(사일런트)면 TTS가 안 들릴 수 있다. 무음 해제 + 볼륨 올려라.
   </div>
 
   <div style="margin-top:12px;">
-    <video id="video" autoplay playsinline muted></video>
+    <div class="camWrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="roiBox"></div>
+      <div class="roiHint">시험지를 이 박스 안에 꽉 차게 맞춰라</div>
+    </div>
   </div>
 
   <h3 style="margin-top:16px;">OCR 누적 텍스트(디버그)</h3>
@@ -50,7 +79,7 @@
 
   // 촬영/인식 설정
   const SHOTS_PER_PAGE = 3;
-  const SHOT_GAP_MS = 120;              // 5초 대기 제거
+  const SHOT_GAP_MS = 120;              // 샷 간 딜레이 최소
   const MAX_PAGES = 25;
   const MAX_RETRY_PER_PAGE = 4;
 
@@ -69,6 +98,10 @@
   const ANSWER_ROUNDS = 4;
   const BETWEEN_ANS_MS = 2000;          // 문항 사이 2초
   const BETWEEN_ROUND_MS = 600;
+
+  // ✅ 핵심: ROI(중앙 크롭) — "프레임 전체"가 아니라 이 영역만 OCR로 보낸다
+  // (현재 UI overlay 박스와 동일 비율)
+  const ROI = { x: 0.09, y: 0.06, w: 0.82, h: 0.88 };
 
   let running = false;
   let stream = null;
@@ -90,7 +123,7 @@
   const ocrBox = document.getElementById("ocrBox");
   const ansBox = document.getElementById("ansBox");
 
-  // 초기 상태 강제(사파리에서 이상하게 disabled 남는 경우 방지)
+  // 초기 상태 고정
   btnStart.disabled = false;
   btnStop.disabled = true;
   btnReplay.disabled = true;
@@ -112,8 +145,8 @@
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
-      osc.frequency.value = 880;     // 짧은 확인용
-      gain.gain.value = 0.08;        // 너무 크지 않게
+      osc.frequency.value = 880;
+      gain.gain.value = 0.08;
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start();
@@ -123,10 +156,7 @@
 
   async function unlockAudio() {
     if (audioReady) return true;
-
     try { speechSynthesis.getVoices(); } catch (_) {}
-
-    // iOS: 버튼 제스처에서 AudioContext+TTS를 같이 깨워야 안정적
     await beep();
     audioReady = true;
     log("AudioContext 언락 완료");
@@ -179,35 +209,51 @@
     }
   }
 
-  // ---------- Camera (3단계 fallback + play() 강제 + 에러 표시) ----------
+  // ---------- Camera (fallback + zoom) ----------
   async function getStreamWithFallback() {
     const tries = [
-      { video: { facingMode: { ideal: "environment" }, width:{ ideal:1440 }, height:{ ideal:2560 } }, audio:false },
+      { video: { facingMode: { ideal: "environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } }, audio:false },
       { video: { facingMode: "environment" }, audio:false },
       { video: true, audio:false }
     ];
-
     let lastErr = null;
     for (const c of tries) {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia(c);
-        return s;
-      } catch (e) {
-        lastErr = e;
-      }
+      try { return await navigator.mediaDevices.getUserMedia(c); }
+      catch (e) { lastErr = e; }
     }
     throw lastErr || new Error("getUserMedia failed");
   }
 
-  function explainCamError(e) {
-    const name = String(e?.name || "");
-    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-      return "카메라 권한이 거부됨(NotAllowed). iOS 설정에서 Safari→카메라 허용 + 이 사이트 권한 허용 필요.";
-    }
-    if (name === "NotFoundError") return "카메라 장치를 찾지 못함(NotFound).";
-    if (name === "NotReadableError") return "카메라가 다른 앱에서 사용 중(NotReadable). 다른 앱 종료 후 재시도.";
-    if (name === "OverconstrainedError") return "카메라 제약조건 실패(Overconstrained).";
-    return "카메라 오류: " + (e?.message ? e.message : String(e));
+  async function applyBestCameraSettings() {
+    try {
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track || !track.getCapabilities || !track.applyConstraints) return;
+
+      const caps = track.getCapabilities();
+      const adv = [];
+
+      // ✅ zoom 가능하면 최대 근처로 올린다(아이폰이 지원하면 체감 확 달라짐)
+      if (caps.zoom) {
+        const z = Math.min(caps.zoom.max, Math.max(caps.zoom.min, caps.zoom.max)); // 사실상 max
+        adv.push({ zoom: z });
+        log(`줌 적용 시도: ${z}`);
+      }
+
+      // iOS가 지원하면 continuous 쪽 시도(지원 안 하면 무시됨)
+      if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes("continuous")) {
+        adv.push({ focusMode: "continuous" });
+      }
+      if (caps.exposureMode && Array.isArray(caps.exposureMode) && caps.exposureMode.includes("continuous")) {
+        adv.push({ exposureMode: "continuous" });
+      }
+      if (caps.whiteBalanceMode && Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes("continuous")) {
+        adv.push({ whiteBalanceMode: "continuous" });
+      }
+
+      if (adv.length > 0) {
+        await track.applyConstraints({ advanced: adv }).catch(()=>{});
+      }
+    } catch (_) {}
   }
 
   async function startCamera() {
@@ -219,16 +265,51 @@
     stream = await getStreamWithFallback();
     video.srcObject = stream;
 
-    // iOS에서 autoplay/playsinline이어도 play() 호출이 필요할 때가 있음
+    // iOS: play() 강제
     try { await video.play(); } catch (_) {}
 
-    // 메타데이터 대기(너무 오래 걸리면 그냥 진행)
-    await Promise.race([
-      new Promise(r => video.onloadedmetadata = r),
-      sleep(800)
-    ]);
+    // 준비 대기(readyState가 올라올 때까지 조금 더 기다림)
+    const t0 = Date.now();
+    while (video.readyState < 2 && Date.now() - t0 < 1500) {
+      await sleep(50);
+    }
+
+    // 줌/포커스/노출 자동 조정 시도
+    await applyBestCameraSettings();
+
+    // 포커스 안정화 워밍업
+    await sleep(200);
 
     log(`카메라 OK (${video.videoWidth}x${video.videoHeight})`);
+  }
+
+  // ---------- Capture with ROI crop ----------
+  function captureRoiBase64Jpeg(quality=0.90) {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) throw new Error("카메라 프레임 크기 0(스트림 준비 안 됨)");
+
+    // 원본 캔버스
+    const src = document.createElement("canvas");
+    src.width = w; src.height = h;
+    const sctx = src.getContext("2d", { willReadFrequently: false });
+    sctx.drawImage(video, 0, 0, w, h);
+
+    // ROI 좌표
+    const rx = Math.max(0, Math.floor(w * ROI.x));
+    const ry = Math.max(0, Math.floor(h * ROI.y));
+    const rw = Math.max(1, Math.floor(w * ROI.w));
+    const rh = Math.max(1, Math.floor(h * ROI.h));
+
+    // 크롭 캔버스(ROI만)
+    const crop = document.createElement("canvas");
+    crop.width = rw;
+    crop.height = rh;
+    const cctx = crop.getContext("2d", { willReadFrequently: false });
+    cctx.drawImage(src, rx, ry, rw, rh, 0, 0, rw, rh);
+
+    // OCR이 더 잘 먹게 약간 샤프닝/대비는 서버에서 하는 게 낫지만,
+    // 여기서는 안전하게 "크롭만" 한다(오류 최소).
+    return crop.toDataURL("image/jpeg", quality);
   }
 
   // ---------- OCR ----------
@@ -272,16 +353,6 @@
     return false;
   }
 
-  function captureFrameBase64Jpeg(quality=0.90) {
-    const w = video.videoWidth, h = video.videoHeight;
-    if (!w || !h) throw new Error("카메라 프레임 크기 0(아직 스트림 준비 안 됨)");
-    const canvas = document.createElement("canvas");
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, w, h);
-    return canvas.toDataURL("image/jpeg", quality);
-  }
-
   async function ocrOnePage(pageIndex) {
     let best = null;
 
@@ -289,14 +360,16 @@
       if (!running) return null;
       await sleep(SHOT_GAP_MS);
 
-      const dataUrl = captureFrameBase64Jpeg(0.90);
+      // ✅ ROI 크롭 캡처로 OCR로 보냄 (중요)
+      const dataUrl = captureRoiBase64Jpeg(0.92);
       const r = await callOcr(dataUrl, pageIndex);
 
       const text = r.ok ? r.text : "";
       const conf = r.ok ? r.conf : 0;
+      const hits = qnumHits(text);
 
-      const score = (text.length/50) + (qnumHits(text)*30) + (conf*2);
-      log(`OCR ${r.ok?"OK":"FAIL"} page=${pageIndex} shot=${shot} len=${text.length} conf=${conf} score=${score.toFixed(1)}`);
+      const score = (text.length/50) + (hits*30) + (conf*2);
+      log(`OCR ${r.ok?"OK":"FAIL"} page=${pageIndex} shot=${shot} len=${text.length} conf=${conf} hits=${hits} score=${score.toFixed(1)}`);
 
       const cand = { shot, text, conf, score, stop: detectStop(text) };
       if (!best || cand.score > best.score) best = cand;
@@ -320,12 +393,13 @@
   async function recaptureSpecificPages(targetPages) {
     for (const p of targetPages) {
       if (!running) return;
-      await speak(`문제가 있는 페이지를 다시 촬영합니다. 페이지 ${p}를 보여 주세요.`);
+      await speak(`문제가 있는 페이지를 다시 촬영합니다. 페이지 ${p}를 흰 박스에 꽉 차게 맞춰 주세요.`);
       await sleep(350);
 
       let ok = false;
       for (let retry=1; retry<=MAX_RETRY_PER_PAGE; retry++) {
         if (!running) return;
+
         log(`재촬영: 페이지 ${p} 시도 ${retry}/${MAX_RETRY_PER_PAGE}`);
         const r = await ocrOnePage(p);
         if (!r) break;
@@ -340,11 +414,12 @@
           ok = true;
           break;
         }
-        await speak(`페이지 ${p} 인식이 불안정합니다. 다시 촬영해 주세요.`);
+
+        await speak(`인식이 불안정합니다. 페이지 ${p}를 흰 박스에 꽉 차게 다시 맞춰 주세요.`);
       }
 
       if (!ok) {
-        await speak(`페이지 ${p}를 다시 읽지 못했습니다. 조명과 각도를 조정해 주세요.`);
+        await speak(`페이지 ${p}가 계속 안 읽힙니다. 조명과 각도를 바꿔 주세요.`);
         throw new Error(`재촬영 실패(page=${p})`);
       }
     }
@@ -395,17 +470,8 @@
     await unlockAudio();
     pickKoreanVoice();
 
-    // 카메라를 먼저 확실히 열고, 실패 원인을 “보이게” 한다
-    try {
-      await startCamera();
-    } catch (e) {
-      const msg = explainCamError(e);
-      log(msg);
-      await speak("카메라를 열 수 없습니다. 권한을 확인해 주세요.");
-      throw new Error(msg);
-    }
-
-    await speak("자동 촬영을 시작합니다. 시험지를 화면에 꽉 차게 맞춰 주세요.");
+    await startCamera();
+    await speak("자동 촬영을 시작합니다. 시험지를 흰 박스에 꽉 차게 맞춰 주세요.");
 
     while (running && currentPage <= MAX_PAGES) {
       let okPage = false;
@@ -427,12 +493,13 @@
           okPage = true;
           break;
         } else {
-          await speak(`페이지 ${currentPage} 인식이 불안정합니다. 다시 촬영해 주세요.`);
+          // ✅ 실패 시 “구체 지시”
+          await speak(`인식이 불안정합니다. 페이지 ${currentPage}를 흰 박스에 꽉 차게 맞춰 주세요.`);
         }
       }
 
       if (!okPage) {
-        await speak(`페이지 ${currentPage}를 읽지 못했습니다. 조명과 각도를 조정해 주세요.`);
+        await speak(`페이지 ${currentPage}를 읽지 못했습니다. 시험지를 더 가까이 가져오고 반사를 없애 주세요.`);
         throw new Error(`OCR 실패(page=${currentPage})`);
       }
 
@@ -446,7 +513,6 @@
     }
 
     await speak("이제 문제를 풉니다.");
-    log("SOLVE 시작");
 
     for (let attempt=1; attempt<=2; attempt++) {
       const solved = await callSolve(allText);
@@ -476,7 +542,6 @@
 
       await speak(`다음 문항이 잘 안 읽혔습니다. ${badQs.slice(0,10).join(", ")}번. 해당 페이지를 다시 촬영합니다.`);
       await recaptureSpecificPages(targetPages);
-      log("재촬영 후 SOLVE 재시도");
     }
   }
 
@@ -488,7 +553,6 @@
     log("STOP");
   }
 
-  // 오디오 준비 버튼: “삑” + “오디오 준비 완료”를 실제로 들려준다
   btnAudio.addEventListener("click", async () => {
     try {
       await unlockAudio();
