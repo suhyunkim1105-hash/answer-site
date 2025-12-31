@@ -1,68 +1,64 @@
-export async function handler(event) {
+// netlify/functions/ocr.js  (그대로 덮어쓰기)
+// OCR.Space PRO endpoint(apipro1/apipro2) + base64 업로드
+export const handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
-      return json(405, { error: "method not allowed" });
+      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
     }
 
-    const { imageDataUrl } = safeJson(event.body);
-    if (!imageDataUrl || typeof imageDataUrl !== "string") {
-      return json(400, { error: "imageDataUrl required" });
+    const { OCR_SPACE_API_KEY, OCR_SPACE_ENDPOINT } = process.env;
+    if (!OCR_SPACE_API_KEY) {
+      return { statusCode: 500, body: JSON.stringify({ error: "Missing OCR_SPACE_API_KEY" }) };
     }
 
-    const apiKey = process.env.OCR_SPACE_API_KEY;
-    const endpoint = process.env.OCR_SPACE_ENDPOINT || "https://apipro1.ocr.space/parse/image";
+    const endpoint = OCR_SPACE_ENDPOINT || "https://apipro2.ocr.space/parse/image";
 
-    if (!apiKey) return json(500, { error: "OCR_SPACE_API_KEY missing" });
-    if (!endpoint) return json(500, { error: "OCR_SPACE_ENDPOINT missing" });
+    let body;
+    try { body = JSON.parse(event.body || "{}"); }
+    catch { body = {}; }
 
-    // OCR.Space는 base64Image 파라미터로 dataURL도 받음
+    const image = body.image;
+    if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
+      return { statusCode: 400, body: JSON.stringify({ error: "image (dataURL) required" }) };
+    }
+
     const form = new URLSearchParams();
-    form.set("apikey", apiKey);
-    form.set("base64Image", imageDataUrl);
+    form.set("apikey", OCR_SPACE_API_KEY);
+    form.set("base64Image", image);
     form.set("language", "eng");
-    form.set("OCREngine", "2");
-    form.set("detectOrientation", "true");
+    form.set("OCREngine", "2");              // 보통 엔진2가 더 안정적
     form.set("scale", "true");
+    form.set("detectOrientation", "true");
+    form.set("isOverlayRequired", "false");
+    form.set("isTable", "false");
 
-    const r = await fetch(endpoint, {
+    const resp = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: form.toString()
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
     });
 
-    const raw = await r.json().catch(() => null);
-    if (!r.ok) {
-      return json(r.status, { error: `OCR upstream failed (${r.status})`, raw });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
+      return { statusCode: 502, body: JSON.stringify({ error: "OCR endpoint failed" }) };
     }
 
-    const parsedText =
-      raw?.ParsedResults?.[0]?.ParsedText ??
-      raw?.ParsedResults?.map(x => x.ParsedText).join("\n") ??
-      "";
-
-    // OCR.Space가 에러를 200으로 주는 경우도 있어 방어
-    const isErrored = raw?.IsErroredOnProcessing;
-    const errMsg = raw?.ErrorMessage || raw?.ErrorDetails;
-
-    if (isErrored) {
-      return json(502, { error: `OCR error: ${Array.isArray(errMsg) ? errMsg.join(" | ") : errMsg}`, raw });
+    if (data.IsErroredOnProcessing) {
+      return { statusCode: 502, body: JSON.stringify({ error: data.ErrorMessage || "OCR error", raw: data }) };
     }
 
-    return json(200, { text: String(parsedText || ""), raw });
+    const parsed = (data.ParsedResults && data.ParsedResults[0]) ? data.ParsedResults[0] : null;
+    const text = (parsed && parsed.ParsedText) ? parsed.ParsedText : "";
 
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        text,
+        // 필요하면 raw 열어볼 수 있게 유지(디버그용)
+        raw: { OCRExitCode: data.OCRExitCode, ErrorMessage: data.ErrorMessage, ProcessingTimeInMilliseconds: data.ProcessingTimeInMilliseconds }
+      }),
+    };
   } catch (e) {
-    return json(500, { error: e.message || String(e) });
+    return { statusCode: 500, body: JSON.stringify({ error: e.message || "unknown" }) };
   }
-}
-
-function json(statusCode, body) {
-  return {
-    statusCode,
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify(body)
-  };
-}
-
-function safeJson(s) {
-  try { return JSON.parse(s || "{}"); } catch { return {}; }
-}
+};
