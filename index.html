@@ -6,27 +6,31 @@
   <title>편입영어 자동 OCR → 자동 풀이 → 정답 TTS</title>
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; margin: 16px; }
-    #status { white-space: pre-wrap; padding: 10px; border: 1px solid #ddd; border-radius: 8px; min-height: 84px; }
+    #status { white-space: pre-wrap; padding: 10px; border: 1px solid #ddd; border-radius: 8px; min-height: 96px; }
     video { width: 100%; max-width: 520px; border-radius: 12px; background: #000; }
     button { padding: 12px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; font-size: 16px; }
     button:disabled { opacity: 0.5; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     textarea { width: 100%; min-height: 140px; margin-top: 10px; }
-    .small { font-size: 12px; color: #666; }
+    .small { font-size: 12px; color: #666; line-height: 1.45; }
   </style>
 </head>
 <body>
   <h2>자동 OCR → 자동 풀이 → 정답 TTS</h2>
 
   <div id="status">대기 중</div>
+
   <div class="row" style="margin:12px 0;">
+    <button id="btnAudio">🔊 오디오 준비(한 번만)</button>
     <button id="btnStart">📸 자동 시작</button>
     <button id="btnStop" disabled>⛔ 중지</button>
+    <button id="btnReplay" disabled>🔁 정답 다시듣기</button>
   </div>
 
   <div class="small">
-    - 마지막 페이지에 <b>“촬영 완료”</b>라고 크게 써두면 자동으로 OCR 종료 후 풀이로 넘어간다.<br/>
-    - OCR이 불안정하면 자동으로 “다시 촬영해 주세요” 또는 “몇 번 문제 다시 촬영해 주세요”를 말한다.
+    - 마지막 페이지에 <b>XVRTH</b> 를 굵고 크게 적으면 자동으로 OCR 종료 후 풀이로 넘어간다.<br/>
+    - OCR이 불안정하면 자동으로 “다시 촬영해 주세요” 또는 “문항이 잘 안 읽힘 → 해당 페이지 재촬영”을 수행한다.<br/>
+    - iOS에서 TTS가 안 나오는 경우가 있어 <b>오디오 준비</b>를 한 번 눌러두면 안정적이다(자동 시작에도 포함되어 있다).
   </div>
 
   <div style="margin-top:12px;">
@@ -46,24 +50,24 @@
 
   // 촬영/인식 설정
   const SHOTS_PER_PAGE = 3;
-  const SHOT_GAP_MS = 150;              // ✅ 5초 대기 제거 (거의 즉시)
+  const SHOT_GAP_MS = 120;              // 5초 대기 제거
   const MAX_PAGES = 25;
   const MAX_RETRY_PER_PAGE = 4;
 
-  // 페이지 넘김 안내(너무 길면 답답해짐)
-  const TURN_PAGE_WAIT_MS = 600;        // ✅ 안내 후 잠깐만 쉬고 다음 페이지 촬영
+  // 페이지 넘김 안내 후 다음 촬영까지 대기
+  const TURN_PAGE_WAIT_MS = 650;
 
-  // OCR 품질 기준(너무 빡세면 무한 재촬영됨)
-  const MIN_TEXT_LEN = 700;             // 기본 최소 길이
-  const MIN_QNUM_HITS = 2;              // "01,02" 같은 문항번호 히트
-  const PASSAGE_LEN_OK = 1400;          // 문항번호가 잘 안 잡혀도 길면 통과(지문 페이지 대비)
+  // OCR 품질 기준(너무 빡세면 무한 재촬영)
+  const MIN_TEXT_LEN = 700;
+  const MIN_QNUM_HITS = 2;
+  const PASSAGE_LEN_OK = 1400;
 
-  // 종료 감지
-  const STOP_PHRASE = "촬영 완료";
+  // 종료 감지(한글 안 씀)
+  const STOP_PHRASE = "XVRTH";
 
   // 정답 TTS
   const ANSWER_ROUNDS = 4;
-  const BETWEEN_ANS_MS = 2000;          // ✅ 문항 사이 2초
+  const BETWEEN_ANS_MS = 2000;          // 문항 사이 2초
   const BETWEEN_ROUND_MS = 600;
 
   let running = false;
@@ -74,11 +78,15 @@
   let allText = "";
 
   let koVoice = null;
+  let audioReady = false;
+  let lastAnswers = null; // {"1":3,...}
 
   const statusEl = document.getElementById("status");
   const video = document.getElementById("video");
+  const btnAudio = document.getElementById("btnAudio");
   const btnStart = document.getElementById("btnStart");
   const btnStop = document.getElementById("btnStop");
+  const btnReplay = document.getElementById("btnReplay");
   const ocrBox = document.getElementById("ocrBox");
   const ansBox = document.getElementById("ansBox");
 
@@ -89,6 +97,38 @@
   }
   const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
+  // ---------- iOS 오디오 언락 ----------
+  async function unlockAudio() {
+    if (audioReady) return true;
+
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        const ctx = new AC();
+        await ctx.resume().catch(()=>{});
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0.0001;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.03);
+        log("AudioContext 언락 완료");
+      }
+    } catch (e) {
+      log("AudioContext 언락 실패(무시): " + String(e?.message || e));
+    }
+
+    try {
+      speechSynthesis.getVoices();
+    } catch (_) {}
+
+    // 아주 짧은 발화로 TTS 엔진 준비
+    try { await speak(" "); } catch (_) {}
+    audioReady = true;
+    return true;
+  }
+
   // ---------- TTS ----------
   function pickKoreanVoice() {
     const voices = speechSynthesis.getVoices() || [];
@@ -96,7 +136,7 @@
     const preferred = ko.find(v => /yuna|유나|서현|지은|아리/i.test(v.name));
     koVoice = preferred || ko[0] || null;
     if (koVoice) log(`TTS voice: ${koVoice.name} (${koVoice.lang})`);
-    else log(`TTS voice 선택 실패`);
+    else log("TTS voice 선택 실패");
   }
 
   function speak(text) {
@@ -119,19 +159,17 @@
   }
 
   async function speakAnswers(answerNumMap) {
-    // answerNumMap: {"1":3,...} 1~5
     const toLetter = (n)=>["A","B","C","D","E"][Number(n)-1] || "";
     const keys = Object.keys(answerNumMap).map(k=>parseInt(k,10)).filter(Number.isFinite).sort((a,b)=>a-b);
 
     speechSynthesis.cancel();
 
     for (let r=1; r<=ANSWER_ROUNDS; r++) {
-      // ✅ 요구: “1번 A, 2초, 2번 B …” 형태로만 반복(군더더기 최소)
       for (const q of keys) {
         const a = toLetter(answerNumMap[String(q)]);
         if (!a) continue;
-        await speak(`${q}번 ${a}`);
-        await sleep(BETWEEN_ANS_MS);
+        await speak(`${q}번 ${a}`);       // "1번 A"
+        await sleep(BETWEEN_ANS_MS);      // 문항 사이 2초
       }
       await sleep(BETWEEN_ROUND_MS);
     }
@@ -153,7 +191,7 @@
     log(`카메라 OK (${video.videoWidth}x${video.videoHeight})`);
   }
 
-  function captureFrameBase64Jpeg(quality=0.90) { // OCR 품질 위해 약간 높임
+  function captureFrameBase64Jpeg(quality=0.90) {
     const w = video.videoWidth, h = video.videoHeight;
     const canvas = document.createElement("canvas");
     canvas.width = w; canvas.height = h;
@@ -175,14 +213,13 @@
     return { ok:true, text:String(j.text||""), conf:Number(j.conf||0) };
   }
 
-  const normalize = (s)=>String(s||"").replace(/\s+/g,"").trim();
+  const normalizeNoSpace = (s)=>String(s||"").replace(/\s+/g,"").trim();
   function detectStop(text) {
-    const t = normalize(text);
-    return t.includes(normalize(STOP_PHRASE));
+    const t = normalizeNoSpace(text);
+    return t.includes(normalizeNoSpace(STOP_PHRASE));
   }
 
   function qnumHits(text) {
-    // 줄 시작의 01~50을 주로 잡는다
     const m = String(text||"").match(/(?:^|\n)\s*(0[1-9]|[1-4][0-9]|50)\b/g);
     return m ? m.length : 0;
   }
@@ -199,7 +236,7 @@
   function qualityOk(text) {
     const len = String(text||"").length;
     const hits = qnumHits(text);
-    if (len >= PASSAGE_LEN_OK) return true;          // 지문 페이지 대비
+    if (len >= PASSAGE_LEN_OK) return true;
     if (len >= MIN_TEXT_LEN && hits >= MIN_QNUM_HITS) return true;
     return false;
   }
@@ -217,14 +254,12 @@
       const text = r.ok ? r.text : "";
       const conf = r.ok ? r.conf : 0;
 
-      // 휴리스틱 점수(길이+문항히트+conf)
       const score = (text.length/50) + (qnumHits(text)*30) + (conf*2);
       log(`OCR ${r.ok?"OK":"FAIL"} page=${pageIndex} shot=${shot} len=${text.length} conf=${conf} score=${score.toFixed(1)}`);
 
       const cand = { shot, text, conf, score, stop: detectStop(text) };
       if (!best || cand.score > best.score) best = cand;
 
-      // “촬영 완료”가 보이면 즉시 반환
       if (cand.stop) return cand;
     }
 
@@ -242,7 +277,6 @@
   }
 
   async function recaptureSpecificPages(targetPages) {
-    // targetPages: [2,3,...] (page index)
     for (const p of targetPages) {
       if (!running) return;
       await speak(`문제가 있는 페이지를 다시 촬영합니다. 페이지 ${p}를 보여 주세요.`);
@@ -256,7 +290,6 @@
         const r = await ocrOnePage(p);
         if (!r) break;
 
-        // stop 페이지면 그대로 채택
         if (r.stop || qualityOk(r.text)) {
           const idx = pages.findIndex(x => x.page === p);
           const qnums = extractQnumsFromPage(r.text);
@@ -297,7 +330,6 @@
   }
 
   function mapBadQuestionsToPages(badQs) {
-    // badQs: [11,12,...]
     const pagesSet = new Set();
     for (const q of badQs) {
       for (const p of pages) {
@@ -318,10 +350,12 @@
     currentPage = 1;
     ocrBox.value = "";
     ansBox.value = "";
+    lastAnswers = null;
+    btnReplay.disabled = true;
 
+    // ✅ 시작 버튼에서도 오디오 준비를 자동 수행(그러나 오디오 버튼도 제공)
+    await unlockAudio();
     await startCamera();
-    speechSynthesis.getVoices(); // iOS 트리거
-    setTimeout(()=>speechSynthesis.getVoices(), 250);
     pickKoreanVoice();
 
     await speak("자동 촬영을 시작합니다. 시험지를 화면에 꽉 차게 맞춰 주세요.");
@@ -356,9 +390,8 @@
         throw new Error(`OCR 실패(page=${currentPage})`);
       }
 
-      // stop이면 OCR 종료
       if (last && last.stop) {
-        log(`STOP(촬영 완료) 감지 → OCR 종료`);
+        log(`STOP(${STOP_PHRASE}) 감지 → OCR 종료`);
         break;
       }
 
@@ -366,16 +399,17 @@
       currentPage++;
     }
 
-    // 풀이 단계
     await speak("이제 문제를 풉니다.");
     log("SOLVE 시작");
 
-    // solve 시도(최대 2회: bad_questions 나오면 해당 페이지만 재촬영 후 재시도)
     for (let attempt=1; attempt<=2; attempt++) {
       const solved = await callSolve(allText);
 
       if (solved.ok && solved.answers) {
+        lastAnswers = solved.answers;
         ansBox.value = answersToText(solved.answers);
+        btnReplay.disabled = false;
+
         await speak("정답을 읽겠습니다.");
         await speakAnswers(solved.answers);
         log("완료");
@@ -389,7 +423,6 @@
         throw new Error(`SOLVE 실패: ${solved.error || "unknown"}`);
       }
 
-      // bad_questions -> 어느 페이지인지 추정 후 재촬영
       const targetPages = mapBadQuestionsToPages(badQs);
       if (targetPages.length === 0) {
         await speak(`일부 문항 인식이 불안정합니다. 다시 촬영해 주세요.`);
@@ -410,6 +443,18 @@
     log("STOP");
   }
 
+  // ✅ 오디오 버튼(네가 요청한 “오디오 버튼 누르는 것”)
+  btnAudio.addEventListener("click", async () => {
+    try {
+      await unlockAudio();
+      pickKoreanVoice();
+      await speak("오디오 준비 완료.");
+      log("오디오 준비 완료(버튼)");
+    } catch (e) {
+      log("오디오 준비 실패: " + String(e?.message || e));
+    }
+  });
+
   btnStart.addEventListener("click", async () => {
     try {
       await runAuto();
@@ -421,6 +466,22 @@
   });
 
   btnStop.addEventListener("click", () => stopAll());
+
+  // ✅ 정답 다시듣기(필요하면)
+  btnReplay.addEventListener("click", async () => {
+    try {
+      await unlockAudio();
+      pickKoreanVoice();
+      if (!lastAnswers) {
+        await speak("정답이 없습니다.");
+        return;
+      }
+      await speakAnswers(lastAnswers);
+    } catch (e) {
+      log("정답 다시듣기 실패: " + String(e?.message || e));
+    }
+  });
+
   speechSynthesis.onvoiceschanged = () => pickKoreanVoice();
 })();
 </script>
