@@ -1,4 +1,4 @@
-# netlify.toml (루트에 이미 있으면 이 값들만 확인)
+# netlify.toml
 [build]
   publish = "."
 
