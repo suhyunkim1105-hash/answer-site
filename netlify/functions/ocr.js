@@ -10,62 +10,68 @@ export async function handler(event) {
     }
 
     const body = safeJson(event.body);
-    const image = typeof body?.image === "string" ? body.image.trim() : "";
+    const rawImage =
+      typeof body?.image === "string" ? body.image.trim() : "";
 
-    if (!image) {
+    if (!rawImage) {
       return json(400, { ok: false, error: "Missing image" });
     }
 
-    // --- API 키 읽기 ---
-    const envKey =
+    // --- API 키 읽기 (여러 이름 지원) ---
+    let apiKey =
       process.env.OCR_SPACE_API_KEY ||
       process.env.OCRSPACE_API_KEY ||
       process.env.OCR_API_KEY ||
       "";
-    const apiKey = String(envKey || "").trim();
+
+    apiKey = String(apiKey || "").trim();
 
     if (!apiKey) {
-      return json(500, { ok: false, error: "Missing OCR_SPACE_API_KEY env var" });
+      return json(500, {
+        ok: false,
+        error: "Missing OCR_SPACE_API_KEY env var",
+      });
     }
 
-    // --- 엔드포인트 설정 ---
-    const endpointEnv = process.env.OCR_SPACE_ENDPOINT || "";
-    const endpoint = endpointEnv || "https://api.ocr.space/parse/image";
-
     // --- base64Image 형태 정리 ---
-    // data:image/jpeg;base64,... 형식이 들어오면 prefix 떼고 본문만 보냄
-    let base64Payload = image;
-    const m = image.match(/^data:image\/[a-zA-Z0-9+]+;base64,(.+)$/);
+    let base64Payload = rawImage;
+    const m = rawImage.match(/data:image\/[a-zA-Z0-9+]+;base64,(.+)$/);
     if (m && m[1]) {
       base64Payload = m[1];
     }
 
-    // --- OCR.Space 호출 ---
+    // --- OCR.Space 요청 폼 구성 ---
     const form = new URLSearchParams();
-    form.append("apikey", apiKey);
-    form.append("isOverlayRequired", "false");
+    form.append("apikey", apiKey);           // 바디에도 apikey
+    form.append("base64Image", base64Payload);
     form.append("language", "eng");
-    form.append("OCREngine", "2"); // PRO 계정이면 2, Free면 1로 바꿔야 함
+    form.append("isOverlayRequired", "false");
     form.append("detectOrientation", "true");
     form.append("scale", "true");
-    form.append("base64Image", base64Payload);
+    form.append("OCREngine", "2");           // PRO 엔진2 사용
+
+    const endpoint =
+      (process.env.OCR_SPACE_ENDPOINT || "").trim() ||
+      "https://api.ocr.space/parse/image";
 
     const controller = new AbortController();
     const timeoutMs = Number(process.env.OCR_SPACE_TIMEOUT_MS || 25000);
-    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let resp;
     try {
       resp = await fetch(endpoint, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "content-type": "application/x-www-form-urlencoded",
+          // 헤더에도 apikey 같이 넣기 (PRO/FREE 둘 다 호환)
+          apikey: apiKey,
         },
         body: form.toString(),
-        signal: controller.signal,
       });
     } catch (e) {
-      clearTimeout(t);
+      clearTimeout(timer);
       return json(200, {
         ok: false,
         error: "OCR.Space fetch failed",
@@ -73,14 +79,9 @@ export async function handler(event) {
       });
     }
 
-    clearTimeout(t);
+    clearTimeout(timer);
 
-    let data = {};
-    try {
-      data = await resp.json();
-    } catch (_) {
-      data = {};
-    }
+    const data = await resp.json().catch(() => ({}));
 
     if (!resp.ok) {
       return json(200, {
@@ -90,13 +91,15 @@ export async function handler(event) {
       });
     }
 
-    // --- OCR.Space에서 에러라고 판단한 경우 ---
+    // --- OCR.Space 쪽 에러 처리 ---
     if (data.IsErroredOnProcessing) {
       const detail =
-        (Array.isArray(data.ErrorMessage) && data.ErrorMessage.join(" / ")) ||
+        (Array.isArray(data.ErrorMessage) &&
+          data.ErrorMessage.join(" / ")) ||
         data.ErrorMessage ||
         data.ErrorDetails ||
         "Unknown OCR error";
+
       return json(200, {
         ok: false,
         error: "OCR.Space upstream error",
@@ -107,7 +110,8 @@ export async function handler(event) {
     const results = Array.isArray(data.ParsedResults)
       ? data.ParsedResults
       : [];
-    if (!results.length || !results[0].ParsedText) {
+
+    if (!results.length || !results[0]?.ParsedText) {
       return json(200, {
         ok: false,
         error: "No text parsed",
@@ -117,7 +121,7 @@ export async function handler(event) {
 
     const parsedText = String(results[0].ParsedText || "");
     const meanConf = Number(
-      results[0].MeanConfidence ?? data.MeanConfidence ?? 0
+      results[0].MeanConfidence || data.MeanConfidence || 0
     );
 
     return json(200, {
@@ -133,6 +137,8 @@ export async function handler(event) {
     return json(200, { ok: false, error: msg });
   }
 }
+
+// 공통 유틸 -----------------------------
 
 function json(statusCode, obj) {
   return {
