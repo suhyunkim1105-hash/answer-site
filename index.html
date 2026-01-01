@@ -13,30 +13,8 @@
     textarea { width: 100%; min-height: 140px; margin-top: 10px; }
     .small { font-size: 12px; color: #666; line-height: 1.45; }
 
-    .camWrap { position: relative; width: 100%; max-width: 520px; }
+    .camWrap { width: 100%; max-width: 520px; }
     video { width: 100%; border-radius: 12px; background: #000; display:block; }
-    .roiBox {
-      position: absolute;
-      left: 9%;
-      top: 6%;
-      width: 82%;
-      height: 88%;
-      border: 2px solid rgba(255,255,255,0.9);
-      border-radius: 10px;
-      box-shadow: 0 0 0 2000px rgba(0,0,0,0.25) inset;
-      pointer-events: none;
-    }
-    .roiHint {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 10px;
-      text-align: center;
-      color: rgba(255,255,255,0.95);
-      font-size: 13px;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.6);
-      pointer-events: none;
-    }
   </style>
 </head>
 <body>
@@ -52,16 +30,14 @@
   </div>
 
   <div class="small">
-    - 시험지를 <b>흰 박스에 꽉 차게</b> 맞춰라(이게 OCR 성능 대부분 결정).<br/>
     - 마지막 페이지에 <b>XVRTH</b> 를 굵고 크게 적으면 자동으로 OCR 종료 후 풀이로 넘어간다.<br/>
-    - iOS 무음모드(사일런트)면 TTS가 안 들릴 수 있다. 무음 해제 + 볼륨 올려라.
+    - iOS 무음모드(사일런트)면 TTS가 안 들릴 수 있다. 무음 해제 + 볼륨 올려라.<br/>
+    - 종이가 화면에서 너무 작게 잡히면 자동으로 “가까이” 오라고 말한다(완전 자동).
   </div>
 
   <div style="margin-top:12px;">
     <div class="camWrap">
       <video id="video" autoplay playsinline muted></video>
-      <div class="roiBox"></div>
-      <div class="roiHint">시험지를 이 박스 안에 꽉 차게 맞춰라</div>
     </div>
   </div>
 
@@ -78,28 +54,28 @@
 
   // 촬영/인식 설정
   const SHOTS_PER_PAGE = 3;
-  const SHOT_GAP_MS = 120;              // ✅ 5초 대기 제거
-  const MAX_PAGES = 25;
+  const SHOT_GAP_MS = 120;              // 5초 대기 삭제
+  const MAX_PAGES = 30;
   const MAX_RETRY_PER_PAGE = 4;
 
   // 페이지 넘김 안내 후 다음 촬영까지 대기
   const TURN_PAGE_WAIT_MS = 650;
 
-  // OCR 품질 기준(너무 빡세면 재촬영 루프가 길어짐 → 현실적으로 컷)
+  // OCR 품질 기준
   const MIN_TEXT_LEN = 650;
   const MIN_QNUM_HITS = 2;
   const PASSAGE_LEN_OK = 1250;
+
+  // “종이 너무 작음” 기준(프레임 대비 종이 바운딩박스 면적)
+  const MIN_PAPER_AREA_RATIO = 0.20; // A4 연습 기준: 20% 미만이면 너무 멀다
 
   // 종료 감지
   const STOP_PHRASE = "XVRTH";
 
   // 정답 TTS
   const ANSWER_ROUNDS = 4;
-  const BETWEEN_ANS_MS = 2000;          // ✅ 문항 사이 2초
+  const BETWEEN_ANS_MS = 2000;          // 문항 사이 2초
   const BETWEEN_ROUND_MS = 600;
-
-  // ✅ 핵심: ROI(중앙 크롭) — 화면 전체가 아니라 이 영역만 OCR로 보냄
-  const ROI = { x: 0.09, y: 0.06, w: 0.82, h: 0.88 };
 
   let running = false;
   let stream = null;
@@ -121,7 +97,6 @@
   const ocrBox = document.getElementById("ocrBox");
   const ansBox = document.getElementById("ansBox");
 
-  // 초기 상태 고정
   btnStart.disabled = false;
   btnStop.disabled = true;
   btnReplay.disabled = true;
@@ -200,7 +175,6 @@
       for (const q of keys) {
         const a = toLetter(answerNumMap[String(q)]);
         if (!a) continue;
-        // ✅ "1번 A" 형식
         await speak(`${q}번 ${a}`);
         await sleep(BETWEEN_ANS_MS);
       }
@@ -208,7 +182,7 @@
     }
   }
 
-  // ---------- Camera (줌 금지) ----------
+  // ---------- Camera (줌 강제 없음) ----------
   async function getStreamWithFallback() {
     const tries = [
       { video: { facingMode: { ideal: "environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } }, audio:false },
@@ -223,7 +197,6 @@
     throw lastErr || new Error("getUserMedia failed");
   }
 
-  // ✅ 줌은 절대 올리지 않는다. 가능하면 "최소 줌"으로 리셋만 한다.
   async function applyBestCameraSettings() {
     try {
       const track = stream?.getVideoTracks?.()[0];
@@ -232,11 +205,11 @@
       const caps = track.getCapabilities();
       const adv = [];
 
+      // ✅ 줌: 올리지 않음. 혹시 남아있을까봐 최소값 리셋만.
       if (caps.zoom) {
-        adv.push({ zoom: caps.zoom.min }); // 보통 1.0
+        adv.push({ zoom: caps.zoom.min });
         log(`줌 리셋: ${caps.zoom.min}`);
       }
-
       if (caps.focusMode && Array.isArray(caps.focusMode) && caps.focusMode.includes("continuous")) {
         adv.push({ focusMode: "continuous" });
       }
@@ -275,8 +248,93 @@
     log(`카메라 OK (${video.videoWidth}x${video.videoHeight})`);
   }
 
-  // ---------- Capture with ROI crop ----------
-  function captureRoiBase64Jpeg(quality=0.92) {
+  // ---------- AUTO PAPER DETECT + CROP ----------
+  // 전략: 다운스케일 → 밝은 픽셀 마스크(white paper) → 바운딩 박스 → 원본 좌표로 확장 크롭
+  function detectPaperBoxOnFrame(srcCanvas) {
+    const w = srcCanvas.width, h = srcCanvas.height;
+
+    // 너무 큰 해상도에서 분석하면 느림 → 분석용 다운스케일
+    const targetW = 320;
+    const scale = targetW / w;
+    const dw = targetW;
+    const dh = Math.max(1, Math.round(h * scale));
+
+    const dcv = document.createElement("canvas");
+    dcv.width = dw; dcv.height = dh;
+    const dctx = dcv.getContext("2d", { willReadFrequently:true });
+    dctx.drawImage(srcCanvas, 0, 0, w, h, 0, 0, dw, dh);
+
+    const img = dctx.getImageData(0, 0, dw, dh);
+    const data = img.data;
+
+    // 밝기 히스토그램(간단)으로 임계값 결정(고정+보정)
+    // 종이는 대체로 매우 밝음 → 0~255 중 상단 구간 잡기
+    // 실패를 줄이려고 "평균 밝기"를 보고 threshold를 약간 조정
+    let sum = 0;
+    const n = dw * dh;
+    for (let i=0; i<data.length; i+=4) {
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const y = (r*0.2126 + g*0.7152 + b*0.0722);
+      sum += y;
+    }
+    const mean = sum / n;
+    let thr = Math.max(200, Math.min(235, mean + 25)); // 평균+25, 최소 200
+
+    let minX = dw, minY = dh, maxX = -1, maxY = -1;
+    let hit = 0;
+
+    for (let y=0; y<dh; y++) {
+      for (let x=0; x<dw; x++) {
+        const idx = (y*dw + x) * 4;
+        const r = data[idx], g = data[idx+1], b = data[idx+2];
+        const lum = (r*0.2126 + g*0.7152 + b*0.0722);
+
+        // 흰 종이 후보: 밝고, 색편차 작음(회색/흰색)
+        const maxc = Math.max(r,g,b), minc = Math.min(r,g,b);
+        const chroma = maxc - minc;
+
+        if (lum >= thr && chroma < 35) {
+          hit++;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (hit < n * 0.01 || maxX < 0) {
+      return null; // 종이 못 찾음
+    }
+
+    // 바운딩박스 너무 얇거나 이상하면 null
+    const bw = (maxX - minX + 1);
+    const bh = (maxY - minY + 1);
+    if (bw < dw * 0.25 || bh < dh * 0.25) {
+      // 종이가 너무 작거나 일부만 잡힘
+      return { box: null, areaRatio: (bw*bh)/(dw*dh) };
+    }
+
+    // 마진(바운딩박스 확장)
+    const mx = Math.round(bw * 0.06);
+    const my = Math.round(bh * 0.06);
+
+    let x0 = Math.max(0, minX - mx);
+    let y0 = Math.max(0, minY - my);
+    let x1 = Math.min(dw-1, maxX + mx);
+    let y1 = Math.min(dh-1, maxY + my);
+
+    // 원본 좌표로 환산
+    const rx = Math.floor(x0 / scale);
+    const ry = Math.floor(y0 / scale);
+    const rw = Math.floor((x1 - x0 + 1) / scale);
+    const rh = Math.floor((y1 - y0 + 1) / scale);
+
+    const areaRatio = (bw*bh) / (dw*dh);
+    return { box: { x: rx, y: ry, w: rw, h: rh }, areaRatio };
+  }
+
+  function captureAutoPaperCropBase64Jpeg(quality=0.92) {
     const w = video.videoWidth, h = video.videoHeight;
     if (!w || !h) throw new Error("카메라 프레임 크기 0(스트림 준비 안 됨)");
 
@@ -285,18 +343,28 @@
     const sctx = src.getContext("2d");
     sctx.drawImage(video, 0, 0, w, h);
 
-    const rx = Math.max(0, Math.floor(w * ROI.x));
-    const ry = Math.max(0, Math.floor(h * ROI.y));
-    const rw = Math.max(1, Math.floor(w * ROI.w));
-    const rh = Math.max(1, Math.floor(h * ROI.h));
+    const det = detectPaperBoxOnFrame(src);
+
+    // 폴백: 종이 못찾으면 전체 프레임을 그대로 보냄(다만 품질점수 낮게 처리)
+    if (!det || !det.box) {
+      return { dataUrl: src.toDataURL("image/jpeg", quality), areaRatio: det?.areaRatio ?? 0 };
+    }
+
+    const { x, y, w:rw, h:rh } = det.box;
+
+    // 안전 clamp
+    const cx = Math.max(0, Math.min(w-1, x));
+    const cy = Math.max(0, Math.min(h-1, y));
+    const cw = Math.max(1, Math.min(w - cx, rw));
+    const ch = Math.max(1, Math.min(h - cy, rh));
 
     const crop = document.createElement("canvas");
-    crop.width = rw;
-    crop.height = rh;
+    crop.width = cw;
+    crop.height = ch;
     const cctx = crop.getContext("2d");
-    cctx.drawImage(src, rx, ry, rw, rh, 0, 0, rw, rh);
+    cctx.drawImage(src, cx, cy, cw, ch, 0, 0, cw, ch);
 
-    return crop.toDataURL("image/jpeg", quality);
+    return { dataUrl: crop.toDataURL("image/jpeg", quality), areaRatio: det.areaRatio };
   }
 
   // ---------- OCR ----------
@@ -347,17 +415,22 @@
       if (!running) return null;
       await sleep(SHOT_GAP_MS);
 
-      const dataUrl = captureRoiBase64Jpeg(0.92);
-      const r = await callOcr(dataUrl, pageIndex);
+      const cap = captureAutoPaperCropBase64Jpeg(0.92);
+      const r = await callOcr(cap.dataUrl, pageIndex);
 
       const text = r.ok ? r.text : "";
       const conf = r.ok ? r.conf : 0;
       const hits = qnumHits(text);
 
-      const score = (text.length/50) + (hits*30) + (conf*2);
-      log(`OCR ${r.ok?"OK":"FAIL"} page=${pageIndex} shot=${shot} len=${text.length} conf=${conf} hits=${hits} score=${score.toFixed(1)}`);
+      // 종이 면적이 작으면 점수 깎아서 “가까이” 유도
+      const area = cap.areaRatio || 0;
+      const areaPenalty = (area > 0 && area < MIN_PAPER_AREA_RATIO) ? -80 : 0;
 
-      const cand = { shot, text, conf, score, stop: detectStop(text) };
+      const score = (text.length/50) + (hits*30) + (conf*2) + areaPenalty;
+
+      log(`OCR ${r.ok?"OK":"FAIL"} page=${pageIndex} shot=${shot} len=${text.length} conf=${conf} hits=${hits} paperArea=${(area*100).toFixed(1)}% score=${score.toFixed(1)}`);
+
+      const cand = { shot, text, conf, score, stop: detectStop(text), areaRatio: area };
       if (!best || cand.score > best.score) best = cand;
 
       if (cand.stop) return cand;
@@ -379,8 +452,8 @@
   async function recaptureSpecificPages(targetPages) {
     for (const p of targetPages) {
       if (!running) return;
-      await speak(`문제가 있는 페이지를 다시 촬영합니다. 페이지 ${p}를 흰 박스에 꽉 차게 맞춰 주세요.`);
-      await sleep(350);
+      await speak(`문제가 있는 페이지를 다시 촬영합니다. 페이지 ${p}를 더 가까이 보여 주세요.`);
+      await sleep(250);
 
       let ok = false;
       for (let retry=1; retry<=MAX_RETRY_PER_PAGE; retry++) {
@@ -389,6 +462,12 @@
         log(`재촬영: 페이지 ${p} 시도 ${retry}/${MAX_RETRY_PER_PAGE}`);
         const r = await ocrOnePage(p);
         if (!r) break;
+
+        // 종이 너무 작으면 즉시 안내
+        if (r.areaRatio > 0 && r.areaRatio < MIN_PAPER_AREA_RATIO) {
+          await speak(`페이지 ${p}가 너무 작게 보입니다. 휴대폰을 더 가까이 가져오세요.`);
+          continue;
+        }
 
         if (r.stop || qualityOk(r.text)) {
           const idx = pages.findIndex(x => x.page === p);
@@ -401,11 +480,11 @@
           break;
         }
 
-        await speak(`인식이 불안정합니다. 페이지 ${p}를 흰 박스에 꽉 차게 다시 맞춰 주세요.`);
+        await speak(`인식이 불안정합니다. 페이지 ${p}를 조금 더 가까이 보여 주세요.`);
       }
 
       if (!ok) {
-        await speak(`페이지 ${p}가 계속 안 읽힙니다. 조명과 각도를 바꿔 주세요.`);
+        await speak(`페이지 ${p}가 계속 안 읽힙니다. 조명 반사를 없애고 각도를 바꿔 주세요.`);
         throw new Error(`재촬영 실패(page=${p})`);
       }
     }
@@ -457,7 +536,7 @@
     pickKoreanVoice();
 
     await startCamera();
-    await speak("자동 촬영을 시작합니다. 시험지를 흰 박스에 꽉 차게 맞춰 주세요.");
+    await speak("자동 촬영을 시작합니다.");
 
     while (running && currentPage <= MAX_PAGES) {
       let okPage = false;
@@ -470,6 +549,12 @@
         last = await ocrOnePage(currentPage);
         if (!last) break;
 
+        // 종이가 너무 작게 보이면 즉시 음성 안내(박스 요구 없음)
+        if (last.areaRatio > 0 && last.areaRatio < MIN_PAPER_AREA_RATIO) {
+          await speak(`페이지 ${currentPage}가 너무 작게 보입니다. 휴대폰을 더 가까이 가져오세요.`);
+          continue;
+        }
+
         const ok = last.stop || qualityOk(last.text);
 
         if (ok) {
@@ -479,12 +564,12 @@
           okPage = true;
           break;
         } else {
-          await speak(`인식이 불안정합니다. 페이지 ${currentPage}를 흰 박스에 꽉 차게 맞춰 주세요.`);
+          await speak(`인식이 불안정합니다. 페이지 ${currentPage}를 더 가까이 보여 주세요.`);
         }
       }
 
       if (!okPage) {
-        await speak(`페이지 ${currentPage}를 읽지 못했습니다. 시험지를 더 크게 보이게 하고 반사를 없애 주세요.`);
+        await speak(`페이지 ${currentPage}를 읽지 못했습니다. 반사를 없애고 더 가까이 촬영해 주세요.`);
         throw new Error(`OCR 실패(page=${currentPage})`);
       }
 
@@ -515,13 +600,13 @@
       const badQs = Array.isArray(solved.bad_questions) ? solved.bad_questions : [];
       if (badQs.length === 0 || attempt === 2) {
         log(`SOLVE 실패: ${solved.error || "unknown"}`);
-        await speak("풀이에 실패했습니다. 촬영 상태를 개선해 다시 시작해 주세요.");
+        await speak("풀이에 실패했습니다. 다시 시작해 주세요.");
         throw new Error(`SOLVE 실패: ${solved.error || "unknown"}`);
       }
 
       const targetPages = mapBadQuestionsToPages(badQs);
       if (targetPages.length === 0) {
-        await speak("일부 문항 인식이 불안정합니다. 다시 촬영해 주세요.");
+        await speak("일부 문항 인식이 불안정합니다. 다시 시작해 주세요.");
         throw new Error("bad_questions page mapping failed");
       }
 
