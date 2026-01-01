@@ -1,123 +1,125 @@
 // netlify/functions/parse-questions.js
-// OCR 전체 텍스트 → { number, stem, choices[5] } 배열로 변환
+// OCR로 인식한 전체 텍스트를 5지선다 객관식 문항 배열로 변환한다.
+// 입력: { text: "..." }
+// 출력: { ok:true, questions:[{ number, stem, choices:[...] }, ...] }
+
 export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
     }
+
     const body = safeJson(event.body);
-    const raw =
-      (body && typeof body.ocrText === "string" && body.ocrText) ||
-      (body && typeof body.text === "string" && body.text) ||
-      "";
-    const text = String(raw).trim();
-    if (!text) {
-      return json(200, { ok: false, error: "Missing ocrText" });
+    const raw = String(body?.text || "").trim();
+    if (!raw) {
+      return json(400, { ok: false, error: "Missing text" });
     }
 
+    const text = normalize(raw);
     const questions = parseQuestions(text);
+
     if (!questions.length) {
       return json(200, {
         ok: false,
         error: "No questions parsed",
-        debug: { length: text.length }
+        sample: text.slice(0, 1000),
       });
     }
 
-    return json(200, {
-      ok: true,
-      count: questions.length,
-      questions
-    });
+    return json(200, { ok: true, questions });
   } catch (e) {
-    return json(200, {
-      ok: false,
-      error: e && e.message ? e.message : String(e)
+    return json(200, { ok: false, error: String(e?.message || e) });
+  }
+}
+
+function normalize(t) {
+  // [PAGE 1] 같은 태그 제거
+  t = t.replace(/\[PAGE\s+\d+\]/gi, " ");
+  // 이상한 공백 줄이기
+  t = t.replace(/\r/g, "\n");
+  t = t.replace(/[ \t]+/g, " ");
+  t = t.replace(/\n{2,}/g, "\n");
+  return t;
+}
+
+// 성균관대/홍익대 스타일 기준 파서
+function parseQuestions(text) {
+  const qs = [];
+
+  // 문항 블록 추출: 라인 시작이 숫자(1~50)인 것만
+  const re = /(^|\n)([0-4]?\d|50)\s+([^\n]+(?:\n(?!\d+\s)[^\n]+)*)/g;
+  let m;
+
+  while ((m = re.exec(text)) !== null) {
+    const num = parseInt(m[2], 10);
+    if (!Number.isFinite(num) || num < 1 || num > 50) continue;
+
+    let block = m[3].trim();
+    if (!block) continue;
+
+    // 줄바꿈을 하나의 문장으로 합치기
+    block = block.replace(/\n+/g, " ").replace(/[ ]{2,}/g, " ").trim();
+
+    const { stem, choices } = splitStemAndChoices(block);
+
+    if (!stem || choices.length < 5) {
+      // 너무 이상하면 스킵
+      continue;
+    }
+
+    qs.push({
+      number: num,
+      stem,
+      choices: choices.slice(0, 5),
     });
   }
+
+  // 번호 순으로 정렬
+  qs.sort((a, b) => a.number - b.number);
+  return qs;
 }
 
-function normalize(text) {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/\u00b7/g, "·");
-}
+function splitStemAndChoices(block) {
+  // 선택지 구분용 특수문자들 (성대/홍대 OCR에 자주 나오는 기호들)
+  const delimRe = /[①②③④⑤⑴⑵⑶⑷⑸@•●▪■♦◆©®\^]/;
 
-function parseQuestions(raw) {
-  const text = normalize(raw);
-  const lines = text
-    .split("\n")
-    .map(l => l.trim())
-    .filter(l => l.length > 0);
+  const firstIdx = block.search(delimRe);
+  let stem;
+  let rest;
 
-  const questions = [];
-  let cur = null;
+  if (firstIdx === -1) {
+    // 선택지 구분 기호를 못 찾으면 그냥 전부 지문으로 처리
+    stem = block.trim();
+    rest = "";
+  } else {
+    stem = block.slice(0, firstIdx).trim();
+    rest = block.slice(firstIdx).trim();
+  }
 
-  const numRe = /^(\d{1,2})\s+(.*)$/;
-  const choiceRe = /^((?:[•·\-\u2022\u00b7①②③④⑤@©®\*])|(?:[1-5]\)))[\s\.]*(.+)$/;
+  const rawChoices = rest
+    ? rest
+        .split(delimRe)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : [];
 
-  for (const line of lines) {
-    if (/X[UV]RTH/i.test(line)) {
-      // 마지막 페이지 STOP 토큰은 버린다.
-      continue;
-    }
-
-    let m = line.match(numRe);
-    if (m) {
-      const num = parseInt(m[1], 10);
-      if (num >= 1 && num <= 50) {
-        if (cur) questions.push(finalize(cur));
-        cur = { number: num, stem: (m[2] || "").trim(), choices: [] };
-        continue;
-      }
-    }
-
-    if (!cur) continue;
-
-    m = line.match(choiceRe);
-    if (m) {
-      const choiceText = (m[2] || "").trim();
-      if (!choiceText) continue;
-      if (cur.choices.length < 5) {
-        cur.choices.push(choiceText);
-      } else {
-        // 5개를 이미 넘으면 마지막 선택지에 이어 붙인다.
-        const last = cur.choices.length - 1;
-        cur.choices[last] = (cur.choices[last] + " " + choiceText).trim();
-      }
-      continue;
-    }
-
-    // 보기도, 번호도 아닌 줄: 질문 본문이나 보기의 다음 줄
-    if (cur.choices.length === 0) {
-      cur.stem = (cur.stem + " " + line).trim();
-    } else {
-      const last = cur.choices.length - 1;
-      cur.choices[last] = (cur.choices[last] + " " + line).trim();
+  // 그래도 5개 안 되면, 문장 끝의 마침표 기준으로 한 번 더 잘라보기(보정용)
+  let choices = rawChoices;
+  if (choices.length < 5 && rest) {
+    const tmp = rest
+      .replace(delimRe, " ")
+      .split(/\s{2,}|\s\.\s/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (tmp.length >= 5) {
+      choices = tmp.slice(-5);
     }
   }
 
-  if (cur) questions.push(finalize(cur));
+  // 너무 짧은 선택지는 버리기
+  choices = choices.map((c) => c.replace(/\s+/g, " ").trim());
 
-  // 보기 5개가 있는 문항만 사용
-  return questions
-    .filter(q => q.choices && q.choices.length === 5)
-    .map(finalize);
-}
-
-function finalize(q) {
-  return {
-    number: q.number,
-    stem: String(q.stem || "").replace(/\s+/g, " ").trim(),
-    choices: (q.choices || []).map(c =>
-      String(c || "")
-        .replace(/\s+/g, " ")
-        .trim()
-    )
-  };
+  return { stem, choices };
 }
 
 function json(statusCode, obj) {
@@ -125,15 +127,15 @@ function json(statusCode, obj) {
     statusCode,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
     },
-    body: JSON.stringify(obj)
+    body: JSON.stringify(obj),
   };
 }
 
-function safeJson(str) {
+function safeJson(s) {
   try {
-    return JSON.parse(str || "{}");
+    return JSON.parse(s || "{}");
   } catch (_) {
     return {};
   }
