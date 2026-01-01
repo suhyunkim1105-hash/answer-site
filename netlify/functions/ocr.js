@@ -1,56 +1,80 @@
 // netlify/functions/ocr.js
-export const handler = async (event) => {
+// 입력: { image: "data:image/jpeg;base64,...", pageIndex, mode }
+// 출력: { ok:true, text, conf } 또는 { ok:false, error, detail }
+
+export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ error: "POST only" }) };
+      return json(405, { ok:false, error:"Method Not Allowed" });
     }
 
-    // ✅ 변수명 두 개 다 허용(네 Netlify에 OCR_SPACE_API_KEY로 되어있음)
-    const key = process.env.OCR_SPACE_API_KEY || process.env.OCR_SPACE_API_KEY;
-    const endpoint = process.env.OCR_SPACE_ENDPOINT || "https://apipro2.ocr.space/parse/image";
-
+    const key = process.env.OCR_SPACE_API_KEY;
     if (!key) {
-      return { statusCode: 500, body: JSON.stringify({ error: "Missing OCR_SPACE_API_KEY" }) };
+      return json(200, { ok:false, error:"Missing OCR_SPACE_API_KEY env var" });
     }
 
-    let body;
-    try { body = JSON.parse(event.body || "{}"); } catch { body = {}; }
+    const body = safeJson(event.body);
+    const img = String(body?.image || "");
+    if (!img.startsWith("data:image/")) {
+      return json(200, { ok:false, error:"Missing image dataUrl" });
+    }
 
-    const image = body.image;
-    if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
-      return { statusCode: 400, body: JSON.stringify({ error: "image (dataURL) required" }) };
+    const base64 = img.split(",")[1] || "";
+    if (base64.length < 1000) {
+      return json(200, { ok:false, error:"Image too small" });
     }
 
     const form = new URLSearchParams();
     form.set("apikey", key);
-    form.set("base64Image", image);
-    form.set("language", "eng");
-    form.set("OCREngine", "2");
-    form.set("scale", "true");
-    form.set("detectOrientation", "true");
-    form.set("isOverlayRequired", "false");
-    form.set("isTable", "false");
 
-    const resp = await fetch(endpoint, {
+    // ✅ 영어 시험 고정(정확도/안정성)
+    form.set("language", "eng");
+
+    form.set("isOverlayRequired", "false");
+    form.set("detectOrientation", "true");
+    form.set("scale", "true");
+    form.set("OCREngine", "2");
+
+    // OCR.Space는 이 형식 권장
+    form.set("base64Image", "data:image/jpeg;base64," + base64);
+
+    const resp = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: { "content-type":"application/x-www-form-urlencoded" },
       body: form.toString(),
     });
 
-    const data = await resp.json().catch(() => null);
+    const data = await resp.json().catch(()=>null);
     if (!resp.ok || !data) {
-      return { statusCode: 502, body: JSON.stringify({ error: "OCR endpoint failed" }) };
+      return json(200, { ok:false, error:"OCR.Space upstream error", detail: data || `HTTP ${resp.status}` });
     }
 
     if (data.IsErroredOnProcessing) {
-      return { statusCode: 502, body: JSON.stringify({ error: data.ErrorMessage || "OCR error" }) };
+      return json(200, { ok:false, error:"OCR.Space processing error", detail: data.ErrorMessage || data.ErrorDetails || "" });
     }
 
-    const parsed = data.ParsedResults?.[0];
-    const text = parsed?.ParsedText || "";
+    const text = String(data?.ParsedResults?.[0]?.ParsedText || "").trim();
 
-    return { statusCode: 200, body: JSON.stringify({ text }) };
+    // OCR.Space가 평균 conf를 안정적으로 제공하지 않아 길이 기반 휴리스틱
+    const conf = Math.max(0, Math.min(100, Math.round((text.length / 2600) * 100)));
+
+    return json(200, { ok:true, text, conf });
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message || "unknown" }) };
+    return json(200, { ok:false, error:String(e?.message || e) });
   }
-};
+}
+
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: {
+      "content-type":"application/json; charset=utf-8",
+      "cache-control":"no-store",
+    },
+    body: JSON.stringify(obj),
+  };
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s || "{}"); } catch { return {}; }
+}
