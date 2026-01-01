@@ -114,7 +114,6 @@
   <textarea id="ocrBox" readonly></textarea>
 
   <script>
-    // ---------- 공통 상태 ----------
     const logBox   = document.getElementById("log");
     const video    = document.getElementById("video");
     const canvas   = document.getElementById("canvas");
@@ -154,23 +153,26 @@
       return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // ---------- TTS ----------
+    // ----- TTS -----
+
     function pickKoreanVoice() {
-      const voices = window.speechSynthesis.getVoices() || [];
-      // 유나가 있으면 최우선
+      const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() || [] : [];
       const yuna = voices.find(v =>
         /유나/i.test(v.name || "") || /Yuna/i.test(v.name || "")
       );
       if (yuna) return yuna;
-      // ko-KR 아무거나
       const ko = voices.find(v => v.lang && v.lang.toLowerCase().startsWith("ko"));
       if (ko) return ko;
-      // 그래도 없으면 첫 번째
       return voices[0] || null;
     }
 
     function ensureTtsVoice() {
       return new Promise(resolve => {
+        if (!("speechSynthesis" in window)) {
+          log("speechSynthesis 미지원");
+          resolve(null);
+          return;
+        }
         let v = pickKoreanVoice();
         if (v) {
           ttsVoice = v;
@@ -178,7 +180,6 @@
           resolve(v);
           return;
         }
-        // 아직 로딩 안 된 경우
         window.speechSynthesis.onvoiceschanged = () => {
           v = pickKoreanVoice();
           if (v) {
@@ -190,17 +191,27 @@
       });
     }
 
-    function speakOnce(text) {
-      return new Promise(async resolve => {
-        if (!ttsVoice) {
-          await ensureTtsVoice();
-        }
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = "ko-KR";
-        u.rate = 0.9;
-        u.voice = ttsVoice || null;
-        u.onend = () => resolve();
+    async function speakOnce(text) {
+      if (!("speechSynthesis" in window)) return;
+      if (!ttsVoice) {
+        await ensureTtsVoice();
+      }
+      return new Promise(resolve => {
         try {
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = "ko-KR";
+          u.rate = 0.9;
+          u.voice = ttsVoice || null;
+
+          // iOS에서 onend가 안 오는 버그 대비: 일정 시간 지나면 강제 종료 후 resolve
+          const est = Math.max(1500, text.length * 80);
+          const timer = setTimeout(() => {
+            window.speechSynthesis.cancel();
+            resolve();
+          }, est);
+
+          u.onend = () => { clearTimeout(timer); resolve(); };
+          u.onerror = () => { clearTimeout(timer); resolve(); };
           window.speechSynthesis.speak(u);
         } catch (e) {
           console.warn("speech error", e);
@@ -223,9 +234,10 @@
         console.warn("AudioContext error", e);
       }
       await ensureTtsVoice();
-      await speakOnce("오디오 준비가 완료되었습니다.");
       audioReady = true;
-      log("오디오 준비 완료(버튼)");
+      log("오디오 준비 완료");
+      // 여기서는 대기하지 않고 그냥 한 번만 말하게 함 (버그 방지)
+      try { speakOnce("오디오 준비가 완료되었습니다."); } catch (_) {}
     }
 
     async function readAnswersRepeated() {
@@ -244,13 +256,14 @@
           const idx = answersMap[q];
           const ch = letters[idx - 1] || String(idx);
           await speakOnce(`${q}번 ${ch}`);
-          await delay(2000); // 답 사이 2초
+          await delay(2000); // 문항 사이 2초 간격
         }
-        await delay(3000); // 라운드 사이 3초
+        await delay(3000);
       }
     }
 
-    // ---------- 카메라 ----------
+    // ----- 카메라 & OCR -----
+
     async function startCamera() {
       if (mediaStream) return;
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -260,9 +273,7 @@
       }
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "environment"
-          },
+          video: { facingMode: "environment" },
           audio: false
         });
         video.srcObject = mediaStream;
@@ -289,18 +300,14 @@
       canvas.height = vh;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(video, 0, 0, vw, vh);
-      // JPEG 품질 0.8
       return canvas.toDataURL("image/jpeg", 0.8);
     }
 
-    // ---------- OCR ----------
     async function callOcr(imageDataUrl) {
       try {
         const resp = await fetch("/.netlify/functions/ocr", {
           method: "POST",
-          headers: {
-            "content-type": "application/json"
-          },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ image: imageDataUrl })
         });
         const data = await resp.json();
@@ -315,7 +322,8 @@
       return up.includes(STOP_TOKEN_1) || up.includes(STOP_TOKEN_2);
     }
 
-    // ---------- OCR 텍스트 → 문항 파싱 ----------
+    // ----- OCR 텍스트 → 문항 파싱 → solve 호출 -----
+
     function parseQuestionsFromOcr(allText) {
       const text = String(allText || "").replace(/\r/g, "");
       const lines = text.split("\n");
@@ -326,7 +334,7 @@
       for (let raw of lines) {
         const line = raw.trim();
         if (!line) continue;
-        const m = line.match(/^(\d{1,2})[). ]\s*(.*)$/); // "01 ..." / "1 ..."
+        const m = line.match(/^(\d{1,2})[). ]\s*(.*)$/);
         if (m) {
           const qn = parseInt(m[1], 10);
           if (qn >= 1 && qn <= 50) {
@@ -368,7 +376,6 @@
 
         let choices = choiceLines.slice(0, 5);
         if (choices.length < 5) {
-          // 폼이 어긋나면 마지막 5줄을 선택하는 fallback
           const nonEmpty = rawLines.map(x => x.trim()).filter(Boolean);
           choices = nonEmpty.slice(-5);
           stemLines.length = Math.max(0, nonEmpty.length - 5);
@@ -401,7 +408,7 @@
         const resp = await fetch("/.netlify/functions/solve", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ questions: questions })
+          body: JSON.stringify({ questions })
         });
         const data = await resp.json();
         if (!data.ok) {
@@ -418,7 +425,8 @@
       }
     }
 
-    // ---------- 자동 루프 ----------
+    // ----- 자동 OCR 루프 -----
+
     async function runAuto() {
       if (autoRunning) return;
       autoRunning = true;
@@ -468,7 +476,7 @@
             stopFound = true;
           }
 
-          await delay(500); // 샷 사이 0.5초
+          await delay(500);
         }
 
         if (bestText) {
@@ -505,11 +513,14 @@
     function stopAll() {
       autoRunning = false;
       stopCamera();
-      window.speechSynthesis.cancel();
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
       log("STOP");
     }
 
-    // ---------- 버튼 이벤트 ----------
+    // ----- 버튼 바인딩 -----
+
     btnAudio.addEventListener("click", () => {
       prepareAudio();
     });
@@ -526,7 +537,6 @@
       readAnswersRepeated();
     });
 
-    // iOS에서 첫 로딩 후 음성 엔진 준비용 (무음 모드/권한 문제는 사용자가 설정)
     log("대기 중");
   </script>
 </body>
