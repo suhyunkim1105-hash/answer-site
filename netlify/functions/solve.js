@@ -345,4 +345,3 @@ function json(statusCode, obj) {
 function safeJson(s) {
   try { return JSON.parse(s || "{}"); } catch (_) { return {}; }
 }
-
