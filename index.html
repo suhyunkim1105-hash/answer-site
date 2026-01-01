@@ -134,21 +134,19 @@
     let yunaVoice = null;
     let autoRunning = false;
 
-    const MAX_PAGES = 10;                   // 안전상 한도
-    const MAX_ATTEMPTS_PER_PAGE = 10;       // 페이지당 최대 재시도
-    const SHOTS_PER_ATTEMPT = 3;            // 한 번 시도할 때 몇 샷
-    const MIN_LEN_GOOD = 2500;              // "좋음" 기준 길이
-    const MIN_LEN_WEAK = 1200;              // "약하지만 쓸만함" 기준
-    const MIN_HITS_GOOD = 3;                // 선택지 히트 수 기준
+    const MAX_PAGES = 10;                    // 안전상 한도
+    const MAX_ATTEMPTS_PER_PAGE = 10;        // 페이지당 최대 재시도
+    const SHOTS_PER_ATTEMPT = 5;             // 한 번 시도에서 몇 샷
+    const MIN_LEN_STRICT = 2600;             // "좋음" 기준 길이
+    const MIN_LEN_OK = 1800;                 // "약하지만 쓸만함" 기준
     const STOP_TOKENS = ["XVRTH", "XURTH"];
 
-    // 페이지별 텍스트 및 품질
-    const pageData = new Map(); // page -> { text, len, hits, score, isStop }
-    let weakPages = [];         // 품질 애매한 페이지
-    let failedPages = [];       // 완전 실패한 페이지
+    const pageData = new Map();  // page -> { text, len, hits, score, isStop }
+    let weakPages = [];          // 품질 애매한 페이지
+    let failedPages = [];        // 완전 실패 페이지
     let stopPageIndex = null;
 
-    let lastAnswersText = "";   // 정답 TTS 다시 듣기용
+    let lastAnswersText = "";    // 정답 다시 듣기용
 
     // ===== 유틸 =====
     function nowStr() {
@@ -169,7 +167,7 @@
       return new Promise(res => setTimeout(res, ms));
     }
 
-    // ===== 오디오/TTS =====
+    // ===== 오디오 / TTS =====
     function initVoices() {
       const voices = window.speechSynthesis.getVoices() || [];
       yunaVoice = null;
@@ -180,7 +178,6 @@
         }
       }
       if (!yunaVoice) {
-        // 한국어 아무거나
         for (const v of voices) {
           if (v.lang === "ko-KR") {
             yunaVoice = v;
@@ -198,9 +195,7 @@
         utter.rate = opts.rate || 1.0;
         utter.pitch = 1.0;
         utter.volume = 1.0;
-        if (!yunaVoice) {
-          initVoices();
-        }
+        if (!yunaVoice) initVoices();
         if (yunaVoice) utter.voice = yunaVoice;
         window.speechSynthesis.speak(utter);
       } catch (e) {
@@ -214,7 +209,6 @@
           log("오디오 준비는 이미 완료됨.");
           return;
         }
-        // iOS용 AudioContext "언락"
         if (window.AudioContext || window.webkitAudioContext) {
           const AC = window.AudioContext || window.webkitAudioContext;
           const ctx = new AC();
@@ -291,7 +285,7 @@
         body: JSON.stringify(payload)
       });
       const data = await resp.json().catch(() => ({}));
-      return data; // { ok:true, text, conf } or { ok:false, error }
+      return data;
     }
 
     function includesStopToken(text) {
@@ -304,13 +298,10 @@
       const len = t.replace(/\s+/g, "").length;
 
       let hits = 0;
-      // ①②③④⑤
       const m1 = t.match(/[①②③④⑤]/g);
       if (m1) hits += m1.length;
-      // " 1) ", "2." 등
       const m2 = t.match(/\b[1-5]\s*[\)\.]/g);
       if (m2) hits += m2.length;
-      // "(1)" "(2)"
       const m3 = t.match(/\(\s*[1-5]\s*\)/g);
       if (m3) hits += m3.length;
 
@@ -318,9 +309,9 @@
       return { len, hits, score };
     }
 
-    // 페이지 한 번(여러 시도 포함) OCR
+    // 페이지 하나 OCR (여러 시도 포함)
     async function captureAndOcrPage(pageIndex, isRetryRound = false) {
-      let best = null; // { text, len, hits, score, isStop }
+      let best = null;        // { text, len, hits, score, isStop }
       let accepted = false;
       let isStopPage = false;
 
@@ -332,7 +323,7 @@
         for (let shot = 1; shot <= SHOTS_PER_ATTEMPT; shot++) {
           if (!autoRunning) return null;
 
-          await sleep(400); // 손 떨림 방지 약간의 딜레이
+          await sleep(400);
           let image;
           try {
             image = captureFrame();
@@ -361,7 +352,6 @@
           const hasStop = includesStopToken(text);
           log(`OCR OK page=${pageIndex} shot=${shot} len=${len} hits=${hits} score=${score.toFixed(1)}${hasStop ? " (STOP 후보)" : ""}`);
 
-          // 디버그 텍스트 누적
           ocrDebugEl.value += `\n\n[PAGE ${pageIndex} / shot ${shot}]\n` + text;
 
           const cur = { text, len, hits, score, isStop: hasStop };
@@ -369,7 +359,6 @@
             best = cur;
           }
 
-          // STOP 페이지만 있고 내용 거의 없을 때: 바로 인정
           if (hasStop && len <= 20) {
             isStopPage = true;
             accepted = true;
@@ -380,10 +369,17 @@
         if (!best) continue;
 
         if (!accepted && !isStopPage) {
-          if (best.len >= MIN_LEN_GOOD && best.hits >= MIN_HITS_GOOD) {
+          if (best.len >= MIN_LEN_STRICT) {
+            // 길이 충분 → 바로 정상 인정
             accepted = true;
+            log(`페이지 ${pageIndex} 품질 충분(len=${best.len}) → 이 샷 사용`);
+          } else if (best.len >= MIN_LEN_OK) {
+            // 좀 약하지만 쓸만함 → weak로 쓰고 더 이상 재시도 안 함
+            log(`페이지 ${pageIndex} 품질 약하지만 사용(len=${best.len}) → weak로 처리`);
+            break;
           } else {
-            log(`페이지 ${pageIndex} 품질 약함(len=${best.len}, hits=${best.hits}) → 재시도`);
+            // 너무 짧음 → 재시도 계속
+            log(`페이지 ${pageIndex} 텍스트 너무 짧음(len=${best.len}) → 재시도`);
           }
         }
 
@@ -398,13 +394,15 @@
 
       pageData.set(pageIndex, best);
 
-      if (!accepted && !best.isStop) {
-        log(`페이지 ${pageIndex} OCR 품질이 약하지만 일단 저장(len=${best.len}, hits=${best.hits}). (weak 목록에 추가)`);
+      if (best.len < MIN_LEN_OK && !best.isStop) {
+        failedPages.push(pageIndex);
+        log(`페이지 ${pageIndex} OCR 최종 실패(len=${best.len}).`);
+      } else if (!accepted && !best.isStop) {
         if (!weakPages.includes(pageIndex)) weakPages.push(pageIndex);
+        log(`페이지 ${pageIndex} OCR 품질이 약하지만 일단 사용(len=${best.len}). (weak 목록 추가)`);
       } else {
-        // 좋은 품질로 인정
         const tag = isRetryRound ? "재시도 성공" : "정상";
-        log(`페이지 ${pageIndex} OCR ${tag}: len=${best.len}, hits=${best.hits}, score=${best.score.toFixed(1)}${best.isStop ? " (STOP 포함)" : ""}`);
+        log(`페이지 ${pageIndex} OCR ${tag}: len=${best.len}, score=${best.score.toFixed(1)}${best.isStop ? " (STOP 포함)" : ""}`);
       }
 
       if (best.isStop) {
@@ -444,7 +442,7 @@
         return;
       }
 
-      // 1차: 페이지 1부터 STOP 나올 때까지
+      // 1차: 1페이지부터 STOP 나올 때까지
       for (let page = 1; page <= MAX_PAGES; page++) {
         if (!autoRunning) {
           log("사용자에 의해 중지됨.");
@@ -462,7 +460,6 @@
           log(`STOP 토큰 감지 (페이지 ${page}) → 이후 페이지는 촬영 안 함.`);
           break;
         } else {
-          // 다음 페이지 안내
           speak(`페이지 ${page} 촬영이 끝났습니다. 다음 페이지를 화면에 올려 주세요.`);
           await sleep(1500);
         }
@@ -478,17 +475,12 @@
       // 2차: weak 페이지 재시도
       if (weakPages.length > 0 && autoRunning) {
         log(`품질이 애매한 페이지(weak): ${weakPages.join(", ")} → 재촬영 시도`);
-        // 번호순으로
         weakPages.sort((a, b) => a - b);
         for (const page of weakPages.slice()) {
           if (!autoRunning) return;
           speak(`지금부터 페이지 ${page}를 다시 촬영하겠습니다. 해당 페이지를 화면에 올려 주세요.`);
           await sleep(3500);
-          const r = await captureAndOcrPage(page, true);
-          if (r && r.ok) {
-            // 재시도 후에도 품질이 나쁘면 weakPages에 그대로 남겨두고 사용
-            // 성공/실패 여부는 로그로만 안내
-          }
+          await captureAndOcrPage(page, true);
         }
       }
 
@@ -508,7 +500,6 @@
 
     async function solveAndSpeak(allText) {
       try {
-        // 1단계: 파싱
         const parseResp = await fetch("/.netlify/functions/parse-questions", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -530,7 +521,6 @@
 
         log(`문항 파싱 성공: ${questions.length}문항`);
 
-        // 2단계: 정답 계산
         const solveResp = await fetch("/.netlify/functions/solve", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -556,7 +546,7 @@
           return;
         }
 
-        const numToLetter = (n) => String.fromCharCode(64 + n); // 1→A, 2→B...
+        const numToLetter = (n) => String.fromCharCode(64 + n);
 
         let lineForLog = "";
         let lineForTts = "";
@@ -569,7 +559,6 @@
         lastAnswersText = lineForTts;
         log("정답: " + lineForLog.trim());
 
-        // 요청: 정답을 4회, 문항 사이 2초 간격으로 읽기
         speakAnswersMultiple(entries, 4);
 
       } catch (e) {
@@ -581,26 +570,22 @@
     function speakAnswersMultiple(entries, repeatCount) {
       const numToLetter = (n) => String.fromCharCode(64 + n);
 
-      // queue 방식으로 순차 재생
       let round = 0;
 
       const speakRound = () => {
         if (round >= repeatCount) return;
         round++;
 
-        // 한 라운드: 1번 A, (2초 쉬고) 2번 B, (2초) ...
         let idx = 0;
-
         const speakNext = () => {
           if (idx >= entries.length) {
-            // 라운드 끝나면 다음 라운드 예약
             setTimeout(speakRound, 1500);
             return;
           }
           const [q, c] = entries[idx++];
           const letter = numToLetter(c);
           speak(`${q}번 ${letter}`);
-          setTimeout(speakNext, 2000); // 문항 사이 2초
+          setTimeout(speakNext, 2000);
         };
 
         speakNext();
@@ -647,7 +632,6 @@
 
     btnReplay.addEventListener("click", replayAnswers);
 
-    // iOS에서 voice 초기화를 위해
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.onvoiceschanged = () => {
         if (!yunaVoice) initVoices();
