@@ -1,185 +1,139 @@
 // netlify/functions/parse-questions.js
-// OCR 전체 텍스트를 받아서 5지선다 문항 리스트로 변환한다.
-// 입력: { text: "..." }
-// 출력:
-//  - 성공: { ok:true, questions:[{ number, stem, choices:[...5개] }, ...] }
-//  - 실패: { ok:false, error:"...", detail?:any }
-
+// OCR 전체 텍스트 → { number, stem, choices[5] } 배열로 변환
 export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
     }
-
     const body = safeJson(event.body);
-    const text = String(body?.text || "").trim();
+    const raw =
+      (body && typeof body.ocrText === "string" && body.ocrText) ||
+      (body && typeof body.text === "string" && body.text) ||
+      "";
+    const text = String(raw).trim();
     if (!text) {
-      return json(400, { ok: false, error: "Missing text" });
+      return json(200, { ok: false, error: "Missing ocrText" });
     }
 
-    const questions = parseQuestionsFromText(text);
-
+    const questions = parseQuestions(text);
     if (!questions.length) {
-      return json(200, { ok: false, error: "No questions parsed" });
+      return json(200, {
+        ok: false,
+        error: "No questions parsed",
+        debug: { length: text.length }
+      });
     }
 
-    return json(200, { ok: true, questions });
+    return json(200, {
+      ok: true,
+      count: questions.length,
+      questions
+    });
   } catch (e) {
     return json(200, {
       ok: false,
-      error: String(e?.message || e || "Unknown parse error"),
+      error: e && e.message ? e.message : String(e)
     });
   }
 }
 
-/**
- * OCR 텍스트 → 문항 배열
- * - 성균관대/홍익대 편입 영어 스타일을 기준으로 설계
- * - 1~50번, 보기 5개 이상인 문항만 남긴다.
- */
-function parseQuestionsFromText(raw) {
-  // 1. STOP 토큰(XVRTH/XURTH) 이후 텍스트는 버린다.
-  let text = String(raw || "");
-  const stopIdx = findStopIndex(text);
-  if (stopIdx >= 0) {
-    text = text.slice(0, stopIdx);
-  }
+function normalize(text) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\u00b7/g, "·");
+}
 
-  // 2. 개행/공백 정리
-  text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-  // 3. 라인 단위로 파싱
-  const lines = text.split("\n").map((l) => l.trim());
-
-  const qRegex = /^(?:\(|\[)?\s*(0?[1-9]|[1-4]\d|50)[\.\)\]\-]?\s*(.*)$/;
-  // 보기 줄: ①~⑤, 1~5, A~E, 특수기호(®, ©, •, @, ^) 등을 모두 허용
-  const choiceRegex = /^\s*([①-⑤1-5A-Ea-e•@©®\^])[\).\s]+(.+)$/;
+function parseQuestions(raw) {
+  const text = normalize(raw);
+  const lines = text
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0);
 
   const questions = [];
-  let current = null;
+  let cur = null;
 
-  for (let rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
+  const numRe = /^(\d{1,2})\s+(.*)$/;
+  const choiceRe = /^((?:[•·\-\u2022\u00b7①②③④⑤@©®\*])|(?:[1-5]\)))[\s\.]*(.+)$/;
 
-    // 문항 시작 줄인지 확인
-    const qm = line.match(qRegex);
-    if (qm) {
-      const num = Number(qm[1]);
-      const rest = qm[2]?.trim() || "";
-
-      // 기존 문항 있으면 push
-      if (current) {
-        finalizeQuestion(current, questions);
-      }
-
-      current = {
-        number: num,
-        stem: rest,
-        choices: [],
-      };
+  for (const line of lines) {
+    if (/X[UV]RTH/i.test(line)) {
+      // 마지막 페이지 STOP 토큰은 버린다.
       continue;
     }
 
-    // 보기 줄인지 확인
-    if (current) {
-      const cm = line.match(choiceRegex);
-      if (cm) {
-        const choiceText = cm[2]?.trim() || "";
-        if (choiceText) {
-          current.choices.push(choiceText);
-        }
+    let m = line.match(numRe);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      if (num >= 1 && num <= 50) {
+        if (cur) questions.push(finalize(cur));
+        cur = { number: num, stem: (m[2] || "").trim(), choices: [] };
         continue;
       }
+    }
 
-      // 보기 줄도, 새 문항도 아니면
-      // 아직 보기 수가 0이면 → 지문(stem)의 연속 줄로 본다.
-      if (!current.choices.length) {
-        current.stem = (current.stem + " " + line).trim();
+    if (!cur) continue;
+
+    m = line.match(choiceRe);
+    if (m) {
+      const choiceText = (m[2] || "").trim();
+      if (!choiceText) continue;
+      if (cur.choices.length < 5) {
+        cur.choices.push(choiceText);
       } else {
-        // 이미 보기들을 모으는 중이면 → 마지막 보기의 이어지는 줄로 취급
-        const lastIdx = current.choices.length - 1;
-        current.choices[lastIdx] =
-          (current.choices[lastIdx] + " " + line).trim();
+        // 5개를 이미 넘으면 마지막 선택지에 이어 붙인다.
+        const last = cur.choices.length - 1;
+        cur.choices[last] = (cur.choices[last] + " " + choiceText).trim();
       }
+      continue;
+    }
+
+    // 보기도, 번호도 아닌 줄: 질문 본문이나 보기의 다음 줄
+    if (cur.choices.length === 0) {
+      cur.stem = (cur.stem + " " + line).trim();
+    } else {
+      const last = cur.choices.length - 1;
+      cur.choices[last] = (cur.choices[last] + " " + line).trim();
     }
   }
 
-  // 마지막 문항 처리
-  if (current) {
-    finalizeQuestion(current, questions);
-  }
+  if (cur) questions.push(finalize(cur));
 
-  // 4. 후처리: 번호 1~50, 보기 5개 이상인 문항만 남기기
-  const cleaned = questions
-    .filter(
-      (q) =>
-        Number.isFinite(q.number) &&
-        q.number >= 1 &&
-        q.number <= 50 &&
-        Array.isArray(q.choices) &&
-        q.choices.filter((c) => c && c.length > 0).length >= 4 // 최소 4개 이상
+  // 보기 5개가 있는 문항만 사용
+  return questions
+    .filter(q => q.choices && q.choices.length === 5)
+    .map(finalize);
+}
+
+function finalize(q) {
+  return {
+    number: q.number,
+    stem: String(q.stem || "").replace(/\s+/g, " ").trim(),
+    choices: (q.choices || []).map(c =>
+      String(c || "")
+        .replace(/\s+/g, " ")
+        .trim()
     )
-    .map((q) => {
-      const dedupChoices = q.choices.filter((c) => c && c.length > 0);
-      // 보기 최대 5개까지만 사용
-      return {
-        number: q.number,
-        stem: q.stem.trim(),
-        choices: dedupChoices.slice(0, 5),
-      };
-    });
-
-  // 혹시 같은 번호가 여러 번 생겼으면, "보기 수가 많은 것" 우선으로 하나만 남김
-  const byNumber = new Map();
-  for (const q of cleaned) {
-    const prev = byNumber.get(q.number);
-    if (!prev || q.choices.length > prev.choices.length) {
-      byNumber.set(q.number, q);
-    }
-  }
-
-  // 번호 기준 정렬
-  return Array.from(byNumber.values()).sort((a, b) => a.number - b.number);
+  };
 }
 
-// STOP 토큰(XVRTH/XURTH)이 처음 나타나는 위치를 찾는다.
-function findStopIndex(text) {
-  if (!text) return -1;
-  const upper = String(text).toUpperCase();
-  const idx1 = upper.indexOf("XVRTH");
-  const idx2 = upper.indexOf("XURTH");
-  if (idx1 === -1 && idx2 === -1) return -1;
-  if (idx1 === -1) return idx2;
-  if (idx2 === -1) return idx1;
-  return Math.min(idx1, idx2);
-}
-
-// 현재 문항을 questions 배열에 넣기 전에 가볍게 정리
-function finalizeQuestion(current, questions) {
-  if (!current) return;
-  current.stem = (current.stem || "").trim();
-  current.choices = Array.isArray(current.choices) ? current.choices : [];
-  // stem이 거의 없으면(헤더 줄 같은 것) 버린다.
-  if (!current.stem) return;
-  questions.push(current);
-}
-
-// 공통 JSON 응답 유틸
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
+      "cache-control": "no-store"
     },
-    body: JSON.stringify(obj),
+    body: JSON.stringify(obj)
   };
 }
 
-function safeJson(s) {
+function safeJson(str) {
   try {
-    return JSON.parse(s || "{}");
+    return JSON.parse(str || "{}");
   } catch (_) {
     return {};
   }
