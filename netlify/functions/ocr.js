@@ -1,6 +1,6 @@
 // netlify/functions/ocr.js
-// OCR.Space 호출. 업스트림 에러 원문을 최대한 그대로 내려줘서 원인 파악 가능하게 함.
-// ✅ JSON으로 dataURL(base64) 받아서 OCR.Space에 base64Image로 전달 (multipart 파싱 불필요)
+// OCR.Space 호출 (PRO 엔드포인트 지원)
+// ✅ JSON으로 dataURL(base64) 받아서 OCR.Space에 base64Image로 전달
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -12,11 +12,14 @@ exports.handler = async (event) => {
       return json(405, { ok: false, error: "POST only" });
     }
 
-    // ✅ 공백/개행 섞여도 invalid 뜨는 경우 많아서 trim
-    const apiKey = String(process.env.OCR_SPACE_API_KEY || "").trim();
+    const apiKey = (process.env.OCR_SPACE_API_KEY || "").trim();
     if (!apiKey) {
       return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
+
+    // ✅ PRO 엔드포인트 기본값을 api-pro1로 둠 (너는 PRO 키 사용중)
+    const endpoint = (process.env.OCR_SPACE_API_ENDPOINT || "https://api-pro1.ocr.space/parse/image").trim();
+    const timeoutMs = Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000);
 
     let body = {};
     try {
@@ -26,9 +29,7 @@ exports.handler = async (event) => {
     }
 
     const page = body.page !== undefined ? body.page : 1;
-
-    // 기대 입력: { image: "data:image/jpeg;base64,..." }
-    const image = String(body.image || body.dataUrl || "").trim();
+    const image = (body.image || body.dataUrl || "").toString();
 
     if (!image || !image.startsWith("data:image/")) {
       return json(400, {
@@ -51,25 +52,36 @@ exports.handler = async (event) => {
     let lastRaw = "";
 
     for (let i = 0; i < maxTries; i++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
       try {
-        const res = await fetch("https://api.ocr.space/parse/image", {
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: payload.toString(),
+          signal: controller.signal,
         });
+
+        clearTimeout(timer);
 
         lastRaw = await res.text().catch(() => "");
         let data = null;
         try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
 
-        // ✅ 403이면 거의 항상 키 문제. 즉시 명확히 반환
+        // ✅ 403에서 가장 흔한 실수: PRO 키인데 무료 endpoint를 호출
         if (res.status === 403) {
-          return json(502, {
+          const raw = (lastRaw || "").slice(0, 200);
+          return json(403, {
             ok: false,
             error: "OCR.Space upstream error",
             detail: "OCR.Space HTTP 403 (API key invalid or forbidden)",
-            raw: String(lastRaw || "").slice(0, 1500),
-            hint: "Check Netlify env var OCR_SPACE_API_KEY (Key must be OCR_SPACE_API_KEY, Value must be the exact OCR.Space key, no spaces). Then redeploy.",
+            raw,
+            hint:
+              "1) PRO 키면 endpoint가 반드시 api-pro1/api-pro2 여야 함. " +
+              "2) Netlify env OCR_SPACE_API_ENDPOINT 확인. " +
+              "3) OCR_SPACE_API_KEY 값에 공백/줄바꿈 없는지 확인 후 재배포.",
+            debug: { endpointUsed: endpoint },
           });
         }
 
@@ -86,10 +98,7 @@ exports.handler = async (event) => {
         }
 
         if (data.IsErroredOnProcessing) {
-          const msg =
-            (Array.isArray(data.ErrorMessage) && data.ErrorMessage.join(" | ")) ||
-            data.ErrorDetails ||
-            "OCR.Space processing error";
+          const msg = (data.ErrorMessage && data.ErrorMessage.join(" | ")) || data.ErrorDetails || "OCR.Space processing error";
           lastErr = msg;
           if (i < maxTries - 1) await sleep(350 * (i + 1));
           continue;
@@ -105,6 +114,7 @@ exports.handler = async (event) => {
           hits: countQuestionPatterns(text),
           debug: {
             page,
+            endpointUsed: endpoint,
             ocrSpace: {
               exitCode: data.OCRExitCode,
               processingTimeInMilliseconds: data.ProcessingTimeInMilliseconds,
@@ -112,6 +122,7 @@ exports.handler = async (event) => {
           },
         });
       } catch (e) {
+        clearTimeout(timer);
         lastErr = (e && e.message) ? e.message : String(e);
         if (i < maxTries - 1) await sleep(350 * (i + 1));
       }
@@ -121,7 +132,8 @@ exports.handler = async (event) => {
       ok: false,
       error: "OCR.Space upstream error",
       detail: lastErr || "Unknown",
-      raw: String(lastRaw || "").slice(0, 1500),
+      raw: (lastRaw || "").slice(0, 1500),
+      debug: { endpointUsed: endpoint },
     });
   } catch (err) {
     return json(500, {
