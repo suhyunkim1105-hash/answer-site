@@ -1,87 +1,147 @@
 // netlify/functions/solve.js
 // 입력: { page, ocrText }
-// 출력: { ok, text, usedNumbers, unsure, model }
+// 출력: { ok, text, model, usedNumbers, unsure }
 
 const fetch = globalThis.fetch;
 
-function normalize(s) {
+function normalizeOcrMinimal(s) {
   if (!s) return "";
-  return String(s)
+  let t = String(s)
     .replace(/\r\n/g, "\n")
     .replace(/\u00A0/g, " ")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[‐-‒–—]/g, "-")
-    .replace(/[①]/g, "1").replace(/[②]/g, "2").replace(/[③]/g, "3").replace(/[④]/g, "4").replace(/[⑤]/g, "5")
+    .replace(/[<>〔〕【】]/g, " ") // OCR이 꺾쇠로 섞어버리는 경우 완화
     .replace(/\s+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+
+  // 1) "16.16." 같은 중복번호 → "16."
+  t = t.replace(/\b(\d{1,2})\.\s*\1\./g, "$1.");
+
+  // 2) "11.17." 같이 번호가 붙어서 나오는 케이스 → 줄바꿈 삽입
+  //    (단, 13.000 같은 소수/천단위와 겹치지 않게: "숫자.숫자." 형태만)
+  t = t.replace(/\b(\d{1,2})\.(\d{1,2})\./g, (m, a, b) => `${a}.\n${b}.`);
+
+  // 3) "O4"처럼 알파 O로 들어오는 케이스
+  t = t.replace(/\bO(\d)\b/g, "$1");
+
+  return t.trim();
 }
 
-function findQuestionMarkers(text) {
-  const t = "\n" + text;
-  // 줄 시작에 가까운 번호 패턴들만 잡음 (연도/숫자 노이즈 최소화)
-  const re = /(?:\n)\s*(\d{1,2})\s*(?:[.\)]\s*(?:\1\s*[.\)])?)?/g;
-
-  let m;
-  const hits = [];
-  const seen = new Set();
-  while ((m = re.exec(t))) {
-    const n = Number(m[1]);
-    if (n >= 1 && n <= 50 && !seen.has(n)) {
-      seen.add(n);
-      // index는 원문 기준으로 맞추기 위해 -1 (앞에 붙인 \n 보정)
-      hits.push({ n, idx: Math.max(0, m.index - 1) });
+function detectSectionTargetNumbers(text) {
+  // 1) 헤더가 있으면 그걸 최우선
+  const header = text.match(/\[(\d{1,2})\s*-\s*(\d{1,2})\]/);
+  if (header) {
+    const a = Number(header[1]), b = Number(header[2]);
+    if (a >= 1 && b <= 50 && a < b) {
+      return range(a, b);
     }
   }
-  hits.sort((a,b) => a.idx - b.idx);
-  return hits;
+
+  // 2) 숫자 감지 기반으로 섹션 추정
+  const nums = extractQuestionNumbers(text);
+  const has11to20 = nums.some(n => n >= 11 && n <= 20);
+  const has1to10 = nums.some(n => n >= 1 && n <= 10);
+
+  // 성균관대 영어는 보통 1~20이 1페이지에 몰리는 경우가 많아서
+  // 11~20이 보이면 11~20으로 강제하는 게 누락 방지에 유리함
+  if (has11to20) return range(11, 20);
+  if (has1to10) return range(1, 10);
+
+  // 감지 실패 시 최소 안전: 1~20
+  return range(1, 20);
 }
 
-function extractBlocks(text, maxChars = 9000) {
-  const markers = findQuestionMarkers(text);
-  if (markers.length === 0) {
-    // 문항 번호를 못 잡으면 텍스트 일부만 잘라서라도 보냄
-    return { usedNumbers: [], blocksText: text.slice(0, maxChars) };
-  }
+function range(a, b) {
+  const out = [];
+  for (let i = a; i <= b; i++) out.push(i);
+  return out;
+}
 
-  const blocks = [];
-  for (let i = 0; i < markers.length; i++) {
-    const start = markers[i].idx;
-    const end = (i + 1 < markers.length) ? markers[i+1].idx : text.length;
+function extractQuestionNumbers(text) {
+  // 줄 시작/줄 중간 모두에서 "13." 같은 패턴을 최대한 잡음
+  const re = /(?:^|\n|\s)(\d{1,2})\s*\./g;
+  const seen = new Set();
+  let m;
+  while ((m = re.exec(text))) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 50) seen.add(n);
+  }
+  return Array.from(seen).sort((a, b) => a - b);
+}
+
+function buildBlocks(text, targetNumbers) {
+  // targetNumbers 위치 찾아서 block 잘라내기
+  const positions = [];
+  for (const n of targetNumbers) {
+    // "13." 또는 "13 ." 또는 "13. 13." 같은 케이스 포함
+    const re = new RegExp(`(?:^|\\n|\\s)(${n})\\s*\\.`, "g");
+    const m = re.exec(text);
+    if (m) positions.push({ n, idx: m.index });
+  }
+  positions.sort((a, b) => a.idx - b.idx);
+
+  const blocks = new Map();
+  for (let i = 0; i < positions.length; i++) {
+    const cur = positions[i];
+    const next = positions[i + 1];
+    const start = cur.idx;
+    const end = next ? next.idx : Math.min(text.length, start + 4000); // 너무 길면 컷
     const chunk = text.slice(start, end).trim();
-    // 너무 짧은/의미없는 조각 제거
-    if (chunk.length >= 30) blocks.push({ n: markers[i].n, chunk });
+    blocks.set(cur.n, chunk);
+  }
+  return blocks;
+}
+
+function guessDefaultForNumber(n) {
+  // 기본 찍기값 (너가 말한 "무조건 답" 원칙)
+  // 보통 ①~⑤에서 ③이 중앙값이라 최소 손해 전략
+  return "3";
+}
+
+function parseModelAnswers(raw, targetNumbers) {
+  const ans = new Map();
+  const unsure = new Set();
+
+  const lines = String(raw || "").split(/\n+/).map(s => s.trim()).filter(Boolean);
+  for (const line of lines) {
+    // "14: 3" 또는 "14 - 3" 또는 "14) 3"
+    const m = line.match(/^(\d{1,2})\s*[:\-\)]\s*([1-5A-E])\b/i);
+    if (!m) continue;
+    const n = Number(m[1]);
+    let v = m[2].toUpperCase();
+
+    // 혹시 A-E로 나오면 1-5로 변환 (성균관대 정답표가 번호라서)
+    if (["A", "B", "C", "D", "E"].includes(v)) {
+      v = String("ABCDE".indexOf(v) + 1);
+    }
+
+    if (targetNumbers.includes(n)) ans.set(n, v);
   }
 
-  // 너무 길면 앞에서부터 누적해서 maxChars까지만
-  let out = "";
-  const usedNumbers = [];
-  for (const b of blocks) {
-    const add = `\n\n[Q${b.n}]\n${b.chunk}`;
-    if ((out.length + add.length) > maxChars) break;
-    out += add;
-    usedNumbers.push(b.n);
+  // UNSURE 라인 파싱 (있으면)
+  const u = String(raw || "").match(/UNSURE\s*:\s*([0-9,\s]+)/i);
+  if (u) {
+    const list = u[1].split(",").map(s => Number(s.trim())).filter(n => n >= 1 && n <= 50);
+    for (const n of list) unsure.add(n);
   }
 
-  return { usedNumbers, blocksText: out.trim() };
+  // 누락은 무조건 찍고 unsure로
+  for (const n of targetNumbers) {
+    if (!ans.has(n)) {
+      ans.set(n, guessDefaultForNumber(n));
+      unsure.add(n);
+    }
+  }
+
+  return { ans, unsure: Array.from(unsure).sort((a, b) => a - b) };
 }
 
-function mapChoiceToNumber(v) {
-  const s = String(v).trim().toUpperCase();
-  if (/^[1-5]$/.test(s)) return Number(s);
-  if (/^[A-E]$/.test(s)) return "ABCDE".indexOf(s) + 1;
-  return null;
-}
+async function callOpenRouter({ model, prompt, stopToken, timeoutMs }) {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) throw new Error("ServerMisconfig: OPENROUTER_API_KEY missing");
 
-function formatAnswers(answerMap, unsureList, stopToken) {
-  const nums = Object.keys(answerMap).map(Number).sort((a,b)=>a-b);
-  const lines = nums.map(n => `${n}: ${answerMap[n]}`);
-  const unsure = unsureList.length ? `UNSURE: ${unsureList.sort((a,b)=>a-b).join(",")}` : `UNSURE: -`;
-  return `${lines.join("\n")}\n${unsure}\n${stopToken}`;
-}
-
-async function callOpenRouter({ model, apiKey, stopToken, promptText, timeoutMs }) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
 
@@ -89,37 +149,27 @@ async function callOpenRouter({ model, apiKey, stopToken, promptText, timeoutMs 
     const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${key}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model,
-        temperature: 0,
-        top_p: 1,
-        max_tokens: 220,             // 정답만: 아주 작게
-        stop: [stopToken],
+        temperature: 0.0,
+        max_tokens: 300,
+        stop: stopToken ? [stopToken] : undefined,
         messages: [
           {
             role: "system",
             content:
-              "You are an exam answer-key generator. " +
-              "Always output an answer for every question number provided, never leave blank. " +
-              "If uncertain, still guess but list those numbers in UNSURE at the end."
+              "You are a precise multiple-choice answer key generator for Sungkyunkwan University transfer English.\n" +
+              "Rules:\n" +
+              "- Output MUST include an answer for every requested question number.\n" +
+              "- Output format: one per line: \"N: 1-5\" (numbers only).\n" +
+              "- If you are not confident, still choose, and list that N in the final UNSURE line.\n" +
+              "- Final line: \"UNSURE: ...\" (comma-separated) or \"UNSURE: -\".\n" +
+              "- Do not output anything else."
           },
-          {
-            role: "user",
-            content:
-              "Return ONLY numeric choices 1-5.\n" +
-              "If options are A-E, map A=1,B=2,C=3,D=4,E=5.\n\n" +
-              "Answer all questions contained in the OCR blocks below.\n" +
-              "Output format:\n" +
-              "13: 2\n" +
-              "14: 4\n" +
-              "...\n" +
-              "UNSURE: 13,18\n" +
-              stopToken + "\n\n" +
-              "OCR BLOCKS:\n" + promptText
-          }
+          { role: "user", content: prompt }
         ]
       }),
       signal: ac.signal
@@ -127,41 +177,13 @@ async function callOpenRouter({ model, apiKey, stopToken, promptText, timeoutMs 
 
     const data = await resp.json().catch(() => null);
     if (!resp.ok || !data) {
-      const msg = data?.error?.message || data?.message || `HTTP ${resp.status}`;
-      throw new Error(msg);
+      throw new Error(`HTTP ${resp.status}: OpenRouter error`);
     }
-
     const text = data.choices?.[0]?.message?.content || "";
     return text;
   } finally {
     clearTimeout(t);
   }
-}
-
-function parseModelOutput(text) {
-  const out = String(text || "");
-  const lines = out.split(/\n+/).map(s => s.trim()).filter(Boolean);
-
-  const answers = {};
-  const unsure = new Set();
-
-  for (const line of lines) {
-    // "13: 2" or "13 - B"
-    const m = line.match(/^(\d{1,2})\s*[:\-]\s*([1-5A-E])\b/i);
-    if (m) {
-      const q = Number(m[1]);
-      const v = mapChoiceToNumber(m[2]);
-      if (q >= 1 && q <= 50 && v) answers[q] = v;
-      continue;
-    }
-    const u = line.match(/^UNSURE\s*:\s*(.*)$/i);
-    if (u) {
-      const nums = (u[1] || "").split(/[, ]+/).map(x => Number(x)).filter(n => n>=1 && n<=50);
-      nums.forEach(n => unsure.add(n));
-    }
-  }
-
-  return { answers, unsure: Array.from(unsure) };
 }
 
 exports.handler = async (event) => {
@@ -171,93 +193,73 @@ exports.handler = async (event) => {
     }
 
     const body = JSON.parse(event.body || "{}");
-    const raw = body.ocrText || "";
+    const page = Number(body.page || 1);
+    const rawOcr = body.ocrText || "";
+
+    const ocrText = normalizeOcrMinimal(rawOcr);
+    if (!ocrText) {
+      return { statusCode: 200, body: JSON.stringify({ ok: true, text: "UNSURE: -\nXURTH", usedNumbers: [], unsure: [] }) };
+    }
+
+    const targetNumbers = detectSectionTargetNumbers(ocrText);
+    const blocks = buildBlocks(ocrText, targetNumbers);
+
+    // 모델에 너무 긴 본문을 주지 말고, "타겟 블록 위주"로 전달
+    const parts = [];
+    parts.push(`TARGET QUESTIONS: ${targetNumbers[0]}-${targetNumbers[targetNumbers.length - 1]}`);
+    parts.push("");
+    for (const n of targetNumbers) {
+      const b = blocks.get(n);
+      if (b) {
+        parts.push(`Q${n}:\n${b}\n`);
+      }
+    }
+    // 블록이 거의 없으면 전체 OCR도 조금 넣어줌
+    if (parts.join("\n").length < 800) {
+      parts.push("\nFULL OCR (fallback):\n" + ocrText.slice(0, 6000));
+    }
+
+    const model = process.env.MODEL_NAME || "openai/gpt-5.1";
     const stopToken = process.env.STOP_TOKEN || "XURTH";
 
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerMisconfig: missing OpenRouter key" }) };
-    }
+    const prompt = parts.join("\n");
 
-    const modelPrimary = process.env.MODEL_NAME || "openai/gpt-5.1";
-    const modelFallback = process.env.FALLBACK_MODEL || "openai/gpt-4.1-mini"; // 빠른 탈출용
-
-    const text = normalize(raw);
-
-    // 1) 문항 블록만 추출해서 토큰/시간 줄이기
-    const { usedNumbers, blocksText } = extractBlocks(text, 9000);
-
-    // 2) 질문 번호를 못 잡아도 일단 진행 (무조건 답 출력)
-    const targetNumbers = (usedNumbers.length ? usedNumbers : findQuestionMarkers(text).map(x => x.n));
-    const uniqueTargets = Array.from(new Set(targetNumbers)).filter(n => n>=1 && n<=50).sort((a,b)=>a-b);
-
-    // 타겟이 0이면: 어쩔 수 없이 1~20 같은 범위도 못 정함 -> 빈 배열로 둠
-    // 대신 모델에 전체 블록 보내고, 파싱 안 되면 휴리스틱 채움
-    const promptText = blocksText || text.slice(0, 9000);
-
-    let modelUsed = modelPrimary;
-    let modelText = "";
-    let parsed = null;
-
-    // 3) 1차 모델(짧은 타임아웃). 실패하면 fallback
+    // OpenRouter 호출 (타임아웃은 짧게, 실패하면 로컬로 전부 찍기)
+    let raw;
     try {
-      modelText = await callOpenRouter({
-        model: modelPrimary,
-        apiKey,
-        stopToken,
-        promptText,
-        timeoutMs: 17000
-      });
-      parsed = parseModelOutput(modelText);
-    } catch (e1) {
-      try {
-        modelUsed = modelFallback;
-        modelText = await callOpenRouter({
-          model: modelFallback,
-          apiKey,
-          stopToken,
-          promptText,
-          timeoutMs: 12000
-        });
-        parsed = parseModelOutput(modelText);
-      } catch (e2) {
-        parsed = { answers: {}, unsure: [] };
-      }
+      raw = await callOpenRouter({ model, prompt, stopToken, timeoutMs: 20000 });
+    } catch (e) {
+      raw = ""; // 아래에서 전부 디폴트 찍기
     }
 
-    // 4) “항상 답 출력” 보장: 빠진 문항은 3(C)로 채우고 UNSURE에 넣음
-    const answerMap = {};
-    const unsureSet = new Set(parsed.unsure || []);
+    const { ans, unsure } = parseModelAnswers(raw, targetNumbers);
 
-    // 타겟 번호가 없으면: 모델이 준 것만이라도 내보내되, 최소한 1~20은 채워주는 게 낫다
-    const finalTargets = uniqueTargets.length ? uniqueTargets : Object.keys(parsed.answers).map(Number);
-
-    // 그래도 아무것도 없으면: 1~20 채움(최소 안전망)
-    const safeTargets = finalTargets.length ? finalTargets : Array.from({ length: 20 }, (_,i)=>i+1);
-
-    for (const q of safeTargets) {
-      const v = parsed.answers[q];
-      if (v && v>=1 && v<=5) {
-        answerMap[q] = v;
-      } else {
-        answerMap[q] = 3;
-        unsureSet.add(q);
-      }
+    // 출력 텍스트 구성
+    const lines = [];
+    const usedNumbers = [];
+    for (const n of targetNumbers) {
+      const v = ans.get(n);
+      lines.push(`${n}: ${v}`);
+      usedNumbers.push(n);
     }
-
-    const outText = formatAnswers(answerMap, Array.from(unsureSet), stopToken);
+    lines.push(`UNSURE: ${unsure.length ? unsure.join(",") : "-"}`);
+    lines.push(stopToken);
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
-        text: outText,
-        model: modelUsed,
-        usedNumbers: safeTargets,
-        unsure: Array.from(unsureSet).sort((a,b)=>a-b)
+        text: lines.join("\n"),
+        model,
+        usedNumbers,
+        unsure
       })
     };
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) }) };
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) })
+    };
   }
 };
+
