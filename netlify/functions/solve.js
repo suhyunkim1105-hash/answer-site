@@ -1,5 +1,7 @@
 // netlify/functions/solve.js
 
+const MODEL_NAME = process.env.MODEL_NAME || 'openai/gpt-4.1';
+
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== 'POST') {
@@ -107,7 +109,7 @@ exports.handler = async (event) => {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'openai/gpt-4o-mini',
+          model: MODEL_NAME,
           temperature: 0,
           messages: [
             { role: 'system', content: systemPrompt },
@@ -143,7 +145,7 @@ exports.handler = async (event) => {
       text: answerText.trim(),
       debug: {
         page,
-        model: 'openai/gpt-4o-mini',
+        model: MODEL_NAME,
         questionNumbers: parsed.questionNumbers,
         answers: parsed.answers,
         ocrTextPreview: ocrText.slice(0, 500),
