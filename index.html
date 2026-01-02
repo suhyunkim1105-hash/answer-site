@@ -3,292 +3,197 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Answer Site</title>
+  <title>answer-site</title>
   <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, "Noto Sans KR", sans-serif;
-      background: #0b0f17;
-      color: #e8edf7;
-    }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
-    .card {
-      background: #121a2a;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 14px;
-      padding: 14px;
-      margin-bottom: 14px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-    }
-    h2 { margin: 0 0 10px; font-size: 18px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    button {
-      border: 0;
-      border-radius: 12px;
-      padding: 10px 14px;
-      font-weight: 700;
-      cursor: pointer;
-      background: #2b6cff;
-      color: white;
-    }
-    button.secondary { background: #2a3350; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    input {
-      border-radius: 10px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(0,0,0,0.25);
-      color: #e8edf7;
-      padding: 10px 12px;
-      width: 110px;
-      font-weight: 700;
-    }
-    video {
-      width: 100%;
-      max-height: 55vh;
-      border-radius: 14px;
-      background: #000;
-      border: 1px solid rgba(255,255,255,0.08);
-    }
-    textarea {
-      width: 100%;
-      min-height: 140px;
-      resize: vertical;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(0,0,0,0.25);
-      color: #e8edf7;
-      padding: 10px 12px;
-      box-sizing: border-box;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      line-height: 1.35;
-      font-size: 13px;
-    }
-    .hint { opacity: 0.85; font-size: 13px; line-height: 1.5; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", Arial, sans-serif; background:#0b0f14; color:#e6eef6; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 16px; }
+    .card { background:#121a23; border:1px solid #1f2a36; border-radius:14px; padding:14px; margin-bottom:12px; }
+    h2 { margin: 0 0 10px 0; font-size: 18px; }
+    button { appearance:none; border:0; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; }
+    button.primary { background:#2d6cdf; color:white; }
+    button.secondary { background:#243244; color:#e6eef6; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    input { background:#0f1620; color:#e6eef6; border:1px solid #233244; border-radius:10px; padding:10px; width: 80px; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    video, img { width: 100%; border-radius: 12px; background:#000; }
+    pre { white-space: pre-wrap; word-break: break-word; background:#0f1620; border:1px solid #233244; border-radius:12px; padding:12px; margin: 10px 0 0 0; }
+    .muted { color:#9bb0c6; font-size: 13px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <h2>카메라</h2>
-      <div class="row" style="margin-bottom:10px;">
-        <button id="btn-start">카메라 시작</button>
-        <button id="btn-capture" class="secondary" disabled>현재 페이지 촬영</button>
-
-        <span style="opacity:0.9;">현재 페이지</span>
-        <input id="page-input" type="number" min="1" max="50" value="1" />
+      <div class="row">
+        <button id="btnStart" class="primary">카메라 시작</button>
+        <button id="btnCapture" class="secondary" disabled>현재 페이지 촬영</button>
+        <span class="muted">현재 페이지</span>
+        <input id="pageInput" type="number" min="1" value="1" />
       </div>
-
-      <video id="video" playsinline autoplay muted></video>
-      <canvas id="capture-canvas" style="display:none;"></canvas>
-
-      <div class="hint" style="margin-top:10px;">
+      <div style="margin-top:12px;">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+      </div>
+      <div class="muted" style="margin-top:10px;">
         ① 시험지를 화면에 꽉 채우고<br/>
-        ② 번호/보기까지 모두 나오게 맞춘 다음<br/>
-        ③ <b>현재 페이지 촬영</b> 버튼을 누르면 돼.
+        ② 글자/문항번호/보기까지 선명하게 보이게 맞춘 뒤<br/>
+        ③ “현재 페이지 촬영”을 누르면 OCR → 정답 생성 순으로 진행.
       </div>
     </div>
 
     <div class="card">
       <h2>로그</h2>
-      <textarea id="log" readonly></textarea>
+      <pre id="log"></pre>
     </div>
 
     <div class="card">
-      <h2>OCR 확인</h2>
-      <div class="hint" style="margin-bottom:8px;">
-        아래에 OCR 결과 원문이 그대로 찍힘. 여기 보고 “글자가 잘 읽히는지” 즉시 확인해.
-      </div>
-      <textarea id="ocr-output" readonly></textarea>
+      <h2>OCR 원문 확인</h2>
+      <div class="muted">여기에서 OCR이 얼마나 제대로 뽑혔는지 즉시 확인해. (정답률 90%의 핵심)</div>
+      <pre id="ocrBox">(아직 OCR 없음)</pre>
     </div>
 
     <div class="card">
-      <h2>정답</h2>
-      <textarea id="answer-output" readonly></textarea>
+      <h2>정답 출력</h2>
+      <pre id="answerBox">(아직 정답 없음)</pre>
     </div>
   </div>
 
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('capture-canvas');
-    const logEl = document.getElementById('log');
-    const ocrEl = document.getElementById('ocr-output');
-    const ansEl = document.getElementById('answer-output');
-    const pageInput = document.getElementById('page-input');
+    const $ = (id) => document.getElementById(id);
 
-    const btnStart = document.getElementById('btn-start');
-    const btnCapture = document.getElementById('btn-capture');
+    const btnStart = $("btnStart");
+    const btnCapture = $("btnCapture");
+    const pageInput = $("pageInput");
+    const video = $("video");
+    const canvas = $("canvas");
+    const logEl = $("log");
+    const ocrBox = $("ocrBox");
+    const answerBox = $("answerBox");
 
     let stream = null;
+    let busy = false;
 
-    function nowHHMMSS() {
-      const d = new Date();
-      const hh = String(d.getHours()).padStart(2,'0');
-      const mm = String(d.getMinutes()).padStart(2,'0');
-      const ss = String(d.getSeconds()).padStart(2,'0');
-      return `${hh}:${mm}:${ss}`;
-    }
-
-    function appendStatus(msg) {
-      const line = `[${nowHHMMSS()}] STATUS: ${msg}`;
-      logEl.value += (logEl.value ? '\n' : '') + line;
+    function log(msg) {
+      const now = new Date();
+      const ts = now.toTimeString().slice(0, 8);
+      logEl.textContent += `[${ts}] ${msg}\n`;
       logEl.scrollTop = logEl.scrollHeight;
-      console.log(line);
-    }
-
-    function updateOcrOutput(text, conf, hits) {
-      const header = `[OCR conf=${conf ?? '-'} hits=${hits ?? '-'}]\n`;
-      ocrEl.value = header + (text || '');
-      ocrEl.scrollTop = 0;
-    }
-
-    function updateAnswerOutput(text, debug) {
-      let out = (text || '').trim();
-      if (debug) {
-        out += `\n\n---\nDEBUG\npage: ${debug.page}\nmodel: ${debug.model}\nfinishReason: ${debug.finishReason || ''}\nstopToken: ${debug.stopToken || ''}`;
-      }
-      ansEl.value = out;
-      ansEl.scrollTop = 0;
     }
 
     async function startCamera() {
       try {
-        appendStatus('카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.');
-
+        log("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            facingMode: "environment",
+            width: { ideal: 1080 },
+            height: { ideal: 1920 }
           },
           audio: false
         });
-
         video.srcObject = stream;
-
-        await new Promise((resolve) => {
-          if (video.readyState >= 2) return resolve();
-          video.onloadedmetadata = () => resolve();
-        });
-
-        appendStatus('카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.');
+        await video.play();
         btnCapture.disabled = false;
-      } catch (err) {
-        appendStatus('카메라 시작 실패: ' + (err && err.message ? err.message : String(err)));
-        console.error(err);
+        log("STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
+      } catch (e) {
+        log("ERROR: 카메라 켜기 실패: " + (e && e.message ? e.message : String(e)));
       }
     }
 
-    // dataURL -> base64 only
-    function dataUrlToBase64(dataUrl) {
-      if (!dataUrl) return '';
-      const i = dataUrl.indexOf('base64,');
-      if (i === -1) return '';
-      return dataUrl.slice(i + 'base64,'.length);
+    function captureToDataURL() {
+      const w = video.videoWidth || 1080;
+      const h = video.videoHeight || 1920;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d", { willReadFrequently: false });
+      ctx.drawImage(video, 0, 0, w, h);
+
+      // ✅ OCR에 유리하게 JPEG 품질 높게
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const approxBytes = Math.floor((dataUrl.length * 3) / 4);
+      log(`capture size {"width":${w},"height":${h},"length":${approxBytes}}`);
+      return dataUrl;
     }
 
-    async function captureAndSolveCurrentPage() {
+    async function postJSON(url, data) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* ignore */ }
+      return { ok: res.ok, status: res.status, json, raw: text };
+    }
+
+    async function runOCR(dataUrl, page) {
+      log("STATUS: OCR 처리 중...");
+      const r = await postJSON("/.netlify/functions/ocr", { image: dataUrl, page });
+      if (!r.ok || !r.json) {
+        log(`STATUS: OCR 실패: ${r.json && r.json.error ? r.json.error : "Unknown error"}`);
+        if (r.raw) log("OCR raw: " + r.raw.slice(0, 500));
+        return null;
+      }
+      log("OCR response " + JSON.stringify(r.json));
+      return r.json;
+    }
+
+    async function runSolve(ocrText, page) {
+      log("STATUS: OCR 완료. 이제 정답을 생성할게.");
+      const r = await postJSON("/.netlify/functions/solve", { ocrText, page });
+      if (!r.ok || !r.json) {
+        log(`STATUS: solve 실패: ${r.json && r.json.error ? r.json.error : "Unknown error"}`);
+        if (r.raw) log("solve raw: " + r.raw.slice(0, 500));
+        return null;
+      }
+      log("solve response " + JSON.stringify(r.json));
+      return r.json;
+    }
+
+    async function captureFlow() {
+      if (busy) {
+        log("STATUS: 지금 처리 중이야(중복 촬영 방지).");
+        return;
+      }
+      busy = true;
+      btnCapture.disabled = true;
+
       try {
-        if (!stream) {
-          appendStatus('카메라가 아직 켜지지 않았어.');
+        const page = Number(pageInput.value || 1);
+        log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+        const dataUrl = captureToDataURL();
+
+        const ocr = await runOCR(dataUrl, page);
+        if (!ocr || !ocr.ok) {
+          // ocrBox 업데이트(실패 표시)
+          ocrBox.textContent = `(OCR 실패)\n${ocr && ocr.error ? ocr.error : "Unknown"}`;
           return;
         }
 
-        const page = parseInt(pageInput.value || '1', 10) || 1;
-
-        appendStatus(`페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-
-        const ctx = canvas.getContext('2d');
-
-        // 원본 해상도로 캡처
-        const vw = video.videoWidth || 1080;
-        const vh = video.videoHeight || 1920;
-
-        canvas.width = vw;
-        canvas.height = vh;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // ★ 핵심: OCR 함수가 JSON(base64) 받는 구조라서 dataURL -> base64로 보내기
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-        const b64 = dataUrlToBase64(dataUrl);
-
-        console.log('capture size', JSON.stringify({
-          width: canvas.width,
-          height: canvas.height,
-          length: b64 ? b64.length : 0
-        }));
-
-        appendStatus('OCR 처리 중...');
-
-        // ★ 핵심: 서버가 뭘 기대하는지 몰라서 키를 여러 개로 같이 보냄(안전)
-        const ocrRes = await fetch('/.netlify/functions/ocr', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            page,
-            // 가능한 케이스들을 모두 커버
-            image: b64,
-            imageBase64: b64,
-            dataUrl: dataUrl
-          })
-        });
-
-        let ocrJson = null;
-        try {
-          ocrJson = await ocrRes.json();
-        } catch (e) {
-          const t = await ocrRes.text().catch(() => '');
-          ocrJson = { ok: false, error: 'OCR non-JSON response', body: t };
+        // ✅ OCR 원문 확인 박스
+        ocrBox.textContent = (ocr.text || "").trim() || "(빈 OCR 텍스트)";
+        // OCR 신뢰도/히트 같은 메타가 있으면 로그로만
+        if (ocr.conf !== undefined || ocr.hits !== undefined) {
+          log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? "?"}, 번호 패턴 수: ${ocr.hits ?? "?"}). 이제 정답을 생성할게.`);
         }
 
-        console.log('OCR response', ocrJson);
-
-        if (!ocrJson.ok) {
-          appendStatus(`OCR 실패: ${ocrJson.error || 'Unknown error'}`);
+        const solved = await runSolve(ocr.text || "", page);
+        if (!solved || !solved.ok) {
+          answerBox.textContent = `(solve 실패)\n${solved && solved.error ? solved.error : "Unknown"}`;
           return;
         }
 
-        updateOcrOutput(ocrJson.text, ocrJson.conf, ocrJson.hits);
-        appendStatus(`OCR 완료 (평균 신뢰도: ${ocrJson.conf}, 번호 패턴 수: ${ocrJson.hits}). 이제 정답을 생성할게.`);
-
-        const solveRes = await fetch('/.netlify/functions/solve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            page,
-            ocrText: ocrJson.text
-          })
-        });
-
-        let solveJson = null;
-        try {
-          solveJson = await solveRes.json();
-        } catch (e) {
-          const t = await solveRes.text().catch(() => '');
-          solveJson = { ok: false, error: 'solve non-JSON response', body: t };
-        }
-
-        console.log('solve response', solveJson);
-
-        if (!solveJson.ok) {
-          appendStatus(`정답 생성 실패: ${solveJson.error || 'Unknown error'}`);
-          return;
-        }
-
-        updateAnswerOutput(solveJson.text, solveJson.debug);
-        appendStatus(`페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
-      } catch (err) {
-        appendStatus('촬영/처리 오류: ' + (err && err.message ? err.message : String(err)));
-        console.error(err);
+        answerBox.textContent = (solved.text || "").trim() || "(빈 정답)";
+        log(`STATUS: 페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
+      } finally {
+        busy = false;
+        btnCapture.disabled = false;
       }
     }
 
-    btnStart.addEventListener('click', startCamera);
-    btnCapture.addEventListener('click', captureAndSolveCurrentPage);
-
-    // 초기 안내(중복 싫으면 이 줄 지워도 됨)
-    appendStatus('카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.');
+    btnStart.addEventListener("click", startCamera);
+    btnCapture.addEventListener("click", captureFlow);
   </script>
 </body>
 </html>
-
