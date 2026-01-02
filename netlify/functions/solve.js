@@ -1,12 +1,9 @@
 // netlify/functions/solve.js
-// 성균관대 기출 전체를 대상으로 동작하도록 만든 버전
-// - 실제 문항 번호는 줄 맨 앞의 "01." / "7)" 패턴으로만 추출
-// - "ungrammatical / unacceptable / grammatical" 이 포함된 범위는 문법 문항으로 간주하고
-//   그 범위의 번호는 1~5(밑줄 번호)로 답하게 함
+// 성균관대 모든 기출 페이지에서 동작하도록 만든 solve 함수
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// 안전하게 JSON 파싱
+// 안전 JSON 파서
 function safeJsonParse(str, fallback) {
   try {
     return JSON.parse(str);
@@ -15,47 +12,45 @@ function safeJsonParse(str, fallback) {
   }
 }
 
-// 줄 맨 앞에서만 문항 번호 추출 (01. / 7. / 23) 등)
+// 텍스트 전체에서 "01." / "7)" 같은 패턴으로 문항 번호 추출
+// - 1~50 사이 숫자만 사용
+// - 바로 앞 문자가 숫자면(0101. 같은 경우) 스킵
 function extractQuestionNumbers(ocrText) {
-  const pattern = /(?:^|\n)\s*(\d{1,2})\s*[.)]/g;
+  const pattern = /(\d{1,2})\s*[.)]/g;
   const found = new Set();
   let m;
+
   while ((m = pattern.exec(ocrText)) !== null) {
     const num = parseInt(m[1], 10);
-    if (Number.isInteger(num) && num >= 1 && num <= 50) {
-      found.add(num);
-    }
+    const index = m.index;
+    const prevChar = index > 0 ? ocrText[index - 1] : " ";
+
+    // 바로 앞이 숫자면 (ex. "0101.") 문항 번호로 보지 않음
+    if (/\d/.test(prevChar)) continue;
+    if (!Number.isInteger(num) || num < 1 || num > 50) continue;
+
+    found.add(num);
   }
+
   return Array.from(found).sort((a, b) => a - b);
 }
 
-// [06-10] Choose one that is either ungrammatical or unacceptable.
-// 같은 범위를 찾아서, "ungrammatical / unacceptable / grammatical" 이 포함된 범위는 문법 문항으로 분류
+// [06-10] ... ungrammatical / unacceptable / grammatical
+// 처럼 "문법" 지시문이 들어간 범위를 찾아서 그 범위 번호를 문법 문항으로 처리
 function detectGrammarNumbers(ocrText, questionNumbers) {
-  const rangePattern = /\[(\d{1,2})\s*-\s*(\d{1,2})\]\s*([^\n]+)/g;
-  const grammarRanges = [];
+  const rangePattern =
+    /\[(\d{1,2})\s*-\s*(\d{1,2})\][\s\S]{0,200}?(ungrammatical|unacceptable|grammatical)/gi;
+
+  const qSet = new Set(questionNumbers);
+  const grammarSet = new Set();
   let m;
 
   while ((m = rangePattern.exec(ocrText)) !== null) {
     const start = parseInt(m[1], 10);
     const end = parseInt(m[2], 10);
-    const instruction = (m[3] || "").toLowerCase();
+    if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
 
-    const isGrammar =
-      instruction.includes("ungrammatical") ||
-      instruction.includes("unacceptable") ||
-      instruction.includes("grammatical");
-
-    if (isGrammar && Number.isInteger(start) && Number.isInteger(end)) {
-      grammarRanges.push({ start, end });
-    }
-  }
-
-  const qSet = new Set(questionNumbers);
-  const grammarSet = new Set();
-
-  for (const r of grammarRanges) {
-    for (let n = r.start; n <= r.end; n++) {
+    for (let n = start; n <= end; n++) {
       if (qSet.has(n)) {
         grammarSet.add(n);
       }
@@ -65,7 +60,7 @@ function detectGrammarNumbers(ocrText, questionNumbers) {
   return Array.from(grammarSet).sort((a, b) => a - b);
 }
 
-// OpenRouter에 넘길 프롬프트 생성
+// OpenRouter에 줄 프롬프트 만들기
 function buildPrompt(ocrText, questionNumbers, grammarNumbers) {
   const grammarSet = new Set(grammarNumbers);
   const mcNumbers = questionNumbers.filter((n) => !grammarSet.has(n));
@@ -137,7 +132,7 @@ exports.handler = async (event) => {
     };
   }
 
-  // 1) 문항 번호 추출
+  // 1) 문항 번호 전체 추출
   const questionNumbers = extractQuestionNumbers(ocrText);
 
   // 2) 문법 문항 번호 자동 감지
@@ -153,9 +148,8 @@ exports.handler = async (event) => {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        // 선택: OpenRouter 측에서 출처 표시용
         "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
         "X-Title": "answer-site",
       },
