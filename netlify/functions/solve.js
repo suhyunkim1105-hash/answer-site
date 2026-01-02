@@ -2,9 +2,15 @@
 
 const STOP_TOKEN = (process.env.STOP_TOKEN || "XURTH").trim() || "XURTH";
 const MODEL_NAME = (process.env.MODEL_NAME || "openai/gpt-5.1").trim();
-const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 2500);
+// LLM 응답 타임아웃 (ms)
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 15000);
+// 최대 출력 토큰 (실제 사용은 300으로 캡)
+const MAX_OUTPUT_TOKENS_ENV = Number(process.env.MAX_OUTPUT_TOKENS || 2500);
+const MAX_OUTPUT_TOKENS = Math.min(
+  Number.isFinite(MAX_OUTPUT_TOKENS_ENV) ? MAX_OUTPUT_TOKENS_ENV : 2500,
+  300
+);
 
-// 안전 JSON 파서
 function safeJson(str) {
   try {
     return JSON.parse(str || "{}");
@@ -24,29 +30,25 @@ function json(statusCode, obj) {
   };
 }
 
-// OCR 텍스트에서 문제 번호 후보 뽑기
+// OCR 텍스트에서 문제 번호 후보 추출
 function extractQuestionNumbers(ocrText) {
   if (!ocrText) return [];
 
   const numbers = new Set();
-
-  const lineRe = /^\s*([0-4]?\d)\s*[\.\)]/; // "01." "1." "10)" 등
+  const lineRe = /^\s*([0-4]?\d)\s*[\.\)]/;      // "01.", "1)", "10." 등
   const inlineRe = /\b([0-4]?\d)\s*[\.\)]/g;
 
   const lines = ocrText.split(/\r?\n/);
-
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
 
-    // 줄 맨 앞 번호
     const m = line.match(lineRe);
     if (m) {
       const n = Number(m[1]);
       if (n >= 1 && n <= 50) numbers.add(n);
     }
 
-    // 줄 중간 번호들
     let g;
     while ((g = inlineRe.exec(line))) {
       const n = Number(g[1]);
@@ -57,7 +59,7 @@ function extractQuestionNumbers(ocrText) {
   return Array.from(numbers).sort((a, b) => a - b);
 }
 
-// 페이지 번호별로 대략 문제 범위 추정 (대충이라도 이상한 번호 필터용)
+// 페이지 번호에 따라 대략적인 범위 제한 (이상한 번호 필터용, 너무 빡세게는 안 함)
 function clampByPage(page, nums) {
   if (!Array.isArray(nums) || !nums.length) return [];
 
@@ -65,10 +67,9 @@ function clampByPage(page, nums) {
   let min = 1;
   let max = 50;
 
-  // 필요하면 여기서 더 세밀하게 조정 가능
   if (p === 1) {
     min = 1;
-    max = 15; // 1페이지에서 30번 같은 건 거의 안 나올 거라서
+    max = 20;
   } else if (p === 2) {
     min = 10;
     max = 30;
@@ -81,13 +82,11 @@ function clampByPage(page, nums) {
   }
 
   const filtered = nums.filter((n) => n >= min && n <= max);
-
-  // 혹시 필터하고 나니까 0개면, 그냥 원본 그대로 쓰기
   if (!filtered.length) return nums;
   return filtered;
 }
 
-// LLM에게 줄 프롬프트 생성
+// 프롬프트 구성
 function buildPrompt(ocrText, page, questionNumbers, hits, conf) {
   const numsString =
     questionNumbers && questionNumbers.length
@@ -102,7 +101,7 @@ function buildPrompt(ocrText, page, questionNumbers, hits, conf) {
       : "- Could not reliably parse question numbers (the model must infer them from context)."
   ].join("\n");
 
-  const instructions = `
+  const systemContent = `
 You are solving an English multiple-choice exam page from a Korean university transfer test.
 
 You are given:
@@ -127,8 +126,8 @@ ${reliabilityHint}
 
 Output format (VERY IMPORTANT):
 - Each answer on its own line as: "번호: 옵션대문자"
-  - 예) "3: C"
-  - 예) "10: B"
+  - e.g. "3: C"
+  - e.g. "10: B"
 - 번호는 오름차순으로 정렬.
 - If you are unsure about some numbers, add ONE line at the end:
   "UNSURE: 번호1, 번호2, ..."
@@ -136,10 +135,9 @@ Output format (VERY IMPORTANT):
 - 마지막 줄에는 반드시 "${STOP_TOKEN}" 를 써라.
 - "${STOP_TOKEN}" 앞뒤로 다른 말 쓰지 마라.
 
-보안 규칙:
-- 반드시 위 형식을 지켜라.
-- 불필요한 한국어 설명, 영어 설명, 문장 등을 절대 추가하지 마라.
-- 출력 예시는 다음과 같다:
+절대 지키지 말아야 할 것:
+- 불필요한 설명, 한국어 문장, 영어 문장을 추가하지 마라.
+- 형식 예:
 
 3: C
 4: E
@@ -158,17 +156,14 @@ ${ocrText}
 [OCR TEXT END]
 `.trim();
 
-  return { system: instructions, user: userContent };
+  return { system: systemContent, user: userContent };
 }
 
-// OpenRouter + GPT 호출 (한 번)
-async function callModelOnce(prompt, page, questionNumbers, hits, conf) {
+// LLM 호출 (타임아웃 포함, 한 번만)
+async function callModelWithTimeout(prompt) {
   const apiKey = (process.env.OPENROUTER_API_KEY || "").trim();
   if (!apiKey) {
-    return {
-      ok: false,
-      error: "Missing OPENROUTER_API_KEY env var"
-    };
+    return { ok: false, error: "Missing OPENROUTER_API_KEY env var" };
   }
 
   const body = {
@@ -177,14 +172,15 @@ async function callModelOnce(prompt, page, questionNumbers, hits, conf) {
       { role: "system", content: prompt.system },
       { role: "user", content: prompt.user }
     ],
-    max_tokens: Math.min(MAX_OUTPUT_TOKENS, 1024),
+    max_tokens: MAX_OUTPUT_TOKENS,
     temperature: 0.1,
     top_p: 1,
-    // STOP_TOKEN과 UNSURE 표시 줄에서 멈추도록
     stop: [STOP_TOKEN],
-    // gpt-5.1 계열에서 확실히 text로 받기 위해
     response_format: { type: "text" }
   };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
   let resp;
   try {
@@ -196,15 +192,25 @@ async function callModelOnce(prompt, page, questionNumbers, hits, conf) {
         "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
         "X-Title": "answer-site"
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: controller.signal
     });
   } catch (e) {
+    clearTimeout(timer);
+    if (e && e.name === "AbortError") {
+      return {
+        ok: false,
+        error: "LLM timeout",
+        detail: "모델 응답이 너무 오래 걸려서 중단했어."
+      };
+    }
     return {
       ok: false,
       error: "LLM fetch failed",
       detail: String(e && e.message ? e.message : e)
     };
   }
+  clearTimeout(timer);
 
   let data;
   try {
@@ -239,7 +245,6 @@ async function callModelOnce(prompt, page, questionNumbers, hits, conf) {
       : "";
 
   if (!text) {
-    // 여기서 raw 데이터를 같이 넘겨서 디버깅 가능하게
     return {
       ok: false,
       error: "Empty completion from model",
@@ -247,14 +252,10 @@ async function callModelOnce(prompt, page, questionNumbers, hits, conf) {
     };
   }
 
-  return {
-    ok: true,
-    text,
-    raw: data
-  };
+  return { ok: true, text, raw: data };
 }
 
-// 핸들러
+// Netlify 함수 핸들러
 export async function handler(event) {
   try {
     if (event.httpMethod !== "POST") {
@@ -275,11 +276,9 @@ export async function handler(event) {
       return json(400, { ok: false, error: "Missing OCR text" });
     }
 
-    // 1) OCR 텍스트에서 번호 추출
     const rawNumbers = extractQuestionNumbers(ocrText);
     const normalizedNumbers = clampByPage(page, rawNumbers);
 
-    // 2) 프롬프트 생성
     const prompt = buildPrompt(
       ocrText,
       page,
@@ -288,105 +287,10 @@ export async function handler(event) {
       conf
     );
 
-    // 3) 모델 한 번 호출
-    let result = await callModelOnce(
-      prompt,
-      page,
-      normalizedNumbers,
-      hits,
-      conf
-    );
-
-    // 4) 첫 번째 호출이 "Empty completion" 이면 한 번 더 시도
-    if (!result.ok && result.error === "Empty completion from model") {
-      // 재시도: stop 토큰을 빼고, max_tokens 줄여서 한번 더 시도
-      const retryPrompt = prompt; // 같은 프롬프트 사용
-      const apiKey = (process.env.OPENROUTER_API_KEY || "").trim();
-      if (!apiKey) {
-        // 이미 위에서 체크했지만 혹시 모르니
-        return json(200, {
-          ok: false,
-          error: "Missing OPENROUTER_API_KEY env var (retry)"
-        });
-      }
-
-      const retryBody = {
-        model: MODEL_NAME,
-        messages: [
-          { role: "system", content: retryPrompt.system },
-          { role: "user", content: retryPrompt.user }
-        ],
-        max_tokens: Math.min(MAX_OUTPUT_TOKENS, 768),
-        temperature: 0.1,
-        top_p: 1,
-        response_format: { type: "text" }
-        // retry 에서는 stop 제거 (혹시 stop 때문에 비어버렸다면)
-      };
-
-      let resp2;
-      let data2;
-      try {
-        resp2 = await fetch(
-          "https://openrouter.ai/api/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-              "HTTP-Referer":
-                "https://beamish-alpaca-e3df59.netlify.app",
-              "X-Title": "answer-site"
-            },
-            body: JSON.stringify(retryBody)
-          }
-        );
-        data2 = await resp2.json();
-      } catch (e) {
-        // 재시도도 실패하면 그냥 오류 반환
-        return json(200, {
-          ok: false,
-          error:
-            "LLM retry failed (network or JSON error). 이 페이지를 다시 촬영해 줘.",
-          detail: String(e && e.message ? e.message : e)
-        });
-      }
-
-      if (!resp2.ok || data2.error) {
-        return json(200, {
-          ok: false,
-          error:
-            "LLM retry returned API error. 이 페이지를 다시 촬영해 줘.",
-          detail: data2.error || data2
-        });
-      }
-
-      const choice2 =
-        data2 &&
-        Array.isArray(data2.choices) &&
-        data2.choices.length > 0 &&
-        data2.choices[0];
-
-      const text2 =
-        choice2 &&
-        choice2.message &&
-        typeof choice2.message.content === "string"
-          ? choice2.message.content.trim()
-          : "";
-
-      if (!text2) {
-        return json(200, {
-          ok: false,
-          error:
-            "모델이 두 번 모두 빈 응답을 줘서 정답을 만들지 못했어. 이 페이지를 다시 촬영해 줘.",
-          detail: data2
-        });
-      }
-
-      // 재시도 성공
-      result = { ok: true, text: text2, raw: data2 };
-    }
+    const result = await callModelWithTimeout(prompt);
 
     if (!result.ok) {
+      // 여기서 명확한 에러 메시지 반환 → 프론트에서 {} 안 나옴
       return json(200, {
         ok: false,
         error: result.error || "Unknown LLM error",
