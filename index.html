@@ -109,7 +109,7 @@
     }
 
     // =========================
-    // TTS (speechSynthesis)
+    // TTS
     // =========================
     async function ensureVoicesReady() {
       if (!("speechSynthesis" in window) || !speechSynthesis.getVoices) return [];
@@ -128,9 +128,11 @@
       const ko = (voices || []).filter(v => ((v.lang || "").toLowerCase().startsWith("ko")));
       if (!ko.length) return null;
 
+      // "유나"가 있으면 최우선 (있을 수도/없을 수도)
       const yuna = ko.find(v => /yuna|유나/i.test(v.name || ""));
       if (yuna) return yuna;
 
+      // 그 외 여성 힌트
       const femaleHint = ko.find(v => /female|여|여성/i.test(v.name || ""));
       if (femaleHint) return femaleHint;
 
@@ -147,7 +149,7 @@
         u.lang = "ko-KR";
         if (voice) u.voice = voice;
 
-        // 또박또박: 약간 느리게
+        // 또박또박
         u.rate = 0.95;
         u.pitch = 1.12;
 
@@ -193,13 +195,16 @@
         if (up === "E") return "이";
       }
 
-      return up;
+      // 혹시 "3," 같은 이상한 것 대비
+      const m = up.match(/[A-E]|[1-5]/);
+      return m ? toSpeechToken(m[0]) : up;
     }
 
     function buildAnswerPairsFromSolved(solved) {
       const pairs = [];
       const dbg = (solved && solved.debug) ? solved.debug : null;
 
+      // 1) debug.answers를 우선 사용 (너 solve.js가 이미 내려줌)
       const answersObj = dbg && dbg.answers && typeof dbg.answers === "object" ? dbg.answers : null;
       if (answersObj) {
         const nums = Object.keys(answersObj)
@@ -214,6 +219,7 @@
         }
       }
 
+      // 2) fallback: text에서 파싱
       if (pairs.length === 0 && solved && solved.text) {
         const lines = String(solved.text).split(/\r?\n/);
         for (const ln0 of lines) {
@@ -240,11 +246,10 @@
       const m = t.match(/UNSURE\s*:\s*([^\n\r]+)/i);
       if (!m) return [];
       const raw = String(m[1]).trim();
-      if (!raw || raw === "-" ) return [];
+      if (!raw || raw === "-") return [];
       const nums = raw.split(/[, ]+/)
         .map(s => Number(String(s).trim()))
         .filter(n => Number.isFinite(n));
-      // 중복 제거 + 정렬
       return Array.from(new Set(nums)).sort((a,b)=>a-b);
     }
 
@@ -254,16 +259,14 @@
 
       if (!pairs.length && !unsureNums.length) return;
 
-      const gapMs = 1700; // 1.5~2초 느낌: 1.7초
+      const gapMs = 1700; // 1.5~2초 느낌
 
       for (let r = 0; r < 2; r++) {
-        // 1번 뭐 (쉬고) 2번 뭐 ...
         for (const [n, a] of pairs) {
           await speakOnce(`${n}번 ${a}`);
           await sleep(gapMs);
         }
 
-        // UNSURE도 읽기
         await speakOnce("언슈어");
         await sleep(900);
 
@@ -277,11 +280,13 @@
           }
         }
 
-        // 2회 반복 사이 간격
         await sleep(600);
       }
     }
 
+    // =========================
+    // Camera / Capture / Fetch
+    // =========================
     let stream = null;
     let busy = false; // ✅ 연타 방지 락
 
@@ -340,24 +345,37 @@
       return { dataUrl, vw, vh, length: dataUrl.length };
     }
 
-    async function doOCR(page, dataUrl) {
-      const res = await fetch("/.netlify/functions/ocr", {
+    // ✅ 중요: JSON 파싱 실패(504/HTML 등)도 잡아서 원문/상태코드 로그에 남김
+    async function postJsonReadText(url, payload) {
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page, image: dataUrl }),
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify(payload),
       });
-      const data = await res.json().catch(() => ({}));
-      return { ok: res.ok && data.ok, ...data };
+
+      const raw = await res.text().catch(() => "");
+      let data = null;
+      try { data = JSON.parse(raw); } catch { data = null; }
+
+      if (!data) {
+        return {
+          ok: false,
+          httpStatus: res.status,
+          error: "NonJSONResponse",
+          detail: (raw || "").slice(0, 900),
+          contentType: res.headers.get("content-type") || ""
+        };
+      }
+
+      return { httpStatus: res.status, ok: res.ok && data.ok, ...data };
+    }
+
+    async function doOCR(page, dataUrl) {
+      return await postJsonReadText("/.netlify/functions/ocr", { page, image: dataUrl });
     }
 
     async function doSolve(page, ocrText) {
-      const res = await fetch("/.netlify/functions/solve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page, ocrText }),
-      });
-      const data = await res.json().catch(() => ({}));
-      return { ok: res.ok && data.ok, ...data };
+      return await postJsonReadText("/.netlify/functions/solve", { page, ocrText });
     }
 
     btnStart.addEventListener("click", async () => {
@@ -374,16 +392,16 @@
       btnShot.disabled = true;
 
       try {
-        // ✅ 클릭 직후 워밍업 발화
+        // ✅ 클릭 직후: 테스트 한 번
         await ttsWarmupTest();
 
         await startCamera();
 
-        const page = Number($("page").value || 1);
-
-        // ✅ "페이지 인식 5 4 3 2 1"만 말함
+        // ✅ 페이지 인식 카운트다운(5..1)만 말함
         log("STATUS: (TTS) 페이지 인식 카운트다운...");
         await speakPageCountdownOnly();
+
+        const page = Number($("page").value || 1);
 
         log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
         const cap = captureDataURL();
@@ -391,10 +409,19 @@
 
         log("STATUS: OCR 처리 중...");
         const ocr = await doOCR(page, cap.dataUrl);
-        log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
+
+        log(`OCR response ${JSON.stringify({
+          ok: ocr.ok,
+          httpStatus: ocr.httpStatus,
+          error: ocr.error,
+          detail: ocr.detail,
+          contentType: ocr.contentType,
+          hits: ocr.hits,
+          textPreview: (ocr.text || "").slice(0, 160),
+        }).slice(0, 1200)}`);
 
         if (!ocr.ok) {
-          log(`STATUS: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
+          log(`STATUS: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""} (HTTP ${ocr.httpStatus || "?"})`);
           return;
         }
 
@@ -402,17 +429,26 @@
 
         log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
         const solved = await doSolve(page, ocr.text || "");
-        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+        log(`solve response ${JSON.stringify({
+          ok: solved.ok,
+          httpStatus: solved.httpStatus,
+          error: solved.error,
+          detail: solved.detail,
+          contentType: solved.contentType,
+          model: solved.debug?.model,
+          finishReason: solved.debug?.finishReason,
+        }).slice(0, 1200)}`);
 
         if (!solved.ok) {
-          log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
+          log(`STATUS: solve 실패: ${solved.error || "Unknown"}${solved.detail ? " / " + solved.detail : ""} (HTTP ${solved.httpStatus || "?"})`);
           return;
         }
 
         ansBox.value = solved.text || "";
         log(`STATUS: 페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
 
-        // ✅ 정답 + UNSURE 읽기 (느리게, 쉬어가며, 2회 반복)
+        // ✅ 정답 + UNSURE 읽기 (천천히, 쉬어가며, 2회 반복)
         log("STATUS: (TTS) 정답+UNSURE 읽는 중(천천히/2회 반복)...");
         await speakAnswersWithPausesTwiceAndUnsure(solved);
 
