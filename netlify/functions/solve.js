@@ -1,221 +1,181 @@
 // netlify/functions/solve.js
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const MODEL_ID = "openai/gpt-4o-mini";
-const STOP_TOKEN = "XURTH";
-
-function jsonResponse(statusCode, body) {
-  const headers = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
-  return {
-    statusCode,
-    headers,
-    body: JSON.stringify(body),
-  };
-}
-
-// 번호 추출 함수 (0101. / 0202. 같은 패턴까지 포함)
-function extractQuestionNumbers(text) {
-  if (!text) return { rawNumbers: [], normalizedNumbers: [] };
-
-  const rawNumbers = [];
-
-  // 1) 일반 패턴: "01.", "1)", "01 01.", "09.09." 등
-  const re1 = /\b(\d{1,2})\s*[\.\)]/g;
-  let m;
-  while ((m = re1.exec(text)) !== null) {
-    rawNumbers.push(m[1]);
-  }
-
-  // 2) 특수 패턴: "0101.", "0505." -> 뒤 2자리를 문항 번호로
-  const re2 = /\b(\d{2})(\1)\s*\./g;
-  while ((m = re2.exec(text)) !== null) {
-    rawNumbers.push(m[2]);
-  }
-
-  const normalizedNumbers = Array.from(
-    new Set(
-      rawNumbers
-        .map((s) => parseInt(s, 10))
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 50)
-    )
-  ).sort((a, b) => a - b);
-
-  return { rawNumbers, normalizedNumbers };
-}
-
-exports.handler = async (event, context) => {
-  // CORS preflight
-  if (event.httpMethod === "OPTIONS") {
-    return jsonResponse(200, { ok: true });
-  }
-
+exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
-    return jsonResponse(405, {
-      ok: false,
-      errorType: "MethodNotAllowed",
-      errorMessage: "Use POST",
-    });
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ ok: false, error: "Method Not Allowed" }),
+    };
   }
 
-  if (!OPENROUTER_API_KEY) {
-    return jsonResponse(500, {
-      ok: false,
-      errorType: "ConfigError",
-      errorMessage: "OPENROUTER_API_KEY is not set",
-    });
-  }
-
-  let body;
   try {
-    body = JSON.parse(event.body || "{}");
-  } catch (e) {
-    return jsonResponse(400, {
-      ok: false,
-      errorType: "BadRequest",
-      errorMessage: "Invalid JSON body",
+    const { text, page = 1 } = JSON.parse(event.body || "{}");
+
+    if (!text || typeof text !== "string") {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ ok: false, error: "Missing or invalid 'text'" }),
+      };
+    }
+
+    // 1) OCR에서 번호 추출
+    const rawNumbers = [];
+    const numberRegex = /\b([0-4]?\d)\b/g; // 0~49까지 같은 패턴, 나중에 1~50 필터링
+    let match;
+    while ((match = numberRegex.exec(text)) !== null) {
+      rawNumbers.push(match[1]);
+    }
+
+    const normalizedNumbers = Array.from(
+      new Set(
+        rawNumbers
+          .map((n) => parseInt(n, 10))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 50)
+      )
+    ).sort((a, b) => a - b);
+
+    // 2) 이 페이지에서 실제로 풀 번호만 선택 (지금은 1~12)
+    const numbersForPrompt = normalizedNumbers.filter((n) => n >= 1 && n <= 12);
+
+    if (numbersForPrompt.length === 0) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          ok: true,
+          text: "UNSURE: -\nXURTH",
+          debug: {
+            page,
+            rawNumbers,
+            normalizedNumbers,
+            numbersForPrompt,
+            stopToken: "XURTH",
+            model: "openai/gpt-4o-mini",
+            rawCompletion: "",
+          },
+        }),
+      };
+    }
+
+    const stopToken = "XURTH";
+
+    // 3) 프롬프트 (여기서 n/a 절대 쓰지 못하게 막음)
+    const systemPrompt = `
+You are solving a Korean university English multiple-choice exam.
+
+Task:
+- Read the OCR text of a test page.
+- The page contains questions identified by numbers (1–50). For the current page, you will only be asked about a subset of these.
+
+Answering rules:
+- For EVERY question number I give you, you MUST output EXACTLY ONE choice among A, B, C, D, or E.
+- You are NOT allowed to answer "n/a", "N/A", "unknown", "?", or leave any numbered question blank.
+- Even if the OCR text is noisy or you are uncertain, you MUST choose the MOST PROBABLE option for each question.
+- If you are not confident about a question, still choose the most likely option, and then list that question number in the final UNSURE line.
+
+Output format:
+- One line per question, in ascending order of the question numbers I give you, formatted exactly as:
+  "<number>: <letter>"
+  Example:
+  "1: C"
+- After all question lines, add exactly one more line:
+  "UNSURE: " followed by a comma-separated list of question numbers where you were NOT confident.
+  Example:
+  "UNSURE: 6, 8, 10"
+  If you are confident for all questions, output:
+  "UNSURE: -"
+- Finally, on the very last line, output the token ${stopToken}.
+
+Do NOT output anything else (no explanations). Only follow the format above.
+`.trim();
+
+    const userPrompt = `
+OCR TEXT:
+${text}
+
+QUESTION NUMBERS TO ANSWER: ${numbersForPrompt.join(", ")}
+
+Remember:
+- You MUST choose one of A/B/C/D/E for EVERY question number above.
+- You are NOT allowed to use "n/a" for any numbered question.
+- Use the UNSURE line only to list question numbers you are uncertain about.
+`.trim();
+
+    // 4) OpenRouter 호출
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error("Missing OPENROUTER_API_KEY environment variable");
+    }
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        // 아래 두 개는 OpenRouter 권장 헤더 (원하면 값 바꿔도 됨)
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0,
+      }),
     });
-  }
 
-  const text = typeof body.text === "string" ? body.text : "";
-  const page = Number.isFinite(body.page) ? body.page : 1;
+    if (!response.ok) {
+      const textErr = await response.text();
+      throw new Error(`OpenRouter error: ${response.status} ${textErr}`);
+    }
 
-  if (!text.trim()) {
-    return jsonResponse(400, {
-      ok: false,
-      errorType: "BadRequest",
-      errorMessage: "Missing 'text' field in body",
-    });
-  }
+    const data = await response.json();
+    const rawCompletion =
+      data.choices?.[0]?.message?.content?.trim() || "";
 
-  const { rawNumbers, normalizedNumbers } = extractQuestionNumbers(text);
+    // 5) 마지막 줄에 항상 XURTH 붙어 있도록 처리
+    let finalText = rawCompletion.trim();
+    if (!finalText.includes(stopToken)) {
+      // stopToken이 없으면 뒤에 붙여줌
+      finalText = finalText.replace(/\s+$/g, "") + `\n${stopToken}`;
+    }
 
-  if (!normalizedNumbers.length) {
-    return jsonResponse(200, {
-      ok: false,
-      errorType: "NoQuestionsFound",
-      errorMessage: "No question numbers detected in text",
+    const resultBody = {
+      ok: true,
+      text: finalText,
       debug: {
         page,
         rawNumbers,
         normalizedNumbers,
+        numbersForPrompt,
+        stopToken,
+        model: "openai/gpt-4o-mini",
+        rawCompletion,
       },
-    });
-  }
+    };
 
-  const numbersForPrompt = normalizedNumbers;
-  const numberListStr = numbersForPrompt.join(", ");
-
-  const userPrompt = [
-    "You are an extremely careful solver for multiple-choice English exam questions.",
-    "You will be given OCR text from an exam page.",
-    "",
-    "OCR_TEXT:",
-    '"""',
-    text,
-    '"""',
-    "",
-    `The question numbers present on this page are: ${numberListStr}`,
-    "",
-    "For EACH question number above, output EXACTLY ONE line in this format:",
-    "N: <OPTION_LETTER>",
-    "where N is the question number, and <OPTION_LETTER> is one of A, B, C, D, or E.",
-    "",
-    "- Always use CAPITAL letters for options.",
-    "- If you truly cannot determine the answer for a number, output `n/a` instead of a letter.",
-    "",
-    "After listing all answers, add a final line:",
-    "UNSURE: <comma-separated list of question numbers you are least confident about, or '-' if you are confident for all>",
-    "",
-    `Finally, end your output with the token ${STOP_TOKEN} on the same line as the last content (do not add extra text after it).`,
-  ].join("\n");
-
-  const payload = {
-    model: MODEL_ID,
-    temperature: 0,
-    max_tokens: 512,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a careful answer generator for multiple-choice English exams. You must follow the output format exactly.",
-      },
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ],
-  };
-
-  let apiRes;
-  try {
-    apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+    return {
+      statusCode: 200,
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site",
+        "Content-Type": "application/json; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
       },
-      body: JSON.stringify(payload),
-    });
-  } catch (e) {
-    return jsonResponse(500, {
-      ok: false,
-      errorType: "NetworkError",
-      errorMessage: String(e && e.message ? e.message : e),
-    });
+      body: JSON.stringify(resultBody),
+    };
+  } catch (err) {
+    console.error("solve function error:", err);
+
+    return {
+      statusCode: 500,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+      },
+      body: JSON.stringify({
+        ok: false,
+        error: err.message || "Unknown error",
+      }),
+    };
   }
-
-  if (!apiRes.ok) {
-    let errText = "";
-    try {
-      errText = await apiRes.text();
-    } catch (_) {
-      errText = "";
-    }
-    return jsonResponse(apiRes.status, {
-      ok: false,
-      errorType: "OpenRouterHTTPError",
-      errorMessage: `status=${apiRes.status}`,
-      detail: errText,
-    });
-  }
-
-  let data;
-  try {
-    data = await apiRes.json();
-  } catch (e) {
-    return jsonResponse(500, {
-      ok: false,
-      errorType: "OpenRouterParseError",
-      errorMessage: "Failed to parse OpenRouter response JSON",
-    });
-  }
-
-  const choice = data.choices && data.choices[0];
-  const completionText =
-    choice && choice.message && typeof choice.message.content === "string"
-      ? choice.message.content.trim()
-      : "";
-
-  const finishReason = choice && choice.finish_reason ? choice.finish_reason : null;
-
-  return jsonResponse(200, {
-    ok: true,
-    text: completionText,
-    debug: {
-      page,
-      rawNumbers,
-      normalizedNumbers,
-      numbersForPrompt,
-      stopToken: STOP_TOKEN,
-      model: MODEL_ID,
-      finishReason,
-    },
-  });
 };
