@@ -1,115 +1,188 @@
 // netlify/functions/ocr.js
-// 입력: { page, image: "data:image/jpeg;base64,..." }
-// 출력: { ok, text, patternCount, error?, detail? }
+// OCR.Space PRO 호출 (apipro1/apipro2). JSON(dataURL base64) 받아서 base64Image로 전달.
+// - env: OCR_SPACE_API_KEY (필수)
+// - env: OCR_SPACE_API_ENDPOINT (권장: https://apipro1.ocr.space/parse/image)
+// - env: OCR_SPACE_API_ENDPOINT_BACKUP (권장: https://apipro2.ocr.space/parse/image)
+// - env: OCR_SPACE_TIMEOUT_MS (옵션, 기본 30000)
 
-const fetch = globalThis.fetch;
-
-function normalizeText(s) {
-  if (!s) return "";
-  return String(s)
-    .replace(/\r\n/g, "\n")
-    .replace(/\u00A0/g, " ")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[‐-‒–—]/g, "-")
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-function countQuestionPatterns(text) {
-  const t = "\n" + text;
-  const re = /(?:\n)\s*(\d{1,2})\s*(?:[.\)]\s*(?:\1\s*[.\)])?)?/g;
-  let m, c = 0;
-  const seen = new Set();
-  while ((m = re.exec(t))) {
-    const n = Number(m[1]);
-    if (n >= 1 && n <= 50 && !seen.has(n)) {
-      seen.add(n);
-      c++;
-    }
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+    body: JSON.stringify(obj),
+  };
+}
+
+function normalizeEndpoint(url) {
+  if (!url) return "";
+  let s = String(url).trim();
+
+  // 흔한 실수 자동 수정:
+  // api-pro1.ocr.space -> apipro1.ocr.space
+  // api-pro2.ocr.space -> apipro2.ocr.space
+  s = s.replace("://api-pro1.ocr.space", "://apipro1.ocr.space");
+  s = s.replace("://api-pro2.ocr.space", "://apipro2.ocr.space");
+
+  // 혹시 api.ocr.space(무료)로 들어오면 그대로 두되, PRO키면 403 날 수 있으니 디버그에 노출
+  return s;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
   }
-  return c;
 }
 
-function dataUrlToBuffer(dataUrl) {
-  const i = dataUrl.indexOf(",");
-  if (i < 0) return null;
-  const meta = dataUrl.slice(0, i);
-  const b64 = dataUrl.slice(i + 1);
-  const m = meta.match(/^data:(.+);base64$/i);
-  const mime = m ? m[1] : "image/jpeg";
-  const buf = Buffer.from(b64, "base64");
-  return { mime, buf };
+// 대충 문항번호 패턴 카운트(너가 쓰던 hits 느낌 유지)
+function countQuestionPatterns(text) {
+  if (!text) return 0;
+  const m = String(text).match(/\b(\d{1,2})\b[.)\s]/g);
+  return m ? m.length : 0;
 }
 
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
-      return { statusCode: 405, body: JSON.stringify({ ok: false, error: "Method Not Allowed" }) };
+      return json(405, { ok: false, error: "POST only" });
     }
 
-    const body = JSON.parse(event.body || "{}");
-    const page = Number(body.page || 1);
-    const image = body.image;
-
-    if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "BadRequest: image(dataURL) required" }) };
-    }
-
-    const endpoint = process.env.OCR_SPACE_API_ENDPOINT || "https://apipro1.ocr.space/parse/image";
-    const apiKey = process.env.OCR_SPACE_API_KEY;
+    const apiKey = (process.env.OCR_SPACE_API_KEY || "").trim();
     if (!apiKey) {
-      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerMisconfig: OCR key missing" }) };
+      return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
 
-    const conv = dataUrlToBuffer(image);
-    if (!conv) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "BadRequest: invalid dataURL" }) };
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { ok: false, error: "Invalid JSON body" });
     }
 
-    // ★중요: x-www-form-urlencoded로 base64를 보내면 퍼센트 인코딩으로 용량/시간 폭발함.
-    // multipart로 파일 업로드가 훨씬 안정적.
-    const fd = new FormData();
-    fd.set("apikey", apiKey);
-    fd.set("language", "eng");
-    fd.set("isOverlayRequired", "false");
-    fd.set("detectOrientation", "true");
-    fd.set("scale", "true");
-    fd.set("OCREngine", "2");
-    fd.set("isTable", "false");
+    const page = body.page !== undefined ? body.page : 1;
+    const image = (body.image || body.dataUrl || "").toString();
 
-    const blob = new Blob([conv.buf], { type: conv.mime });
-    fd.set("file", blob, `page-${page}.jpg`);
-
-    const resp = await fetch(endpoint, { method: "POST", body: fd });
-    const data = await resp.json().catch(() => null);
-
-    if (!resp.ok || !data) {
-      return { statusCode: 502, body: JSON.stringify({ ok: false, error: "OCR upstream failed", detail: `HTTP ${resp.status}` }) };
+    if (!image || !image.startsWith("data:image/")) {
+      return json(400, {
+        ok: false,
+        error: "Missing image (expected data URL in JSON body: { image: 'data:image/...base64,...' })",
+      });
     }
 
-    if (data.IsErroredOnProcessing) {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          ok: false,
-          error: "OCRSpaceError",
-          detail: (data.ErrorMessage && data.ErrorMessage[0]) || data.ErrorMessage || "Unknown"
-        })
-      };
+    const timeoutMs = Math.max(5000, Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000));
+
+    const primary = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT || "https://apipro1.ocr.space/parse/image");
+    const backup = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT_BACKUP || "https://apipro2.ocr.space/parse/image");
+
+    const endpoints = [primary, backup].filter(Boolean);
+
+    const payload = new URLSearchParams();
+    payload.set("apikey", apiKey);
+    payload.set("language", "eng");
+    payload.set("isOverlayRequired", "false");
+    payload.set("scale", "true");
+    payload.set("detectOrientation", "true");
+    payload.set("OCREngine", "2"); // 필요하면 3으로 바꿔 테스트 가능
+    payload.set("base64Image", image);
+
+    const maxTries = 3;
+    let lastErr = null;
+    let lastRaw = "";
+    let endpointUsed = "";
+
+    for (let epIdx = 0; epIdx < endpoints.length; epIdx++) {
+      const endpoint = endpoints[epIdx];
+      endpointUsed = endpoint;
+
+      for (let i = 0; i < maxTries; i++) {
+        try {
+          const res = await fetchWithTimeout(
+            endpoint,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: payload.toString(),
+            },
+            timeoutMs
+          );
+
+          lastRaw = await res.text().catch(() => "");
+          let data = null;
+          try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
+
+          if (!res.ok) {
+            // 가장 흔한 원인: PRO키를 무료 endpoint에 쏨 => "The API key is invalid"
+            lastErr = `OCR.Space HTTP ${res.status}${data ? " / " + (data.ErrorMessage?.join(" | ") || data.ErrorDetails || "") : ""}`;
+            if (i < maxTries - 1) await sleep(350 * (i + 1));
+            continue;
+          }
+
+          if (!data) {
+            lastErr = "OCR.Space returned non-JSON";
+            if (i < maxTries - 1) await sleep(350 * (i + 1));
+            continue;
+          }
+
+          if (data.IsErroredOnProcessing) {
+            const msg = (data.ErrorMessage && data.ErrorMessage.join(" | ")) || data.ErrorDetails || "OCR.Space processing error";
+            lastErr = msg;
+            if (i < maxTries - 1) await sleep(350 * (i + 1));
+            continue;
+          }
+
+          const parsed = (data.ParsedResults && data.ParsedResults[0]) || null;
+          const text = (parsed && parsed.ParsedText) ? String(parsed.ParsedText) : "";
+
+          return json(200, {
+            ok: true,
+            text,
+            conf: 0,
+            hits: countQuestionPatterns(text),
+            debug: {
+              page,
+              endpointUsed,
+              ocrSpace: {
+                exitCode: data.OCRExitCode,
+                processingTimeInMilliseconds: data.ProcessingTimeInMilliseconds,
+              },
+            },
+          });
+        } catch (e) {
+          const msg = e?.message ? e.message : String(e);
+          lastErr = msg;
+          if (i < maxTries - 1) await sleep(350 * (i + 1));
+        }
+      }
+      // primary 다 실패하면 backup으로 넘어감
     }
 
-    const parsed = (data.ParsedResults && data.ParsedResults[0] && data.ParsedResults[0].ParsedText) || "";
-    const text = normalizeText(parsed);
-    const patternCount = countQuestionPatterns(text);
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ ok: true, text, patternCount })
-    };
-  } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) }) };
+    return json(502, {
+      ok: false,
+      error: "OCR.Space upstream error",
+      detail: lastErr || "Unknown",
+      raw: (lastRaw || "").slice(0, 1500),
+      debug: { endpointUsed },
+      hint:
+        "1) PRO 키면 엔드포인트는 https://apipro1.ocr.space/parse/image (하이픈 없음) 이어야 함. " +
+        "2) Netlify env OCR_SPACE_API_KEY/OCR_SPACE_API_ENDPOINT 값을 확인 후 재배포.",
+    });
+  } catch (err) {
+    return json(500, {
+      ok: false,
+      error: "Internal server error in ocr function",
+      detail: String(err?.message || err),
+    });
   }
 };
 
