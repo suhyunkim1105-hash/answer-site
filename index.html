@@ -2,396 +2,365 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>편입 영어 자동 풀이 (페이지 단위)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>편입 영어 자동 풀이 테스트</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
       margin: 0;
-      padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      padding: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
       background: #050816;
       color: #f5f5f5;
     }
     h1 {
-      font-size: 20px;
+      font-size: 18px;
       margin-bottom: 8px;
     }
-    .card {
-      max-width: 640px;
-      margin: 0 auto;
-      padding: 16px;
-      border-radius: 16px;
-      background: rgba(20, 20, 40, 0.9);
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+    button {
+      border: none;
+      padding: 10px 12px;
+      margin: 4px 4px 4px 0;
+      border-radius: 18px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #00c2ff;
+      color: #000;
+      font-weight: 600;
+    }
+    button.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+    button.danger {
+      background: #ff3366;
+      color: #fff;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #camera {
+      width: 100%;
+      max-height: 320px;
+      background: #000;
+      border-radius: 8px;
+      margin: 8px 0;
+      object-fit: contain;
+    }
+    #status {
+      margin-top: 6px;
+      font-size: 13px;
+      white-space: pre-line;
+    }
+    .panel {
+      margin-top: 10px;
+      padding: 8px;
+      border-radius: 8px;
+      background: #111827;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .panel h2 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: #93c5fd;
+    }
+    #logPanel {
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+        "Courier New", monospace;
+      font-size: 11px;
     }
     .row {
       display: flex;
-      gap: 8px;
       flex-wrap: wrap;
       align-items: center;
-      margin-bottom: 8px;
-    }
-    .label {
-      font-size: 14px;
-      opacity: 0.8;
-    }
-    video {
-      width: 100%;
-      border-radius: 12px;
-      background: #000;
-    }
-    button {
-      appearance: none;
-      border: none;
-      border-radius: 999px;
-      padding: 8px 14px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      background: #00e0ff;
-      color: #000;
-      transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.08s ease;
-    }
-    button.secondary {
-      background: #22263a;
-      color: #e0e0ff;
-    }
-    button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
-    }
-    button:not(:disabled):active {
-      transform: translateY(1px) scale(0.99);
-      box-shadow: 0 2px 0 rgba(0,0,0,0.5);
+      gap: 4px;
+      margin-top: 4px;
     }
     .pill {
       display: inline-block;
-      padding: 4px 10px;
+      padding: 2px 8px;
       border-radius: 999px;
-      font-size: 12px;
-      background: rgba(0, 224, 255, 0.12);
-      color: #9ae6ff;
-      margin-bottom: 4px;
-    }
-    .status {
-      font-size: 13px;
-      min-height: 18px;
-      white-space: pre-line;
-    }
-    .result-box {
-      margin-top: 12px;
-      padding: 10px;
-      border-radius: 10px;
-      background: rgba(10, 18, 40, 0.95);
-      border: 1px solid rgba(0, 224, 255, 0.25);
-      font-size: 13px;
-      white-space: pre-wrap;
-    }
-    .small {
       font-size: 11px;
-      opacity: 0.7;
-      line-height: 1.4;
-    }
-    .warning {
-      color: #ffb4b4;
+      background: #1f2937;
     }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>편입 영어 자동 풀이 (페이지 단위)</h1>
-    <div class="pill">현재 페이지: <span id="pageLabel">1</span></div>
+  <h1>성균관대 편입 영어 자동 풀이 (페이지 단위)</h1>
 
-    <div class="row" style="margin-bottom: 4px;">
-      <span class="small">
-        - 카메라를 세로로 고정하고, 시험지 한 페이지 전체가 꽉 차게 나오도록 맞춘 뒤 사용해.<br />
-        - 문항 번호는 앞에 크게 한 번 더 쓰고(예: <b>12)</b>), 보기 번호는 <b>A B C D E</b>로 다시 쓰면 좋아.<br />
-        - 밑줄은 &lt;&gt; 로 감싸서 표시(예: &lt;blank&gt;). 여러 개면 BLANK_A, BLANK_B 등으로 적기.
-      </span>
-    </div>
-
-    <video id="video" playsinline></video>
-
-    <div class="row" style="margin-top: 8px;">
-      <button id="startCamBtn">카메라 켜기</button>
-      <button id="stopCamBtn" class="secondary">카메라 끄기</button>
-    </div>
-
-    <div class="row" style="margin-top: 4px;">
-      <button id="captureBtn">이 페이지 촬영 + 풀기</button>
-      <button id="nextPageBtn" class="secondary">다음 페이지 번호로 이동</button>
-      <button id="resetPageBtn" class="secondary">페이지 1로 초기화</button>
-    </div>
-
-    <div class="row">
-      <span class="label">진행 상태</span>
-    </div>
-    <div id="status" class="status"></div>
-
-    <div class="row" style="margin-top: 8px;">
-      <span class="label">이 페이지 정답 / 안내</span>
-    </div>
-    <div id="result" class="result-box"></div>
-
-    <p class="small warning" style="margin-top: 10px;">
-      * 음성 읽기(TTS)는 브라우저의 Web Speech API를 사용해. iOS Safari에서는 무음 모드 해제 + 화면 켜진 상태에서 사용해야 함.<br />
-      * 마지막 줄의 <b>XURTH</b>가 들리면 그 페이지는 끝이라는 신호야.
-    </p>
+  <div class="row">
+    <span class="pill">현재 페이지: <span id="pageLabel">1</span></span>
+    <span class="pill">TTS: <span id="ttsLabel">ON</span></span>
   </div>
 
+  <video id="camera" autoplay playsinline muted></video>
+  <canvas id="captureCanvas" style="display:none;"></canvas>
+
+  <div class="row">
+    <button id="btnStartCam" class="primary">카메라 켜기</button>
+    <button id="btnStopCam" class="secondary">카메라 끄기</button>
+  </div>
+  <div class="row">
+    <button id="btnCaptureSolve" class="primary">이 페이지 촬영 + 풀기</button>
+    <button id="btnNextPage" class="secondary">다음 페이지 번호로 이동</button>
+    <button id="btnResetPage" class="secondary">페이지 1로 초기화</button>
+  </div>
+  <div class="row">
+    <button id="btnToggleTts" class="secondary">음성 안내 켜기/끄기</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="answerPanel" class="panel" style="display:none;">
+    <h2>이 페이지 정답 / 안내</h2>
+    <pre id="answerText"></pre>
+  </div>
+
+  <div id="ocrPanel" class="panel" style="display:none;">
+    <h2>OCR 결과 (일부)</h2>
+    <pre id="ocrText"></pre>
+  </div>
+
+  <div id="logPanel" class="panel">
+    <h2>디버그 로그</h2>
+    <pre id="log"></pre>
+  </div>
+
+  <p style="margin-top:10px; font-size:11px; opacity:0.8;">
+    * 음성 읽기(TTS)는 브라우저의 Web Speech API를 사용해. iOS Safari에서는 버튼을 한 번
+    눌러야 동작할 수 있어. <br/>
+    * 한 페이지씩 <strong>이 페이지 촬영 + 풀기</strong>를 누르고, XURTH가 들리면 그 페이지는 끝난 거야.
+  </p>
+
   <script>
-    const STOP_TOKEN = 'XURTH';        // 백엔드와 맞춤
-    const MAX_RETRY = 2;               // solve.js와 동일
-    const SOLVE_ENDPOINT = '/.netlify/functions/solve';
+    const video = document.getElementById("camera");
+    const canvas = document.getElementById("captureCanvas");
+    const statusEl = document.getElementById("status");
+    const answerPanel = document.getElementById("answerPanel");
+    const answerTextEl = document.getElementById("answerText");
+    const ocrPanel = document.getElementById("ocrPanel");
+    const ocrTextEl = document.getElementById("ocrText");
+    const logEl = document.getElementById("log");
+    const pageLabel = document.getElementById("pageLabel");
+    const ttsLabel = document.getElementById("ttsLabel");
 
-    const videoEl = document.getElementById('video');
-    const startCamBtn = document.getElementById('startCamBtn');
-    const stopCamBtn = document.getElementById('stopCamBtn');
-    const captureBtn = document.getElementById('captureBtn');
-    const nextPageBtn = document.getElementById('nextPageBtn');
-    const resetPageBtn = document.getElementById('resetPageBtn');
-    const statusEl = document.getElementById('status');
-    const resultEl = document.getElementById('result');
-    const pageLabelEl = document.getElementById('pageLabel');
+    const btnStartCam = document.getElementById("btnStartCam");
+    const btnStopCam = document.getElementById("btnStopCam");
+    const btnCaptureSolve = document.getElementById("btnCaptureSolve");
+    const btnNextPage = document.getElementById("btnNextPage");
+    const btnResetPage = document.getElementById("btnResetPage");
+    const btnToggleTts = document.getElementById("btnToggleTts");
 
-    let mediaStream = null;
+    let currentStream = null;
     let currentPage = 1;
-    let retryCount = 0;
-    let isProcessing = false;
+    let ttsEnabled = true;
 
-    function setStatus(text) {
-      statusEl.textContent = text || '';
+    function log(msg, obj) {
+      const time = new Date().toISOString().substring(11, 19);
+      const line =
+        "[" + time + "] " + msg + (obj ? " " + JSON.stringify(obj) : "");
+      logEl.textContent += line + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log("[front]", line);
     }
 
-    function setResult(text) {
-      resultEl.textContent = text || '';
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+      log("STATUS: " + msg);
     }
 
-    function updatePageLabel() {
-      pageLabelEl.textContent = String(currentPage);
-    }
-
-    function setButtonsDisabled(disabled) {
-      captureBtn.disabled = disabled;
-      nextPageBtn.disabled = disabled;
-      resetPageBtn.disabled = disabled;
-      startCamBtn.disabled = disabled && !!mediaStream;
-      stopCamBtn.disabled = !mediaStream || disabled;
+    function speak(text) {
+      if (!ttsEnabled) return;
+      if (!("speechSynthesis" in window)) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
     }
 
     async function startCamera() {
-      if (mediaStream) return;
       try {
-        setStatus('카메라를 켜는 중...');
-        const constraints = {
-          audio: false,
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          }
-        };
-        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-        videoEl.srcObject = mediaStream;
-        await videoEl.play();
-        setStatus('카메라 준비 완료. 시험지 한 페이지를 화면에 꽉 차게 맞추고 "이 페이지 촬영 + 풀기"를 눌러.');
-      } catch (err) {
-        console.error(err);
-        mediaStream = null;
-        setStatus('카메라를 켜는 데 실패했어. 브라우저 권한을 확인해 줘.');
+        if (currentStream) return;
+        currentStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false
+        });
+        video.srcObject = currentStream;
+        setStatus("카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
+        speak("카메라를 켰어요. 시험지를 화면에 잘 맞춰 주세요.");
+      } catch (e) {
+        setStatus("카메라 켜기 실패: " + e.message);
+        log("camera error", { error: String(e) });
       }
-      setButtonsDisabled(false);
     }
 
     function stopCamera() {
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(t => t.stop());
-        mediaStream = null;
-        videoEl.srcObject = null;
-        setStatus('카메라를 껐어.');
+      if (currentStream) {
+        currentStream.getTracks().forEach((t) => t.stop());
+        currentStream = null;
       }
-      setButtonsDisabled(false);
+      video.srcObject = null;
+      setStatus("카메라를 끔.");
+      speak("카메라를 껐어요.");
     }
 
-    function captureImageAsBase64() {
-      if (!mediaStream || videoEl.readyState < 2) {
-        throw new Error('카메라가 아직 준비되지 않았어요.');
+    function updatePageLabel() {
+      pageLabel.textContent = String(currentPage);
+    }
+
+    btnStartCam.addEventListener("click", startCamera);
+    btnStopCam.addEventListener("click", stopCamera);
+
+    btnNextPage.addEventListener("click", () => {
+      currentPage += 1;
+      updatePageLabel();
+      setStatus(`페이지 ${currentPage}로 이동했어.`);
+      speak(`페이지 ${currentPage}로 이동했습니다.`);
+      answerPanel.style.display = "none";
+    });
+
+    btnResetPage.addEventListener("click", () => {
+      currentPage = 1;
+      updatePageLabel();
+      setStatus("페이지를 1로 초기화했어.");
+      speak("페이지를 일 번으로 초기화했습니다.");
+      answerPanel.style.display = "none";
+    });
+
+    btnToggleTts.addEventListener("click", () => {
+      ttsEnabled = !ttsEnabled;
+      ttsLabel.textContent = ttsEnabled ? "ON" : "OFF";
+      if (ttsEnabled) {
+        speak("음성 안내를 켰습니다.");
       }
-      const canvas = document.createElement('canvas');
+    });
 
-      // 가로 기준으로 리사이즈 (너무 큰 해상도 방지)
-      const targetWidth = 1280;
-      const scale = targetWidth / videoEl.videoWidth;
-      canvas.width = targetWidth;
-      canvas.height = videoEl.videoHeight * scale;
-
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-
-      // OCR.Space는 "data:image/jpeg;base64,..." 형태도 지원
-      return canvas.toDataURL('image/jpeg', 0.9);
-    }
-
-    function extractReadableAnswerText(rawText) {
-      if (!rawText) return '';
-      const lines = rawText.split('\n')
-        .map(line => line.trim())
-        .filter(line => line && line !== STOP_TOKEN);
-      return lines.join('\n');
-    }
-
-    function speakOnce(text) {
-      if (!('speechSynthesis' in window)) {
-        console.warn('이 브라우저는 Web Speech API를 지원하지 않아. 텍스트만 표시할게.');
-        return;
-      }
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'ko-KR';
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
-      window.speechSynthesis.speak(utter);
-      return utter;
-    }
-
-    function speakAnswersTwice(rawAnswersText) {
-      const text = extractReadableAnswerText(rawAnswersText);
-      if (!text) return;
-
-      if (!('speechSynthesis' in window)) {
-        console.warn('Web Speech API 미지원. 음성 재생 생략.');
-        return;
-      }
-
-      // iOS에서 이전 발화 남아있으면 정리
-      window.speechSynthesis.cancel();
-
-      const utter1 = new SpeechSynthesisUtterance(text);
-      const utter2 = new SpeechSynthesisUtterance(text);
-      utter1.lang = 'ko-KR';
-      utter2.lang = 'ko-KR';
-      utter1.rate = 1.0;
-      utter2.rate = 1.0;
-      utter1.pitch = 1.0;
-      utter2.pitch = 1.0;
-
-      utter1.onend = () => {
-        // 첫 번째 읽기 끝나면 바로 한 번 더 읽기
-        window.speechSynthesis.speak(utter2);
-      };
-
-      window.speechSynthesis.speak(utter1);
-    }
-
-    async function callSolveFunction(base64Image) {
-      const payload = {
-        imageBase64: base64Image,
-        pageNumber: currentPage,
-        retryCount: retryCount
-      };
-
-      const res = await fetch(SOLVE_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error('서버 요청 실패: ' + res.status + ' ' + text);
-      }
-
-      return res.json();
-    }
-
-    async function handleCaptureAndSolve() {
-      if (isProcessing) return;
-      if (!mediaStream) {
-        setStatus('먼저 "카메라 켜기"를 눌러서 준비해 줘.');
-        return;
+    btnCaptureSolve.addEventListener("click", async () => {
+      if (!currentStream) {
+        await startCamera();
+        if (!currentStream) return;
       }
 
       try {
-        isProcessing = true;
-        setButtonsDisabled(true);
-        setStatus(`페이지 ${currentPage}을(를) 촬영하는 중...`);
-        setResult('');
+        btnCaptureSolve.disabled = true;
+        setStatus(
+          `페이지 ${currentPage} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`
+        );
+        speak(`${currentPage} 페이지를 촬영합니다.`);
 
-        const base64 = captureImageAsBase64();
-        setStatus(`페이지 ${currentPage} OCR + 정답 추론 중... 잠시만 기다려줘.`);
+        // --- 1) 캔버스로 캡처 -----------------
+        const trackSettings = currentStream
+          .getVideoTracks()[0]
+          .getSettings();
+        const w = trackSettings.width || 1280;
+        const h = trackSettings.height || 720;
 
-        const data = await callSolveFunction(base64);
+        const targetWidth = 1280;
+        const scale = targetWidth / w;
+        const targetHeight = Math.round(h * scale);
 
-        if (data.status === 'reshoot') {
-          // 재촬영 유도
-          retryCount = (data.retryCount ?? retryCount) + 1;
-          const msg = (data.messageForUser ||
-            '글자가 흐리게 인식됐어요. 조금 더 가깝게, 선명하게 다시 찍어 주세요.') +
-            ` (재촬영 시도 ${retryCount}/${MAX_RETRY})`;
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        log("capture size", { width: targetWidth, height: targetHeight, length: dataUrl.length });
+
+        // --- 2) OCR 호출 -----------------------
+        setStatus("OCR 처리 중...");
+        const ocrResp = await fetch("/.netlify/functions/ocr", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ image: dataUrl })
+        });
+
+        const ocrData = await ocrResp.json().catch(() => ({}));
+        log("OCR response", ocrData);
+
+        if (!ocrData.ok) {
+          const msg =
+            "OCR 실패: " + (ocrData.error || "알 수 없는 오류") +
+            (ocrData.detail ? " / detail: " + JSON.stringify(ocrData.detail) : "");
           setStatus(msg);
-          setResult('');
-          speakOnce(msg);
-          // 같은 페이지에서 다시 촬영
-        } else if (data.status === 'ok') {
-          retryCount = 0;
-          const answersText = data.answersText || '';
-          const readable = extractReadableAnswerText(answersText);
-
-          setStatus(`페이지 ${currentPage} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
-          setResult(answersText);
-
-          // 정답 두 번 읽기
-          speakAnswersTwice(answersText);
-
-          // 다음 페이지로 자동 증가 (원하면 수동으로도 바꿀 수 있음)
-          currentPage += 1;
-          updatePageLabel();
-        } else if (data.status === 'error') {
-          const msg = data.message || '알 수 없는 오류가 발생했어.';
-          setStatus('서버 오류: ' + msg);
-          setResult('');
-          speakOnce('서버에서 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
-        } else {
-          setStatus('예상치 못한 응답 형식이야.');
-          console.warn('알 수 없는 응답:', data);
+          speak("문자를 제대로 읽지 못했어요. 시험지 위치와 조명을 다시 맞추고 한 번 더 찍어 주세요.");
+          ocrPanel.style.display = "none";
+          btnCaptureSolve.disabled = false;
+          return;
         }
-      } catch (err) {
-        console.error(err);
-        setStatus('요청 처리 중 오류가 발생했어: ' + err.message);
-        speakOnce('요청 처리 중 오류가 발생했습니다. 다시 시도해 주세요.');
+
+        const ocrText = String(ocrData.text || "");
+        const conf = Number(ocrData.conf ?? 0);
+        const hits = Number(ocrData.hits ?? 0);
+
+        setStatus(
+          `OCR 완료 (평균 신뢰도: ${conf.toFixed(
+            1
+          )}, 번호 패턴 수: ${hits}). 이제 정답을 생성할게.`
+        );
+        if (conf < 50 || hits < 5) {
+          speak(
+            "글자 인식이 조금 불안해요. 그래도 일단 정답을 만들어 볼게요. 혹시 이상한 번호가 나오면 다시 찍어 주세요."
+          );
+        } else {
+          speak("글자 인식이 괜찮아요. 정답을 계산하겠습니다.");
+        }
+
+        // OCR 일부만 보여주기
+        ocrPanel.style.display = "block";
+        ocrTextEl.textContent = ocrText.slice(0, 600);
+
+        // --- 3) solve 함수 호출 -----------------
+        const solveResp = await fetch("/.netlify/functions/solve", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ page: currentPage, text: ocrText })
+        });
+
+        const solveData = await solveResp.json().catch(() => ({}));
+        log("solve response", solveData);
+
+        if (!solveData.ok) {
+          const msg =
+            "풀이 실패: " + (solveData.error || "알 수 없는 오류");
+          setStatus(msg);
+          speak(
+            "정답 계산에서 오류가 났어요. 잠깐 있다가 다시 시도해 주세요."
+          );
+          btnCaptureSolve.disabled = false;
+          return;
+        }
+
+        const finalText = String(solveData.text || "").trim();
+        answerPanel.style.display = "block";
+        answerTextEl.textContent = finalText;
+
+        setStatus(`페이지 ${currentPage} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
+        speak(
+          `페이지 ${currentPage} 정답을 읽어 드릴게요.`
+        );
+        // 정답 전체를 음성으로 읽어 줌
+        speak(finalText.replace(/XURTH/gi, "익스 우어 쓰"));
+
+      } catch (e) {
+        log("capture+solve error", { error: String(e) });
+        setStatus("예상치 못한 오류: " + e.message);
+        speak("알 수 없는 오류가 발생했어요. 다시 한 번 시도해 주세요.");
       } finally {
-        isProcessing = false;
-        setButtonsDisabled(false);
+        btnCaptureSolve.disabled = false;
       }
-    }
-
-    startCamBtn.addEventListener('click', startCamera);
-    stopCamBtn.addEventListener('click', stopCamera);
-    captureBtn.addEventListener('click', handleCaptureAndSolve);
-
-    nextPageBtn.addEventListener('click', () => {
-      if (isProcessing) return;
-      currentPage += 1;
-      retryCount = 0;
-      updatePageLabel();
-      setStatus(`페이지 번호를 ${currentPage}번으로 변경했어. 이제 이 페이지를 촬영하면 돼.`);
-      setResult('');
-    });
-
-    resetPageBtn.addEventListener('click', () => {
-      if (isProcessing) return;
-      currentPage = 1;
-      retryCount = 0;
-      updatePageLabel();
-      setStatus('페이지 번호를 1번으로 초기화했어.');
-      setResult('');
     });
 
     // 초기 상태
     updatePageLabel();
-    setButtonsDisabled(false);
-    setStatus('먼저 "카메라 켜기"를 눌러서 준비해 줘.');
+    setStatus("카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
   </script>
 </body>
 </html>
