@@ -1,273 +1,381 @@
-// netlify/functions/solve.js
-// 목표: (1) 문항번호 감지 안정화(2단 OCR 합쳐짐 포함) (2) 무조건 답 출력 (3) UNSURE 유지 (4) A-E/1-5 모두 정규화
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>answer-site</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    button, input, textarea, select { font-size:16px; }
+    button { padding:10px 12px; }
+    input, select { padding:8px 10px; }
+    .videoWrap { width:100%; }
+    video { width:100%; max-height:70vh; background:#000; border-radius:10px; }
+    img { width:100%; max-height:45vh; object-fit:contain; border:1px solid #ddd; border-radius:10px; }
+    textarea { width:100%; min-height:180px; padding:10px; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#0b1020; color:#e8f0ff; padding:12px; border-radius:10px; }
+    .col { flex:1 1 420px; }
+    .muted { color:#666; font-size:13px; }
+    .pill { padding:4px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <h2>answer-site (OCR → solve)</h2>
 
-const VERSION = "solve.v3.1.0";
+  <div class="row">
+    <button id="btnStart">카메라 켜기</button>
+    <button id="btnTorch" disabled>손전등(토치) 토글</button>
+    <button id="btnCapture" disabled>촬영 & OCR</button>
+    <button id="btnReset">리셋</button>
 
-export default async (request) => {
-  if (request.method === "OPTIONS") {
-    return new Response("", { status: 204, headers: corsHeaders() });
+    <label>page <input id="page" type="number" min="1" max="99" value="1" style="width:90px" /></label>
+
+    <label>캡처방식
+      <select id="capMode">
+        <option value="auto" selected>Auto(추천)</option>
+        <option value="photo">Photo(고화질, 가능시)</option>
+        <option value="canvas">Canvas(빠름)</option>
+      </select>
+    </label>
+
+    <label>jpegQ <input id="jpegQ" type="number" min="0.7" max="1" step="0.01" value="0.98" style="width:90px" /></label>
+
+    <label>자동 다음(초) <input id="autoSec" type="number" min="0" max="30" value="0" style="width:90px" /></label>
+
+    <span class="pill" id="camInfo">cam: -</span>
+  </div>
+
+  <p class="muted">
+    - 시험지(특히 글자 부분)를 화면에 최대한 꽉 차게. <b>손이/그림자</b>로 글자 가리지 말기.<br/>
+    - Auto는 가능하면 <b>진짜 사진(takePhoto)</b>로 찍어서 OCR 성공률을 올린다.
+  </p>
+
+  <div class="videoWrap">
+    <video id="video" playsinline></video>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <div class="col">
+      <h3>캡처 프리뷰</h3>
+      <img id="preview" alt="preview" />
+    </div>
+    <div class="col">
+      <h3>로그</h3>
+      <pre id="log"></pre>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px;">
+    <div class="col">
+      <h3>OCR 텍스트 (확인/수정 가능)</h3>
+      <textarea id="ocrText" placeholder="OCR 결과가 여기 표시됨"></textarea>
+      <div class="row" style="margin-top:8px;">
+        <button id="btnSolve" disabled>이 OCR로 solve만 실행</button>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3>정답 출력</h3>
+      <textarea id="ansText" placeholder="정답이 여기 표시됨"></textarea>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  const video = $("video");
+  const preview = $("preview");
+  const ocrTextEl = $("ocrText");
+  const ansTextEl = $("ansText");
+  const btnStart = $("btnStart");
+  const btnTorch = $("btnTorch");
+  const btnCapture = $("btnCapture");
+  const btnSolve = $("btnSolve");
+  const btnReset = $("btnReset");
+  const pageEl = $("page");
+  const jpegQEl = $("jpegQ");
+  const autoSecEl = $("autoSec");
+  const capModeEl = $("capMode");
+  const camInfoEl = $("camInfo");
+
+  let stream = null;
+  let track = null;
+  let busy = false;
+  let countdownTimer = null;
+  let torchOn = false;
+
+  function log(msg) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2,"0");
+    const mm = String(now.getMinutes()).padStart(2,"0");
+    const ss = String(now.getSeconds()).padStart(2,"0");
+    logEl.textContent += `[${hh}:${mm}:${ss}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
   }
-  if (request.method !== "POST") {
-    return json({ ok: false, error: "POST only" }, 405);
+
+  function resetUI() {
+    ocrTextEl.value = "";
+    ansTextEl.value = "";
+    preview.src = "";
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    busy = false;
+    btnCapture.disabled = !stream;
+    btnSolve.disabled = true;
   }
 
-  const startedAt = Date.now();
-
-  try {
-    const body = await request.json();
-    const page = Number(body?.page || 1);
-    const rawText = String(body?.text || "");
-
-    const normText = normalizeOcrText(rawText);
-    const detected = detectQuestionNumbers(normText);
-
-    // fallback window when detection is weak
-    const target = chooseTargetNumbers({ detected, page });
-
-    const model = process.env.MODEL_NAME || "openai/gpt-5.1";
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    const stopToken = process.env.STOP_TOKEN || "XURTH";
-    const temperature = Number(process.env.TEMPERATURE ?? 0);
-
-    if (!apiKey) return json({ ok: false, error: "OPENROUTER_API_KEY missing" }, 500);
-
-    const prompt = buildPrompt({ page, target, stopToken, normText });
-
-    const controller = new AbortController();
-    // Netlify sync functions: default 60s limit (keep margin). :contentReference[oaicite:1]{index=1}
-    const timeoutMs = 50000;
-    const t = setTimeout(() => controller.abort(), timeoutMs);
-
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature,
-        messages: prompt,
-        stop: [stopToken],
-      }),
-      signal: controller.signal,
-    }).finally(() => clearTimeout(t));
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      return json({ ok: false, error: `OpenRouter HTTP ${res.status}`, raw: data }, 500);
-    }
-
-    const content = (data.choices?.[0]?.message?.content || "").trim();
-    const parsed = parseModelOutput(content, target);
-
-    const elapsedMs = Date.now() - startedAt;
-
-    return json({
-      ok: true,
-      text: parsed.finalText,
-      debug: {
-        version: VERSION,
-        page,
-        model,
-        detected,
-        target,
-        unsure: parsed.unsure,
-        elapsedMs,
-        // small preview for sanity
-        ocrPreview: normText.slice(0, 600),
+  function stopCamera() {
+    try {
+      if (stream) {
+        for (const t of stream.getTracks()) t.stop();
       }
+    } catch {}
+    stream = null;
+    track = null;
+    video.srcObject = null;
+    btnCapture.disabled = true;
+    btnTorch.disabled = true;
+    camInfoEl.textContent = "cam: -";
+  }
+
+  async function startCamera() {
+    resetUI();
+    stopCamera();
+
+    try {
+      log("STATUS: 카메라 켜는 중(고해상도 요청)...");
+      // iOS에서 낮은 해상도 잡히는 걸 막기 위해 ideal/max로 강하게 요청
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920, max: 4096 },
+          height: { ideal: 1080, max: 4096 },
+          frameRate: { ideal: 30, max: 60 }
+        }
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+
+      await new Promise((resolve) => {
+        video.onloadedmetadata = () => resolve();
+      });
+      await video.play();
+
+      track = stream.getVideoTracks()[0] || null;
+
+      // 가능한 경우: 연속 자동노출/화이트밸런스/포커스 시도(지원 안 되면 무시)
+      try {
+        if (track) {
+          await track.applyConstraints({
+            advanced: [
+              { focusMode: "continuous" },
+              { exposureMode: "continuous" },
+              { whiteBalanceMode: "continuous" }
+            ]
+          });
+        }
+      } catch {}
+
+      const settings = track?.getSettings?.() || {};
+      camInfoEl.textContent = `cam: ${settings.width || video.videoWidth}x${settings.height || video.videoHeight}`;
+      log(`STATUS: 카메라 ON. 실제 스트림 해상도: ${settings.width || video.videoWidth}x${settings.height || video.videoHeight}`);
+
+      btnCapture.disabled = false;
+      btnTorch.disabled = false;
+
+    } catch (e) {
+      log("ERROR: 카메라 접근 실패 - " + (e?.message || e));
+      stopCamera();
+    }
+  }
+
+  async function toggleTorch() {
+    if (!track) return;
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (!caps.torch) {
+        log("TORCH: 이 기기/브라우저는 torch 미지원");
+        return;
+      }
+      torchOn = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+      log("TORCH: " + (torchOn ? "ON" : "OFF"));
+    } catch (e) {
+      log("TORCH ERROR: " + (e?.message || e));
+    }
+  }
+
+  function dataURLSizeBytes(dataURL) {
+    const b64 = dataURL.split(",")[1] || "";
+    return Math.floor(b64.length * 0.75);
+  }
+
+  async function blobToDataURL(blob) {
+    return await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(blob);
     });
-
-  } catch (e) {
-    const msg = e?.name === "AbortError" ? "solve timeout" : (e?.message || String(e));
-    return json({ ok: false, error: msg }, 500);
   }
-};
 
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
-  };
-}
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders() },
+  function captureCanvasDataURL() {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) throw new Error("video not ready");
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, w, h);
+
+    const jpegQ = Math.max(0.7, Math.min(1, Number(jpegQEl.value || 0.98)));
+    const dataURL = canvas.toDataURL("image/jpeg", jpegQ);
+    return { dataURL, w, h, mode: "canvas", jpegQ, bytes: dataURLSizeBytes(dataURL) };
+  }
+
+  async function capturePhotoDataURL() {
+    if (!track) throw new Error("no track");
+    if (!("ImageCapture" in window)) throw new Error("ImageCapture not supported");
+
+    const ic = new ImageCapture(track);
+    const blob = await ic.takePhoto(); // 고해상도 사진(가능한 경우)
+    const dataURL = await blobToDataURL(blob);
+
+    // 크기 추정은 dataURL에서
+    return { dataURL, w: null, h: null, mode: "photo", jpegQ: null, bytes: dataURLSizeBytes(dataURL) };
+  }
+
+  async function captureBest() {
+    const mode = capModeEl.value; // auto/photo/canvas
+    if (mode === "canvas") return captureCanvasDataURL();
+    if (mode === "photo") {
+      const shot = await capturePhotoDataURL();
+      return shot;
+    }
+
+    // auto: photo 가능하면 photo, 아니면 canvas
+    try {
+      const shot = await capturePhotoDataURL();
+      return shot;
+    } catch {
+      return captureCanvasDataURL();
+    }
+  }
+
+  async function postJSON(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json) throw new Error(`HTTP ${res.status}: ${JSON.stringify(json)}`);
+    return json;
+  }
+
+  function startAutoCountdown(sec, fn) {
+    if (countdownTimer) clearInterval(countdownTimer);
+    if (!sec || sec <= 0) return;
+    let left = sec;
+    log(`STATUS: ${left}초 후 자동 다음 촬영`);
+    countdownTimer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        fn();
+      } else {
+        log(`STATUS: ${left}...`);
+      }
+    }, 1000);
+  }
+
+  async function runSolve(text, pageNum) {
+    log("STATUS: 정답 생성 중...");
+    const solve = await postJSON("/.netlify/functions/solve", { text, page: pageNum });
+    if (!solve.ok) throw new Error("solve failed: " + JSON.stringify(solve));
+    ansTextEl.value = solve.text || "";
+    log("solve response " + JSON.stringify(solve).slice(0, 2500));
+    return solve;
+  }
+
+  async function captureAndRun() {
+    if (!stream) return;
+    if (busy) return;
+    busy = true;
+    btnCapture.disabled = true;
+    btnSolve.disabled = true;
+
+    try {
+      const pageNum = Number(pageEl.value || 1);
+      log(`STATUS: 페이지 ${pageNum} 촬영 중...`);
+
+      const shot = await captureBest();
+      preview.src = shot.dataURL;
+
+      // 스트림 해상도/사진 모드 모두 로그
+      const s = track?.getSettings?.() || {};
+      const vw = video.videoWidth, vh = video.videoHeight;
+      log(`capture mode=${shot.mode}, video=${vw}x${vh}, track=${s.width || "-"}x${s.height || "-"}, bytes=${shot.bytes}`);
+
+      // bytes 너무 작으면 경고(대충 200KB 이하이면 대부분 글자 망가짐)
+      if (shot.bytes < 250000) {
+        log("WARN: 이미지 용량이 너무 작음(저해상도 가능성 큼). camInfo/해상도 확인 필요.");
+      }
+
+      log("STATUS: OCR 처리 중...");
+      const ocr = await postJSON("/.netlify/functions/ocr", { image: shot.dataURL, page: pageNum });
+      if (!ocr.ok) throw new Error("ocr failed: " + JSON.stringify(ocr));
+
+      ocrTextEl.value = ocr.text || "";
+      btnSolve.disabled = !(ocrTextEl.value || "").trim();
+      log("OCR response " + JSON.stringify({ ok: ocr.ok, patternCount: ocr.patternCount, textPreview: (ocr.text||"").slice(0,200) }));
+
+      log("STATUS: OCR 완료. 이제 solve.");
+      await runSolve(ocrTextEl.value, pageNum);
+      log("STATUS: 페이지 정답 생성 완료.");
+
+      const sec = Number(autoSecEl.value || 0);
+      startAutoCountdown(sec, async () => {
+        pageEl.value = String(pageNum + 1);
+        await captureAndRun();
+      });
+
+    } catch (e) {
+      log("ERROR: " + (e?.message || e));
+    } finally {
+      busy = false;
+      btnCapture.disabled = !stream;
+    }
+  }
+
+  btnStart.addEventListener("click", startCamera);
+  btnTorch.addEventListener("click", toggleTorch);
+  btnCapture.addEventListener("click", captureAndRun);
+
+  btnSolve.addEventListener("click", async () => {
+    try {
+      const pageNum = Number(pageEl.value || 1);
+      const text = (ocrTextEl.value || "").trim();
+      if (!text) return;
+      await runSolve(text, pageNum);
+    } catch (e) {
+      log("ERROR: " + (e?.message || e));
+    }
   });
-}
 
-function normalizeOcrText(s) {
-  let t = String(s || "");
-
-  // normalize weird brackets and quotes
-  t = t
-    .replace(/[‹›«»]/g, " ")
-    .replace(/[“”]/g, '"')
-    .replace(/[’]/g, "'");
-
-  // OCR often produces: O4 for 04
-  t = t.replace(/\bO(\d)\b/g, "0$1");
-
-  // fix glued question numbers like 0505. / 0707.
-  t = t.replace(/\b(0[1-9]|[1-4]\d|50)(0[1-9]|[1-4]\d|50)\./g, (m, a, b) => {
-    if (a === b) return `${a} ${b}.`;
-    return m;
+  btnReset.addEventListener("click", () => {
+    resetUI();
+    stopCamera();
+    log("STATUS: 리셋 완료");
   });
 
-  // unify spacing
-  t = t.replace(/[ \t]+/g, " ");
-  t = t.replace(/\n{3,}/g, "\n\n");
-
-  return t.trim();
-}
-
-function detectQuestionNumbers(t) {
-  const nums = new Set();
-
-  // [01-05] style ranges
-  const rangeRe = /\[(\d{2})\s*-\s*(\d{2})\]/g;
-  for (const m of t.matchAll(rangeRe)) {
-    const a = Number(m[1]), b = Number(m[2]);
-    if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b <= 50 && a <= b) {
-      for (let i = a; i <= b; i++) nums.add(i);
-    }
-  }
-
-  // "01 01." / "13. 13." / "16.16." ANYWHERE (2단 OCR 합쳐짐 대응)
-  // 안전장치: 쉼표(13,000)와 구분되도록 '.' 패턴만 인정
-  const dupRe = /\b(0?[1-9]|[1-4]\d|50)\s*(?:\.\s*|\s+)(0?[1-9]|[1-4]\d|50)\s*\./g;
-  for (const m of t.matchAll(dupRe)) {
-    const a = Number(m[1]), b = Number(m[2]);
-    // 보통 a==b가 문항번호. 그래도 a만 사용(일부 OCR이 두 번째를 깨먹음)
-    if (a >= 1 && a <= 50) nums.add(a);
-    if (b >= 1 && b <= 50 && a === b) nums.add(b);
-  }
-
-  // line-start "18." patterns (보조)
-  const lineRe = /(?:^|\n)\s*(0?[1-9]|[1-4]\d|50)\s*\.(?!\d)/g;
-  for (const m of t.matchAll(lineRe)) {
-    const a = Number(m[1]);
-    if (a >= 1 && a <= 50) nums.add(a);
-  }
-
-  return Array.from(nums).sort((x, y) => x - y);
-}
-
-function chooseTargetNumbers({ detected, page }) {
-  // if detection is decent, trust it
-  if (detected.length >= 5) return detected;
-
-  // if user shot partial page (like 13~19), detected can be small but still meaningful
-  if (detected.length >= 2) return detected;
-
-  // hard fallback by page
-  if (page === 1) return range(1, 20);
-  if (page === 2) return range(21, 40);
-  if (page === 3) return range(41, 50);
-  // generic fallback
-  return range(1, 20);
-}
-
-function range(a, b) {
-  const out = [];
-  for (let i = a; i <= b; i++) out.push(i);
-  return out;
-}
-
-function buildPrompt({ page, target, stopToken, normText }) {
-  const targetList = target.join(", ");
-
-  // “성균관대 문법 유형 약간만” + “답 무조건” + “정규화 최소세트”
-  const system = `
-너는 "성균관대 영어 편입" 객관식 정답 키 생성기다.
-최우선 목표: 오답 최소화 + 하지만 무응답 금지(모든 문항에 1~5 중 하나는 반드시 선택).
-
-정규화 규칙(최소):
-- 보기 A/B/C/D/E는 각각 1/2/3/4/5로 간주한다.
-- 문법오류(Choose one that is either ungrammatical or unacceptable) 유형은 문장 내 표시된 ①~⑤(또는 A~E) 중 '오류/부적절'한 부분 하나를 고르는 문제이며, 최종 출력은 1~5로만 한다.
-- 확신이 낮아도 답은 내되, 마지막 줄에 UNSURE: 문항번호들을 쉼표로 나열한다.
-
-문법오류에서 자주 나오는 포인트(최소):
-- include/avoid/consider 등 뒤 동명사/부정사 형태
-- 병렬(parallelism): to V / V-ing / 명사 형태 일치
-- 대명사 지시/수일치(its/their, he/they 등)
-- 전치사/관계사(where/which) 용법
-- 수일치/시제/태(수동·능동)
-
-출력 형식(설명 금지):
-각 줄: "문항번호-정답" (정답은 1~5)
-마지막에서 두 번째 줄: "UNSURE: ..." (없으면 빈칸 대신 UNSURE: 없음)
-마지막 줄: ${stopToken}
-`.trim();
-
-  const user = `
-[페이지] ${page}
-[풀어야 할 문항 번호들] ${targetList}
-
-[OCR 텍스트 원문]
-${normText}
-`.trim();
-
-  return [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
-}
-
-function parseModelOutput(content, target) {
-  const answers = new Map();
-  const unsure = new Set();
-
-  // capture UNSURE list
-  const unsureMatch = content.match(/UNSURE\s*:\s*([0-9,\s]+)/i);
-  if (unsureMatch && unsureMatch[1]) {
-    for (const part of unsureMatch[1].split(",")) {
-      const n = Number(part.trim());
-      if (Number.isFinite(n)) unsure.add(n);
-    }
-  }
-
-  // parse lines: "13-2", "13 : B", "13) 2" etc.
-  const lineRe = /(?:^|\n)\s*(0?[1-9]|[1-4]\d|50)\s*[-:)\.]\s*([1-5]|[A-Ea-e])\b/g;
-  for (const m of content.matchAll(lineRe)) {
-    const q = Number(m[1]);
-    let a = m[2].toUpperCase();
-    let v = letterToNum(a);
-    if (!v) v = Number(a);
-    if (q >= 1 && q <= 50 && v >= 1 && v <= 5) answers.set(q, v);
-  }
-
-  // fill missing with "best guess" = 3, but mark as unsure
-  for (const q of target) {
-    if (!answers.has(q)) {
-      answers.set(q, 3);
-      unsure.add(q);
-    }
-  }
-
-  // build final output strictly for target, sorted
-  const sorted = [...target].sort((a,b)=>a-b);
-  let out = "";
-  for (const q of sorted) {
-    out += `${q}-${answers.get(q)}\n`;
-  }
-
-  const unsureArr = [...unsure].filter(n => target.includes(n)).sort((a,b)=>a-b);
-  out += `UNSURE: ${unsureArr.length ? unsureArr.join(", ") : "없음"}\n`;
-  out += `${process.env.STOP_TOKEN || "XURTH"}`;
-
-  return { finalText: out.trim(), unsure: unsureArr };
-}
-
-function letterToNum(ch) {
-  if (ch === "A") return 1;
-  if (ch === "B") return 2;
-  if (ch === "C") return 3;
-  if (ch === "D") return 4;
-  if (ch === "E") return 5;
-  return 0;
-}
+  log("STATUS: 준비됨. 카메라 켜기를 눌러.");
+</script>
+</body>
+</html>
 
