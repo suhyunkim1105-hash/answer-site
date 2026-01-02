@@ -59,7 +59,7 @@
         ① 시험지를 화면에 꽉 채우고<br/>
         ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
         ③ “현재 페이지 촬영” → OCR → 정답 생성 순서로 진행.<br/>
-        ※ 자동 모드: OCR 텍스트에 <code>QOPHY</code>가 보이면 자동 문제풀이 시작, <code>XURTH</code>가 보이면 자동 정지.
+        ※ 자동 모드: OCR/정답 텍스트에 <code>QOPHY</code>가 보이면 자동 문제풀이 시작, 정답 텍스트에 <code>XURTH</code>가 보이면 자동 정지.
       </div>
     </div>
 
@@ -106,7 +106,7 @@
     }
 
     let stream = null;
-    let busy = false; // ✅ 연타 방지 락
+    let busy = false; // 연타 방지 락
 
     // ===== 화면 꺼짐 방지 =====
     let wakeLock = null;
@@ -138,14 +138,12 @@
       const voices = window.speechSynthesis.getVoices();
       if (!voices || !voices.length) return null;
 
-      // 1순위: 한국어 + 이름에 'Yuna' 비슷한 것
       const koVoices = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith("ko"));
       let v = null;
       if (koVoices.length) {
         v = koVoices.find(vo => /yuna|younha|yun|una/i.test(vo.name)) || koVoices[0];
       } else {
-        // 한국어 없으면 그냥 여성스러운 이름 or 첫 번째
-        v = voices.find(vo => /female|woman|girl|woman/i.test(vo.name)) || voices[0];
+        v = voices.find(vo => /female|woman|girl/i.test(vo.name)) || voices[0];
       }
       ttsVoice = v;
       voicesReady = true;
@@ -164,7 +162,6 @@
           pickTtsVoice();
         }
       };
-      // 초기에 한 번 시도
       setTimeout(initTtsVoices, 0);
     }
 
@@ -176,7 +173,7 @@
       const u = new SpeechSynthesisUtterance(text);
       if (ttsVoice) u.voice = ttsVoice;
       u.rate = opts.rate ?? 0.95;   // 약간 느리게
-      u.pitch = opts.pitch ?? 1.05; // 살짝 높게(여성 느낌)
+      u.pitch = opts.pitch ?? 1.05; // 살짝 높게
       u.onend = () => {
         if (opts.onend) opts.onend();
       };
@@ -222,7 +219,7 @@
       autoStopped = true;
       clearAutoTimers();
       stopAllSpeech();
-      log("STATUS: 자동 문제풀이 정지됨 (XURTH 감지 또는 수동 중단).");
+      log("STATUS: 자동 문제풀이 정지됨.");
     }
 
     function scheduleNextAutoCapture() {
@@ -231,7 +228,6 @@
       // 정답 읽은 뒤 15초 대기
       nextCaptureTimer = setTimeout(() => {
         if (!autoMode || autoStopped) return;
-        // 페이지 인식 카운트다운 + 다음 촬영(버튼 클릭 재사용)
         const seq = [
           { text: "페이지 인식", pauseAfterMs: 500 },
           { text: "5", pauseAfterMs: 500 },
@@ -243,10 +239,9 @@
         log("STATUS: (TTS) 페이지 인식 카운트다운...");
         speakSequence(seq, () => {
           if (!autoMode || autoStopped) return;
-          // 기존 파이프라인을 그대로 쓰기 위해 버튼 클릭 재사용
-          btnShot.click();
+          btnShot.click(); // 기존 파이프라인 재사용
         });
-      }, 15000); // 15초 후 카운트다운/다음 페이지 촬영
+      }, 15000); // 15초 후 카운트다운/다음 촬영
     }
 
     // ===== 카메라 =====
@@ -255,7 +250,6 @@
 
       log("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
 
-      // iPhone Safari가 ideal을 무시하는 경우가 있어 min+ideal 같이 줌
       const constraints = {
         audio: false,
         video: {
@@ -272,7 +266,6 @@
         video.onloadedmetadata = () => r();
       });
 
-      // 가능한 경우 한 번 더 해상도 올리기 시도(실패해도 무시)
       try {
         const track = stream.getVideoTracks()[0];
         await track.applyConstraints({
@@ -283,7 +276,6 @@
         });
       } catch (_) {}
 
-      // 실제 들어온 해상도 표시
       setTimeout(() => {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
@@ -335,7 +327,6 @@
       let unsure = [];
 
       for (const ln of lines) {
-        // "12: A" 또는 "12: 3"
         const m = ln.match(/^(\d{1,3})\s*:\s*([0-9A-E])\b/i);
         if (m) {
           const n = Number(m[1]);
@@ -358,7 +349,6 @@
         }
       }
 
-      // 번호 정렬
       answers.sort((a, b) => a.num - b.num);
       unsure = Array.from(new Set(unsure)).sort((a, b) => a - b);
 
@@ -381,26 +371,20 @@
       const { answers, unsure } = parseAnswerLinesForTTS(answerText);
 
       if (!answers.length && !unsure.length) {
-        // 정답 파싱 자체 실패
         speakFailureAndScheduleNext();
         return;
       }
 
       const seq = [];
 
-      // 각 문항 2번 읽기 + 1.5~2초 쉼
       for (const a of answers) {
         const num = a.num;
-        const val = a.value; // 숫자(1~5)든 문자(A~E)든 그대로 읽힘
+        const val = a.value;
         const phrase = `${num}번 ${val}`;
-
-        // 1회차
         seq.push({ text: phrase, pauseAfterMs: 300 });
-        // 2회차 + 다음 문항 전 1.7초 정도
         seq.push({ text: phrase, pauseAfterMs: 1700 });
       }
 
-      // UNSURE도 읽어주기
       if (unsure.length) {
         const unsurePhrase = "불확실 번호: " + unsure.map(n => `${n}번`).join(", ");
         seq.push({ text: unsurePhrase, pauseAfterMs: 1700 });
@@ -414,18 +398,23 @@
     }
 
     function handleAfterSolve(page, ocrText, answerText, solvedOk) {
-      const combined = (ocrText || "") + "\n" + (answerText || "");
+      const ans = answerText || "";
 
-      // XURTH 감지 → 자동 문제풀이 + 음성 모두 정지
-      if (/XURTH/i.test(combined)) {
-        log("STATUS: XURTH 감지. 자동 문제풀이 및 음성을 정지할게.");
+      // XURTH 감지는 "정답 텍스트"에서만
+      if (/XURTH/i.test(ans)) {
+        const upper = ans.toUpperCase();
+        const idx = upper.indexOf("XURTH");
+        let snippet = ans;
+        if (idx !== -1) {
+          snippet = ans.slice(Math.max(0, idx - 10), idx + 10);
+        }
+        log(`STATUS: XURTH 감지. 정답 텍스트 스니펫: ${snippet}`);
         stopAuto();
         return;
       }
 
       if (!autoMode || autoStopped) {
-        // 수동 모드면 여기서 끝
-        return;
+        return; // 수동 모드면 여기서 종료
       }
 
       if (!solvedOk) {
@@ -441,13 +430,11 @@
       try {
         await startCamera();
 
-        // 화면 꺼짐 방지
         if (!wakeLockRequested) {
           wakeLockRequested = true;
           requestWakeLock();
         }
 
-        // 최초 한 번 TTS "테스트"
         if (!ttsTestDone) {
           ttsTestDone = true;
           speakText("테스트");
@@ -459,9 +446,9 @@
 
     // ===== 이벤트: 촬영 버튼 (수동 + 자동 모두 이 핸들러 사용) =====
     btnShot.addEventListener("click", async () => {
-      if (busy) return;         // ✅ 연타 방지
+      if (busy) return;
       busy = true;
-      btnShot.disabled = true;  // ✅ UI 차단
+      btnShot.disabled = true;
 
       try {
         await startCamera();
@@ -487,11 +474,11 @@
         const ocrText = ocr.text || "";
         ocrBox.value = ocrText;
 
-        // QOPHY 감지 → 자동 모드 ON (현재 페이지부터 자동 루프)
+        // QOPHY 감지 → 자동 모드 ON
         if (!autoMode && /QOPHY/i.test(ocrText)) {
           autoMode = true;
           autoStopped = false;
-          log("STATUS: QOPHY 감지. 자동 문제풀이 모드를 시작할게.");
+          log("STATUS: QOPHY 감지(OCR). 자동 문제풀이 모드를 시작할게.");
         }
 
         log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
@@ -510,7 +497,13 @@
         ansBox.value = answerText || "";
         log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
 
-        // 자동 모드면 TTS + 다음 페이지 스케줄링
+        // 혹시 정답 텍스트에 QOPHY가 있는 경우도 자동 모드 ON
+        if (!autoMode && /QOPHY/i.test(answerText)) {
+          autoMode = true;
+          autoStopped = false;
+          log("STATUS: QOPHY 감지(정답 텍스트). 자동 문제풀이 모드를 시작할게.");
+        }
+
         handleAfterSolve(page, ocrText, answerText, solved.ok);
       } catch (e) {
         log(`STATUS: 처리 실패: ${e?.message || e}`);
