@@ -30,6 +30,7 @@ exports.handler = async (event) => {
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        // 선택(있으면 좋음)
         "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "",
         "X-Title": process.env.OPENROUTER_APP_NAME || "answer-site",
       },
