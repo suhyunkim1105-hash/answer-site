@@ -148,18 +148,15 @@
       const voices = window.speechSynthesis.getVoices();
       if (!voices || !voices.length) return null;
 
-      // 1. ko-KR + 이름에 "Yuna" 비슷한 거 있으면 우선
       const cand1 = voices.find(v =>
         v.lang && v.lang.toLowerCase().startsWith("ko") &&
         /yuna|youna|유나/i.test(v.name)
       );
       if (cand1) return cand1;
 
-      // 2. ko-KR 중 첫 번째
       const cand2 = voices.find(v => v.lang && v.lang.toLowerCase().startsWith("ko"));
       if (cand2) return cand2;
 
-      // 3. 그 외 첫 번째
       return voices[0];
     }
 
@@ -194,6 +191,20 @@
       speakText("정답 생성에 실패했어.", { rate: 1.0 });
     }
 
+    // 페이지 인식 카운트다운: "페이지 인식. 5, 4, 3, 2, 1"
+    function speakPageCountdown() {
+      if (!("speechSynthesis" in window)) return Promise.resolve();
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance("페이지 인식. 5, 4, 3, 2, 1");
+      u.lang = "ko-KR";
+      if (ttsVoice) u.voice = ttsVoice;
+      u.rate = 1.0;
+      return new Promise((resolve) => {
+        u.onend = () => resolve();
+        window.speechSynthesis.speak(u);
+      });
+    }
+
     function parseAnswerText(ansText) {
       const lines = String(ansText || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       const answers = [];
@@ -222,7 +233,6 @@
         const map = { A: "에이", B: "비", C: "씨", D: "디", E: "이" };
         return map[s] || s;
       }
-      // 숫자 그대로 읽게 둠
       return s;
     }
 
@@ -245,7 +255,6 @@
         items.push(`불확실한 문항, ${list}`);
       }
 
-      // 두 번 반복
       const queue = items.concat(items);
       if (!queue.length) {
         if (typeof onDone === "function") onDone();
@@ -262,7 +271,7 @@
         speakText(line, {
           rate: 1.0,
           onend: () => {
-            setTimeout(playNext, 1600); // 1.6초 정도 쉬고 다음
+            setTimeout(playNext, 1600);
           }
         });
       };
@@ -299,9 +308,7 @@
             { width: 1280, height: 720 }
           ]
         });
-      } catch (_) {
-        // 무시
-      }
+      } catch (_) {}
 
       setTimeout(() => {
         const vw = video.videoWidth;
@@ -389,12 +396,16 @@
         const text = ocr.text || "";
         ocrBox.value = text;
 
-        // 텍스트가 거의 없으면(검은 화면 등) solve 호출하지 않고 잠시 후 재시도
+        // 텍스트가 거의 없으면(검은 화면 등) solve 호출/카운트다운 없이 재시도
         if (!text.trim() || (ocr.hits ?? 0) === 0) {
           log("STATUS: [자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
           scheduleAutoLoop(4000);
           return;
         }
+
+        // 여기부터는 "문자가 실제로 나온 경우" → 페이지 인식 카운트다운 후 solve
+        log(`STATUS: [자동] 페이지 ${page} 인식됨. 음성 카운트다운 후 정답을 생성할게.`);
+        await speakPageCountdown();
 
         log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
         const solved = await doSolve(page, text);
@@ -411,16 +422,9 @@
         ansBox.value = ansText;
         log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
 
-        const hasStop = ansText.includes("XURTH");
-
-        // 정답 + UNSURE 읽기 두 번, 끝나면 다음 루프(또는 종료)
+        // XURTH 여부와 상관없이, 자동모드가 켜져 있으면 계속 돌림
         speakAnswersTwiceWithPauses(ansText, () => {
-          if (!autoMode && !hasStop) return;
-          if (hasStop) {
-            log("STATUS: XURTH 감지. 자동 문제풀이 모드를 종료할게.");
-            autoMode = false;
-            return;
-          }
+          if (!autoMode) return;
           scheduleAutoLoop(15000); // 15초 뒤 다음 페이지 인식
         });
 
@@ -450,7 +454,6 @@
       busy = true;
       btnShot.disabled = true;
 
-      // 수동 촬영 시 자동모드는 끔
       if (autoMode) {
         autoMode = false;
         if (autoTimer) clearTimeout(autoTimer);
