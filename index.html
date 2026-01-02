@@ -15,15 +15,8 @@
     button.secondary { background:#243055; }
     button:disabled { opacity:.55; cursor:not-allowed; }
     input { background:#0b1020; color:#e9eefc; border:1px solid rgba(255,255,255,.14); border-radius: 10px; padding:10px 12px; }
-    .previewWrap {
-      height: 70vh;
-      min-height: 360px;
-      border-radius: 18px;
-      overflow:hidden;
-      background:#050a18;
-      border:1px solid rgba(255,255,255,.08);
-    }
-    video, img { width:100%; height:100%; object-fit: contain; background:#000; }
+    .previewWrap { height: 70vh; min-height: 360px; border-radius: 18px; overflow:hidden; background:#050a18; border:1px solid rgba(255,255,255,.08); }
+    video { width:100%; height:100%; object-fit: contain; background:#000; }
     .hint { opacity:.85; font-size: 13px; line-height: 1.6; margin-top: 10px; }
     pre { margin:0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
     textarea {
@@ -57,7 +50,7 @@
       <div class="hint">
         - 시험지를 화면에 **꽉 차게** / **흔들림 최소**<br/>
         - 2단 지문이면 **가능하면 더 가까이**(글자 선명) + 그림자/반사 제거<br/>
-        - 촬영은 “영상 캡처”가 아니라 **사진(스틸샷) 우선**으로 보냄
+        - 캡처는 스틸샷(고해상도) + **전송 전 리사이즈/압축(필수)**
       </div>
     </div>
 
@@ -98,7 +91,6 @@
       const ss = String(d.getSeconds()).padStart(2,"0");
       return `${hh}:${mm}:${ss}`;
     }
-
     function log(msg) {
       logEl.textContent += `[${ts()}] ${msg}\n`;
       logEl.scrollTop = logEl.scrollHeight;
@@ -122,19 +114,16 @@
 
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
-
       await new Promise((r) => { video.onloadedmetadata = () => r(); });
 
-      // 가능하면 트랙 최대 해상도 쪽으로 한번 더 끌어올림
+      // 가능하면 트랙 최대 해상도 쪽으로 한 번 더
       try {
         const track = stream.getVideoTracks()[0];
         const caps = track.getCapabilities ? track.getCapabilities() : null;
         if (caps && caps.width && caps.height) {
           const targetW = caps.width.max || 1920;
           const targetH = caps.height.max || 1080;
-          await track.applyConstraints({
-            advanced: [{ width: targetW, height: targetH }]
-          });
+          await track.applyConstraints({ advanced: [{ width: targetW, height: targetH }] });
         }
       } catch (e) {}
 
@@ -143,43 +132,100 @@
       log(`STATUS: 카메라 ON. 실제 스트림 해상도: ${st.width || video.videoWidth}x${st.height || video.videoHeight}`);
     }
 
+    function dataUrlBytes(dataUrl) {
+      // base64 길이로 대략 바이트 계산
+      const i = dataUrl.indexOf(",");
+      if (i < 0) return 0;
+      const b64 = dataUrl.slice(i + 1);
+      return Math.floor(b64.length * 3 / 4);
+    }
+
+    async function blobToDataUrl(blob) {
+      return await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error("FileReader failed"));
+        fr.readAsDataURL(blob);
+      });
+    }
+
+    async function loadImageFromBlob(blob) {
+      // iOS 안정용: createImageBitmap 실패 대비 img 로드
+      const url = URL.createObjectURL(blob);
+      try {
+        const img = new Image();
+        img.decoding = "async";
+        img.loading = "eager";
+        await new Promise((res, rej) => {
+          img.onload = () => res();
+          img.onerror = () => rej(new Error("Image load failed"));
+          img.src = url;
+        });
+        return img;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    async function compressBlobToJpegDataUrl(blob, { maxSide = 2200, quality = 0.85 } = {}) {
+      const img = await loadImageFromBlob(blob);
+
+      const sw = img.naturalWidth || img.width;
+      const sh = img.naturalHeight || img.height;
+
+      const scale = Math.min(1, maxSide / Math.max(sw, sh));
+      const tw = Math.max(1, Math.round(sw * scale));
+      const th = Math.max(1, Math.round(sh * scale));
+
+      const canvas = document.createElement("canvas");
+      canvas.width = tw;
+      canvas.height = th;
+
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, 0, 0, tw, th);
+
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      return { dataUrl, srcW: sw, srcH: sh, outW: tw, outH: th };
+    }
+
     async function captureBestJpegDataUrl() {
       if (!stream) throw new Error("No stream");
 
       const track = stream.getVideoTracks()[0];
 
-      // 1) ImageCapture(스틸샷) 가능하면 무조건 이걸 우선 사용 (iPhone에서 효과 큼)
+      // 1) ImageCapture 스틸샷
       if (window.ImageCapture) {
         try {
           const ic = new ImageCapture(track);
           const caps = await ic.getPhotoCapabilities().catch(() => null);
 
-          // 해상도 최대치 시도
+          // 스틸샷은 최대가 너무 커서 "적당히" 요청 (그 후 다시 리사이즈)
           let photoSettings = {};
           if (caps && caps.imageWidth && caps.imageHeight) {
-            photoSettings.imageWidth = caps.imageWidth.max;
-            photoSettings.imageHeight = caps.imageHeight.max;
+            const wMax = caps.imageWidth.max;
+            const hMax = caps.imageHeight.max;
+            // 일단 큰 쪽으로 찍되, 너무 과하면 중간값으로
+            photoSettings.imageWidth = Math.min(wMax, 3000);
+            photoSettings.imageHeight = Math.min(hMax, 4000);
           }
 
           const blob = await ic.takePhoto(photoSettings);
           const bytes = blob.size;
 
-          const dataUrl = await new Promise((resolve, reject) => {
-            const fr = new FileReader();
-            fr.onload = () => resolve(fr.result);
-            fr.onerror = () => reject(new Error("FileReader failed"));
-            fr.readAsDataURL(blob);
-          });
+          // ★필수: 전송 전 리사이즈+재압축 (요청 바디 제한/속도 문제 해결)
+          const comp = await compressBlobToJpegDataUrl(blob, { maxSide: 2200, quality: 0.85 });
+          const outBytes = dataUrlBytes(comp.dataUrl);
 
-          const st = track.getSettings ? track.getSettings() : {};
-          log(`capture mode=photo, track=${st.width || "?"}x${st.height || "?"}, bytes=${bytes}`);
-          return { dataUrl, mode: "photo", bytes };
+          log(`capture mode=photo, src=${comp.srcW}x${comp.srcH}, resized=${comp.outW}x${comp.outH}, blobBytes=${bytes}, sendBytes≈${outBytes}`);
+          return { dataUrl: comp.dataUrl, mode: "photo", bytes: outBytes };
         } catch (e) {
           // 실패하면 캔버스 fallback
         }
       }
 
-      // 2) fallback: video 캔버스 캡처
+      // 2) fallback: video 캔버스 캡처 + 압축
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) throw new Error("Video not ready");
@@ -187,13 +233,16 @@
       const canvas = document.createElement("canvas");
       canvas.width = vw;
       canvas.height = vh;
-
-      const ctx = canvas.getContext("2d", { willReadFrequently: false });
+      const ctx = canvas.getContext("2d");
       ctx.drawImage(video, 0, 0, vw, vh);
 
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-      log(`capture mode=canvas, video=${vw}x${vh}, chars=${dataUrl.length}`);
-      return { dataUrl, mode: "canvas", bytes: Math.floor(dataUrl.length / 4) };
+      // 캔버스도 리사이즈/압축
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      const comp = await compressBlobToJpegDataUrl(blob, { maxSide: 2200, quality: 0.85 });
+      const outBytes = dataUrlBytes(comp.dataUrl);
+
+      log(`capture mode=canvas, src=${vw}x${vh}, resized=${comp.outW}x${comp.outH}, sendBytes≈${outBytes}`);
+      return { dataUrl: comp.dataUrl, mode: "canvas", bytes: outBytes };
     }
 
     async function fetchJsonWithTimeout(url, payload, timeoutMs) {
@@ -214,18 +263,18 @@
     }
 
     async function doOCR(page, dataUrl) {
-      const { res, data } = await fetchJsonWithTimeout("/.netlify/functions/ocr", { page, image: dataUrl }, 30000);
-      return { ok: res.ok && data.ok, ...data };
+      const { res, data } = await fetchJsonWithTimeout("/.netlify/functions/ocr", { page, image: dataUrl }, 45000);
+      // res.ok=false거나 JSON이 깨지면 data가 {}가 될 수 있음 → 상태코드도 함께 보여주기
+      return { httpStatus: res.status, ok: res.ok && data.ok, ...data };
     }
 
     async function doSolve(page, ocrText) {
-      // solve는 타임아웃/504가 빈번해서: 1차 22초, 실패 시 2차 22초 재시도
       const attempts = [
         { timeoutMs: 22000, label: "try1" },
         { timeoutMs: 22000, label: "try2" }
       ];
-
       let lastErr = null;
+
       for (const a of attempts) {
         try {
           const { res, data } = await fetchJsonWithTimeout("/.netlify/functions/solve", { page, ocrText }, a.timeoutMs);
@@ -262,10 +311,18 @@
 
         log("STATUS: OCR 처리 중...");
         const ocr = await doOCR(page, cap.dataUrl);
-        log(`OCR response ${JSON.stringify({ ok: ocr.ok, patternCount: ocr.patternCount, conf: ocr.conf, textPreview: (ocr.text||"").slice(0,160) })}`);
+
+        log(`OCR response ${JSON.stringify({
+          ok: ocr.ok,
+          httpStatus: ocr.httpStatus,
+          patternCount: ocr.patternCount,
+          textPreview: (ocr.text || "").slice(0, 160),
+          error: ocr.error,
+          detail: ocr.detail
+        })}`);
 
         if (!ocr.ok) {
-          log(`ERROR: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
+          log(`ERROR: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""} (HTTP ${ocr.httpStatus})`);
           return;
         }
 
@@ -275,11 +332,6 @@
         log("STATUS: 정답 생성 중...");
         const solved = await doSolve(page, ocr.text || "");
         log(`solve response ${JSON.stringify({ ok: solved.ok, model: solved.model, usedNumbers: solved.usedNumbers, unsure: solved.unsure })}`);
-
-        if (!solved.ok) {
-          log(`ERROR: solve 실패: ${solved.error || "Unknown"}`);
-          return;
-        }
 
         ansBox.value = solved.text || "";
         log("STATUS: 완료. 마지막 줄 UNSURE 확인.");
