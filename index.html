@@ -116,7 +116,6 @@
       let vs = speechSynthesis.getVoices();
       if (vs && vs.length) return vs;
 
-      // iOS/Chrome 일부: 약간 기다려야 채워짐
       for (let i = 0; i < 6; i++) {
         await sleep(120);
         vs = speechSynthesis.getVoices();
@@ -129,15 +128,12 @@
       const ko = (voices || []).filter(v => ((v.lang || "").toLowerCase().startsWith("ko")));
       if (!ko.length) return null;
 
-      // 1) 이름에 yuna/유나가 있으면 최우선
       const yuna = ko.find(v => /yuna|유나/i.test(v.name || ""));
       if (yuna) return yuna;
 
-      // 2) 이름에 female/여/여성 힌트
       const femaleHint = ko.find(v => /female|여|여성/i.test(v.name || ""));
       if (femaleHint) return femaleHint;
 
-      // 3) 그 외 첫번째 ko-KR
       return ko[0];
     }
 
@@ -151,8 +147,8 @@
         u.lang = "ko-KR";
         if (voice) u.voice = voice;
 
-        // "유나 같은" 느낌: 약간 높은 pitch (기기별 차이 큼)
-        u.rate = 0.98;
+        // 또박또박: 약간 느리게
+        u.rate = 0.95;
         u.pitch = 1.12;
 
         await new Promise((resolve) => {
@@ -167,7 +163,6 @@
       try {
         if ("speechSynthesis" in window) {
           speechSynthesis.cancel();
-          // voices 로딩 트리거
           if (speechSynthesis.getVoices) speechSynthesis.getVoices();
         }
       } catch (_) {}
@@ -175,35 +170,29 @@
     }
 
     async function speakPageCountdownOnly() {
-      // 요구: "페이지 인식 5 4 3 2 1"만, 추가 멘트 없음
       await speakOnce("페이지 인식");
       for (let i = 5; i >= 1; i--) {
         await speakOnce(String(i));
-        await sleep(850); // 너무 딱딱 끊기지 않게
+        await sleep(850);
       }
-      // 여기서 아무 말도 안 함
+      // 여기서 아무말도 안 함
     }
 
     function toSpeechToken(ansRaw) {
       const s = String(ansRaw ?? "").trim();
       if (!s) return "";
-
       const up = s.toUpperCase();
 
-      // 숫자 1~5
       if (/^[1-5]$/.test(up)) return up;
 
-      // A~E
       if (/^[A-E]$/.test(up)) {
-        // 한국어 발음(간단)
         if (up === "A") return "에이";
         if (up === "B") return "비";
         if (up === "C") return "씨";
         if (up === "D") return "디";
-        if (up === "E") return "이"; // E가 '이'로 들릴 수 있음(완전 고정 불가)
+        if (up === "E") return "이";
       }
 
-      // 기타는 그대로
       return up;
     }
 
@@ -211,7 +200,6 @@
       const pairs = [];
       const dbg = (solved && solved.debug) ? solved.debug : null;
 
-      // 1) debug.answers 우선
       const answersObj = dbg && dbg.answers && typeof dbg.answers === "object" ? dbg.answers : null;
       if (answersObj) {
         const nums = Object.keys(answersObj)
@@ -226,7 +214,6 @@
         }
       }
 
-      // 2) fallback: solved.text 파싱
       if (pairs.length === 0 && solved && solved.text) {
         const lines = String(solved.text).split(/\r?\n/);
         for (const ln0 of lines) {
@@ -248,26 +235,50 @@
       return pairs;
     }
 
-    async function speakAnswersTwice(solved) {
-      const pairs = buildAnswerPairsFromSolved(solved);
-      if (!pairs.length) return; // 말 안 함
+    function parseUnsureFromText(text) {
+      const t = String(text || "");
+      const m = t.match(/UNSURE\s*:\s*([^\n\r]+)/i);
+      if (!m) return [];
+      const raw = String(m[1]).trim();
+      if (!raw || raw === "-" ) return [];
+      const nums = raw.split(/[, ]+/)
+        .map(s => Number(String(s).trim()))
+        .filter(n => Number.isFinite(n));
+      // 중복 제거 + 정렬
+      return Array.from(new Set(nums)).sort((a,b)=>a-b);
+    }
 
-      // 너무 길게 한 번에 읽으면 발음이 뭉개져서, 짧게 끊어서
-      const chunkSize = 8;
-      const chunks = [];
-      for (let i = 0; i < pairs.length; i += chunkSize) {
-        const part = pairs.slice(i, i + chunkSize);
-        // "1번 2. 2번 3." 식으로 또박또박
-        const msg = part.map(([n,a]) => `${n}번 ${a}.`).join(" ");
-        chunks.push(msg);
-      }
+    async function speakAnswersWithPausesTwiceAndUnsure(solved) {
+      const pairs = buildAnswerPairsFromSolved(solved);
+      const unsureNums = parseUnsureFromText(solved && solved.text ? solved.text : "");
+
+      if (!pairs.length && !unsureNums.length) return;
+
+      const gapMs = 1700; // 1.5~2초 느낌: 1.7초
 
       for (let r = 0; r < 2; r++) {
-        for (const msg of chunks) {
-          await speakOnce(msg);
-          await sleep(120);
+        // 1번 뭐 (쉬고) 2번 뭐 ...
+        for (const [n, a] of pairs) {
+          await speakOnce(`${n}번 ${a}`);
+          await sleep(gapMs);
         }
-        await sleep(180);
+
+        // UNSURE도 읽기
+        await speakOnce("언슈어");
+        await sleep(900);
+
+        if (unsureNums.length === 0) {
+          await speakOnce("없음");
+          await sleep(gapMs);
+        } else {
+          for (const n of unsureNums) {
+            await speakOnce(`${n}번`);
+            await sleep(1400);
+          }
+        }
+
+        // 2회 반복 사이 간격
+        await sleep(600);
       }
     }
 
@@ -363,7 +374,7 @@
       btnShot.disabled = true;
 
       try {
-        // ✅ 클릭 직후 워밍업 발화 (테스트)
+        // ✅ 클릭 직후 워밍업 발화
         await ttsWarmupTest();
 
         await startCamera();
@@ -401,9 +412,9 @@
         ansBox.value = solved.text || "";
         log(`STATUS: 페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
 
-        // ✅ 정답 읽기 (2번 반복)
-        log("STATUS: (TTS) 정답 읽는 중(2회 반복)...");
-        await speakAnswersTwice(solved);
+        // ✅ 정답 + UNSURE 읽기 (느리게, 쉬어가며, 2회 반복)
+        log("STATUS: (TTS) 정답+UNSURE 읽는 중(천천히/2회 반복)...");
+        await speakAnswersWithPausesTwiceAndUnsure(solved);
 
       } catch (e) {
         log(`STATUS: 처리 실패: ${e?.message || e}`);
