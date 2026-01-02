@@ -1,6 +1,6 @@
 // netlify/functions/ocr.js
 // 입력: { page, image: "data:image/jpeg;base64,..." }
-// 출력: { ok, text, conf, patternCount }
+// 출력: { ok, text, patternCount, error?, detail? }
 
 const fetch = globalThis.fetch;
 
@@ -18,7 +18,6 @@ function normalizeText(s) {
 }
 
 function countQuestionPatterns(text) {
-  // 최소 규칙: 줄 시작의 "13." / "13 13." / "16.16." 류만 카운트
   const t = "\n" + text;
   const re = /(?:\n)\s*(\d{1,2})\s*(?:[.\)]\s*(?:\1\s*[.\)])?)?/g;
   let m, c = 0;
@@ -33,6 +32,17 @@ function countQuestionPatterns(text) {
   return c;
 }
 
+function dataUrlToBuffer(dataUrl) {
+  const i = dataUrl.indexOf(",");
+  if (i < 0) return null;
+  const meta = dataUrl.slice(0, i);
+  const b64 = dataUrl.slice(i + 1);
+  const m = meta.match(/^data:(.+);base64$/i);
+  const mime = m ? m[1] : "image/jpeg";
+  const buf = Buffer.from(b64, "base64");
+  return { mime, buf };
+}
+
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -40,7 +50,9 @@ exports.handler = async (event) => {
     }
 
     const body = JSON.parse(event.body || "{}");
+    const page = Number(body.page || 1);
     const image = body.image;
+
     if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
       return { statusCode: 400, body: JSON.stringify({ ok: false, error: "BadRequest: image(dataURL) required" }) };
     }
@@ -51,26 +63,30 @@ exports.handler = async (event) => {
       return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerMisconfig: OCR key missing" }) };
     }
 
-    // OCR.Space는 base64Image로 dataURL 그대로 받음
-    const form = new URLSearchParams();
-    form.set("apikey", apiKey);
-    form.set("base64Image", image);
-    form.set("language", "eng");
-    form.set("isOverlayRequired", "false");
-    form.set("detectOrientation", "true");
-    form.set("scale", "true");            // 중요: 작은 글자 확대 보정
-    form.set("OCREngine", "2");           // 엔진 2가 대체로 더 잘 뽑힘
-    form.set("isTable", "false");
+    const conv = dataUrlToBuffer(image);
+    if (!conv) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "BadRequest: invalid dataURL" }) };
+    }
 
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: form.toString()
-    });
+    // ★중요: x-www-form-urlencoded로 base64를 보내면 퍼센트 인코딩으로 용량/시간 폭발함.
+    // multipart로 파일 업로드가 훨씬 안정적.
+    const fd = new FormData();
+    fd.set("apikey", apiKey);
+    fd.set("language", "eng");
+    fd.set("isOverlayRequired", "false");
+    fd.set("detectOrientation", "true");
+    fd.set("scale", "true");
+    fd.set("OCREngine", "2");
+    fd.set("isTable", "false");
 
+    const blob = new Blob([conv.buf], { type: conv.mime });
+    fd.set("file", blob, `page-${page}.jpg`);
+
+    const resp = await fetch(endpoint, { method: "POST", body: fd });
     const data = await resp.json().catch(() => null);
+
     if (!resp.ok || !data) {
-      return { statusCode: 502, body: JSON.stringify({ ok: false, error: "OCR upstream failed" }) };
+      return { statusCode: 502, body: JSON.stringify({ ok: false, error: "OCR upstream failed", detail: `HTTP ${resp.status}` }) };
     }
 
     if (data.IsErroredOnProcessing) {
@@ -79,25 +95,18 @@ exports.handler = async (event) => {
         body: JSON.stringify({
           ok: false,
           error: "OCRSpaceError",
-          detail: (data.ErrorMessage && data.ErrorMessage[0]) || data.ErrorMessage || data.ProcessingTimeInMilliseconds || "Unknown"
+          detail: (data.ErrorMessage && data.ErrorMessage[0]) || data.ErrorMessage || "Unknown"
         })
       };
     }
 
     const parsed = (data.ParsedResults && data.ParsedResults[0] && data.ParsedResults[0].ParsedText) || "";
     const text = normalizeText(parsed);
-
-    // OCR.Space 신뢰도는 구조가 일정치 않아서 최소로만
     const patternCount = countQuestionPatterns(text);
 
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        ok: true,
-        text,
-        conf: null,
-        patternCount
-      })
+      body: JSON.stringify({ ok: true, text, patternCount })
     };
   } catch (e) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) }) };
