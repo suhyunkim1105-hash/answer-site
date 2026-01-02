@@ -104,6 +104,129 @@
       logEl.scrollTop = logEl.scrollHeight;
     }
 
+    function sleep(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    // =========================
+    // TTS (간단/내장 speechSynthesis)
+    // =========================
+    function pickKoVoice() {
+      try {
+        const vs = speechSynthesis.getVoices ? speechSynthesis.getVoices() : [];
+        return vs.find(v => (v.lang || "").toLowerCase().startsWith("ko")) || null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function speakOnce(text) {
+      return new Promise((resolve) => {
+        try {
+          if (!("speechSynthesis" in window)) return resolve();
+          const u = new SpeechSynthesisUtterance(String(text || ""));
+          u.lang = "ko-KR";
+          const v = pickKoVoice();
+          if (v) u.voice = v;
+          u.rate = 1.0;
+          u.onend = () => resolve();
+          u.onerror = () => resolve();
+          speechSynthesis.speak(u);
+        } catch (_) {
+          resolve();
+        }
+      });
+    }
+
+    async function speakPageCountdownAndWait() {
+      // 요구 그대로: "페이지 인식 5 4 3 2 1 (페이지 인식함)"
+      try {
+        if ("speechSynthesis" in window) {
+          // iOS에서 음성 목록 로딩 트리거
+          speechSynthesis.getVoices();
+          // 기존 음성 중지(연타/중복 방지)
+          speechSynthesis.cancel();
+        }
+      } catch (_) {}
+
+      // 음성은 한 번에(간단) + 실제 5초 대기
+      await speakOnce("페이지 인식. 5, 4, 3, 2, 1. 페이지 인식함.");
+      for (let i = 5; i >= 1; i--) {
+        log(`TTS countdown: ${i}`);
+        await sleep(1000);
+      }
+    }
+
+    function buildAnswerPairsFromSolved(solved) {
+      // 우선: solve가 준 debug.answers(숫자 1~5)를 사용
+      const pairs = [];
+      const dbg = (solved && solved.debug) ? solved.debug : null;
+
+      const answersObj = dbg && dbg.answers && typeof dbg.answers === "object" ? dbg.answers : null;
+      if (answersObj) {
+        const nums = Object.keys(answersObj)
+          .map(n => Number(n))
+          .filter(n => Number.isFinite(n))
+          .sort((a,b) => a-b);
+
+        for (const n of nums) {
+          const v = answersObj[String(n)];
+          if (v !== undefined && v !== null && String(v).trim() !== "") {
+            pairs.push([n, String(v).trim()]);
+          }
+        }
+      }
+
+      // fallback: solved.text에서 직접 파싱 (A~E 또는 1~5)
+      if (pairs.length === 0 && solved && solved.text) {
+        const lines = String(solved.text).split(/\r?\n/);
+        for (const ln0 of lines) {
+          const ln = ln0.trim();
+          if (!ln) continue;
+          if (/^UNSURE\s*:/i.test(ln)) continue;
+          if (/^XURTH\b/.test(ln)) continue;
+
+          const m = ln.match(/^(\d{1,3})\s*:\s*([ABCDE1-5])\b/i);
+          if (!m) continue;
+          const n = Number(m[1]);
+          let a = m[2].toUpperCase();
+          if ("ABCDE".includes(a)) a = String("ABCDE".indexOf(a) + 1);
+          pairs.push([n, a]);
+        }
+
+        pairs.sort((x,y) => x[0]-y[0]);
+      }
+
+      return pairs;
+    }
+
+    async function speakAnswersTwice(solved) {
+      const pairs = buildAnswerPairsFromSolved(solved);
+      if (!pairs.length) {
+        await speakOnce("정답을 읽을 수 없습니다.");
+        return;
+      }
+
+      // 길이 너무 길어지면 끊어서 읽기(안정)
+      const chunks = [];
+      const chunkSize = 12;
+      for (let i = 0; i < pairs.length; i += chunkSize) {
+        const part = pairs.slice(i, i + chunkSize);
+        const msg = part.map(([n,a]) => `${n}번 ${a}`).join(", ");
+        chunks.push(msg);
+      }
+
+      // 2번 반복
+      for (let r = 0; r < 2; r++) {
+        for (const msg of chunks) {
+          // 중간중간 끊기지 않게 순차 재생
+          await speakOnce(msg);
+          await sleep(150);
+        }
+        await sleep(200);
+      }
+    }
+
     let stream = null;
     let busy = false; // ✅ 연타 방지 락
 
@@ -203,6 +326,10 @@
 
         const page = Number($("page").value || 1);
 
+        // ✅ (TTS #1) 페이지 인식 카운트다운 + “페이지 인식함”
+        log("STATUS: (TTS) 페이지 인식 카운트다운 시작...");
+        await speakPageCountdownAndWait();
+
         log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
         const cap = captureDataURL();
         log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
@@ -229,6 +356,11 @@
 
         ansBox.value = solved.text || "";
         log(`STATUS: 페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`);
+
+        // ✅ (TTS #2) 정답 읽기 (2번 반복)
+        log("STATUS: (TTS) 정답 읽는 중(2회 반복)...");
+        await speakAnswersTwice(solved);
+
       } catch (e) {
         log(`STATUS: 처리 실패: ${e?.message || e}`);
       } finally {
@@ -239,3 +371,4 @@
   </script>
 </body>
 </html>
+
