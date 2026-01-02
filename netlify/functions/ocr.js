@@ -1,6 +1,7 @@
 // netlify/functions/ocr.js
-// OCR.Space 호출 (PRO 엔드포인트 지원)
-// ✅ JSON으로 dataURL(base64) 받아서 OCR.Space에 base64Image로 전달
+// OCR.Space(PRO) 호출
+// - primary endpoint + backup endpoint 자동 폴백
+// - fetch 실패 시 원인(cause)까지 내려줌
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -17,8 +18,10 @@ exports.handler = async (event) => {
       return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
 
-    // ✅ PRO 엔드포인트 기본값을 api-pro1로 둠 (너는 PRO 키 사용중)
-    const endpoint = (process.env.OCR_SPACE_API_ENDPOINT || "https://api-pro1.ocr.space/parse/image").trim();
+    const primary = (process.env.OCR_SPACE_API_ENDPOINT || "https://api-pro1.ocr.space/parse/image").trim();
+    const backup = (process.env.OCR_SPACE_API_ENDPOINT_BACKUP || "https://api-pro2.ocr.space/parse/image").trim();
+    const endpoints = Array.from(new Set([primary, backup].filter(Boolean)));
+
     const timeoutMs = Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000);
 
     let body = {};
@@ -47,11 +50,15 @@ exports.handler = async (event) => {
     payload.set("detectOrientation", "true");
     payload.set("base64Image", image);
 
-    const maxTries = 3;
+    const maxTries = 4; // 2 endpoints * 2 rounds
     let lastErr = null;
     let lastRaw = "";
+    let lastEndpoint = endpoints[0];
 
     for (let i = 0; i < maxTries; i++) {
+      const endpoint = endpoints[i % endpoints.length];
+      lastEndpoint = endpoint;
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -69,18 +76,17 @@ exports.handler = async (event) => {
         let data = null;
         try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
 
-        // ✅ 403에서 가장 흔한 실수: PRO 키인데 무료 endpoint를 호출
+        // 403이면 거의 항상 endpoint/키 문제
         if (res.status === 403) {
-          const raw = (lastRaw || "").slice(0, 200);
           return json(403, {
             ok: false,
             error: "OCR.Space upstream error",
             detail: "OCR.Space HTTP 403 (API key invalid or forbidden)",
-            raw,
+            raw: (lastRaw || "").slice(0, 300),
             hint:
-              "1) PRO 키면 endpoint가 반드시 api-pro1/api-pro2 여야 함. " +
-              "2) Netlify env OCR_SPACE_API_ENDPOINT 확인. " +
-              "3) OCR_SPACE_API_KEY 값에 공백/줄바꿈 없는지 확인 후 재배포.",
+              "PRO 키면 endpoint가 반드시 api-pro1/api-pro2 여야 함. " +
+              "env OCR_SPACE_API_ENDPOINT / OCR_SPACE_API_ENDPOINT_BACKUP 확인. " +
+              "키 값에 공백/줄바꿈 없는지 확인.",
             debug: { endpointUsed: endpoint },
           });
         }
@@ -123,7 +129,20 @@ exports.handler = async (event) => {
         });
       } catch (e) {
         clearTimeout(timer);
-        lastErr = (e && e.message) ? e.message : String(e);
+
+        // ✅ fetch failed 원인(cause) 최대한 노출
+        const cause = e && e.cause ? e.cause : null;
+        lastErr = {
+          message: e?.message || String(e),
+          name: e?.name || "",
+          cause: cause ? {
+            code: cause.code,
+            errno: cause.errno,
+            syscall: cause.syscall,
+            hostname: cause.hostname,
+          } : null,
+        };
+
         if (i < maxTries - 1) await sleep(350 * (i + 1));
       }
     }
@@ -131,9 +150,13 @@ exports.handler = async (event) => {
     return json(502, {
       ok: false,
       error: "OCR.Space upstream error",
-      detail: lastErr || "Unknown",
-      raw: (lastRaw || "").slice(0, 1500),
-      debug: { endpointUsed: endpoint },
+      detail: "fetch failed",
+      debug: { endpointUsed: lastEndpoint, lastErr },
+      raw: (lastRaw || "").slice(0, 500),
+      hint:
+        "1) api-pro1 장애면 api-pro2로 자동 폴백됨. " +
+        "2) 그래도 fetch failed면 Netlify ↔ OCR.Space 네트워크/DNS/TLS 문제 가능. " +
+        "3) 촬영 버튼 연타 금지(프론트에서 락 걸기).",
     });
   } catch (err) {
     return json(500, {
