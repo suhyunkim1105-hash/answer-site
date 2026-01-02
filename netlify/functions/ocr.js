@@ -12,7 +12,8 @@ exports.handler = async (event) => {
       return json(405, { ok: false, error: "POST only" });
     }
 
-    const apiKey = process.env.OCR_SPACE_API_KEY;
+    // ✅ 공백/개행 섞여도 invalid 뜨는 경우 많아서 trim
+    const apiKey = String(process.env.OCR_SPACE_API_KEY || "").trim();
     if (!apiKey) {
       return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
@@ -27,7 +28,7 @@ exports.handler = async (event) => {
     const page = body.page !== undefined ? body.page : 1;
 
     // 기대 입력: { image: "data:image/jpeg;base64,..." }
-    const image = (body.image || body.dataUrl || "").toString();
+    const image = String(body.image || body.dataUrl || "").trim();
 
     if (!image || !image.startsWith("data:image/")) {
       return json(400, {
@@ -36,8 +37,6 @@ exports.handler = async (event) => {
       });
     }
 
-    // OCR.Space는 base64Image 파라미터로 dataURL을 그대로 받음
-    // 예: base64Image=data:image/jpeg;base64,/9j/4AAQ...
     const payload = new URLSearchParams();
     payload.set("apikey", apiKey);
     payload.set("language", "eng");
@@ -47,7 +46,6 @@ exports.handler = async (event) => {
     payload.set("detectOrientation", "true");
     payload.set("base64Image", image);
 
-    // ✅ 재시도(업스트림 일시 장애/레이트리밋 대응)
     const maxTries = 3;
     let lastErr = null;
     let lastRaw = "";
@@ -56,9 +54,7 @@ exports.handler = async (event) => {
       try {
         const res = await fetch("https://api.ocr.space/parse/image", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: payload.toString(),
         });
 
@@ -66,10 +62,19 @@ exports.handler = async (event) => {
         let data = null;
         try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
 
-        // OCR.Space가 200을 주더라도 IsErroredOnProcessing으로 실패 표시하는 경우가 많음
+        // ✅ 403이면 거의 항상 키 문제. 즉시 명확히 반환
+        if (res.status === 403) {
+          return json(502, {
+            ok: false,
+            error: "OCR.Space upstream error",
+            detail: "OCR.Space HTTP 403 (API key invalid or forbidden)",
+            raw: String(lastRaw || "").slice(0, 1500),
+            hint: "Check Netlify env var OCR_SPACE_API_KEY (Key must be OCR_SPACE_API_KEY, Value must be the exact OCR.Space key, no spaces). Then redeploy.",
+          });
+        }
+
         if (!res.ok) {
           lastErr = `OCR.Space HTTP ${res.status}`;
-          // 다음 시도 전 백오프
           if (i < maxTries - 1) await sleep(350 * (i + 1));
           continue;
         }
@@ -81,8 +86,10 @@ exports.handler = async (event) => {
         }
 
         if (data.IsErroredOnProcessing) {
-          // 대표적으로: quota 초과 / invalid key / service unavailable 등
-          const msg = (data.ErrorMessage && data.ErrorMessage.join(" | ")) || data.ErrorDetails || "OCR.Space processing error";
+          const msg =
+            (Array.isArray(data.ErrorMessage) && data.ErrorMessage.join(" | ")) ||
+            data.ErrorDetails ||
+            "OCR.Space processing error";
           lastErr = msg;
           if (i < maxTries - 1) await sleep(350 * (i + 1));
           continue;
@@ -91,7 +98,6 @@ exports.handler = async (event) => {
         const parsed = (data.ParsedResults && data.ParsedResults[0]) || null;
         const text = (parsed && parsed.ParsedText) ? String(parsed.ParsedText) : "";
 
-        // conf/hits는 네 UI 로그 형태 맞추려고 유지(없으면 0)
         return json(200, {
           ok: true,
           text,
@@ -111,12 +117,11 @@ exports.handler = async (event) => {
       }
     }
 
-    // 여기로 왔다는 건 3번 다 실패
     return json(502, {
       ok: false,
       error: "OCR.Space upstream error",
       detail: lastErr || "Unknown",
-      raw: (lastRaw || "").slice(0, 1500), // ✅ 원문 일부 내려서 Netlify 로그 없이도 파악 가능
+      raw: String(lastRaw || "").slice(0, 1500),
     });
   } catch (err) {
     return json(500, {
@@ -135,7 +140,6 @@ function json(statusCode, obj) {
   };
 }
 
-// 대충 문항번호 패턴 카운트(너가 쓰던 hits 느낌 유지)
 function countQuestionPatterns(text) {
   if (!text) return 0;
   const m = text.match(/\b(\d{1,2})\b[.)\s]/g);
