@@ -160,3 +160,4 @@ function countQuestionPatterns(text) {
   const m = text.match(/\b(0?[1-9]|1[0-9]|20)\b\s*[.)]/g);
   return m ? m.length : 0;
 }
+
