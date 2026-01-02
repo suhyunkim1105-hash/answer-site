@@ -1,10 +1,26 @@
 // netlify/functions/ocr.js
-// OCR.Space(PRO) 호출
-// - primary endpoint + backup endpoint 자동 폴백
+// OCR.Space(PRO) 호출 (apipro1/apipro2)
+// - env에 예전 값(api-pro1/api-pro2)이 들어가 있어도 자동 보정
+// - primary + backup 자동 폴백
 // - fetch 실패 시 원인(cause)까지 내려줌
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function normalizeEndpoint(url) {
+  if (!url) return "";
+  let u = String(url).trim();
+
+  // ✅ 잘못 쓰기 교정: api-pro1/2 -> apipro1/2
+  u = u.replace("https://api-pro1.ocr.space/parse/image", "https://apipro1.ocr.space/parse/image");
+  u = u.replace("https://api-pro2.ocr.space/parse/image", "https://apipro2.ocr.space/parse/image");
+
+  // 혹시 parse/image 빠진 경우 보정
+  if (u === "https://apipro1.ocr.space") u = "https://apipro1.ocr.space/parse/image";
+  if (u === "https://apipro2.ocr.space") u = "https://apipro2.ocr.space/parse/image";
+
+  return u;
 }
 
 exports.handler = async (event) => {
@@ -18,9 +34,15 @@ exports.handler = async (event) => {
       return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
 
-    const primary = (process.env.OCR_SPACE_API_ENDPOINT || "https://api-pro1.ocr.space/parse/image").trim();
-    const backup = (process.env.OCR_SPACE_API_ENDPOINT_BACKUP || "https://api-pro2.ocr.space/parse/image").trim();
-    const endpoints = Array.from(new Set([primary, backup].filter(Boolean)));
+    const primaryEnv = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT);
+    const backupEnv = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT_BACKUP);
+
+    const primaryDefault = "https://apipro1.ocr.space/parse/image";
+    const backupDefault = "https://apipro2.ocr.space/parse/image";
+
+    const endpoints = Array.from(
+      new Set([primaryEnv || primaryDefault, backupEnv || backupDefault].filter(Boolean))
+    );
 
     const timeoutMs = Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000);
 
@@ -74,9 +96,8 @@ exports.handler = async (event) => {
 
         lastRaw = await res.text().catch(() => "");
         let data = null;
-        try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
+        try { data = JSON.parse(lastRaw); } catch {}
 
-        // 403이면 거의 항상 endpoint/키 문제
         if (res.status === 403) {
           return json(403, {
             ok: false,
@@ -84,7 +105,7 @@ exports.handler = async (event) => {
             detail: "OCR.Space HTTP 403 (API key invalid or forbidden)",
             raw: (lastRaw || "").slice(0, 300),
             hint:
-              "PRO 키면 endpoint가 반드시 api-pro1/api-pro2 여야 함. " +
+              "PRO 키면 endpoint는 apipro1/apipro2 여야 함. " +
               "env OCR_SPACE_API_ENDPOINT / OCR_SPACE_API_ENDPOINT_BACKUP 확인. " +
               "키 값에 공백/줄바꿈 없는지 확인.",
             debug: { endpointUsed: endpoint },
@@ -129,8 +150,6 @@ exports.handler = async (event) => {
         });
       } catch (e) {
         clearTimeout(timer);
-
-        // ✅ fetch failed 원인(cause) 최대한 노출
         const cause = e && e.cause ? e.cause : null;
         lastErr = {
           message: e?.message || String(e),
@@ -142,7 +161,6 @@ exports.handler = async (event) => {
             hostname: cause.hostname,
           } : null,
         };
-
         if (i < maxTries - 1) await sleep(350 * (i + 1));
       }
     }
@@ -154,9 +172,8 @@ exports.handler = async (event) => {
       debug: { endpointUsed: lastEndpoint, lastErr },
       raw: (lastRaw || "").slice(0, 500),
       hint:
-        "1) api-pro1 장애면 api-pro2로 자동 폴백됨. " +
-        "2) 그래도 fetch failed면 Netlify ↔ OCR.Space 네트워크/DNS/TLS 문제 가능. " +
-        "3) 촬영 버튼 연타 금지(프론트에서 락 걸기).",
+        "지금은 대부분 endpoint 오타/미반영(재배포 안됨) 때문. " +
+        "env의 OCR_SPACE_API_ENDPOINT가 apipro1인지 확인하고 재배포.",
     });
   } catch (err) {
     return json(500, {
