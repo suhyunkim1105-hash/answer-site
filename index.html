@@ -9,8 +9,7 @@
     body {
       margin:0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background:#0b1020;
-      color:#e9eefc;
+      background:#0b1020; color:#e9eefc;
     }
     .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
     .card {
@@ -31,16 +30,15 @@
       border-radius: 12px;
       font-weight: 700;
       cursor:pointer;
+      font-size: 13px;
     }
     button.secondary { background:#243055; }
-    button.danger { background:#c0392b; }
+    button.danger { background:#b8234a; }
     button:disabled { opacity:.55; cursor:not-allowed; }
     input {
-      background:#0b1020;
-      color:#e9eefc;
+      background:#0b1020; color:#e9eefc;
       border:1px solid rgba(255,255,255,.14);
-      border-radius: 10px;
-      padding:10px 12px;
+      border-radius: 10px; padding:10px 12px;
     }
     .previewWrap {
       height: 70vh;
@@ -50,17 +48,8 @@
       background:#050a18;
       border:1px solid rgba(255,255,255,.08);
     }
-    video {
-      width:100%; height:100%;
-      object-fit: contain;
-      background:#000;
-    }
-    .hint {
-      opacity:.8;
-      font-size: 13px;
-      line-height: 1.5;
-      margin-top: 10px;
-    }
+    video { width:100%; height:100%; object-fit: contain; background:#000; }
+    .hint { opacity:.8; font-size: 13px; line-height: 1.5; margin-top: 10px; }
     pre {
       margin:0;
       white-space: pre-wrap;
@@ -82,7 +71,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <h2>카메라</h2>
+      <h2>카메라 / 자동 문제풀이</h2>
       <div class="row" style="margin-bottom:8px;">
         <button id="btnStart">카메라 시작</button>
         <button id="btnShot" class="secondary">현재 페이지 촬영</button>
@@ -90,13 +79,11 @@
         <input id="page" type="number" value="1" min="1" style="width:90px" />
         <span id="res" class="small"></span>
       </div>
-      <div class="row">
+      <div class="row" style="margin-bottom:8px;">
         <button id="btnTtsTest" class="secondary">음성 테스트</button>
-        <button id="btnAuto" class="secondary">자동 문제풀이 시작</button>
-        <span id="autoStatus" class="small"></span>
+        <button id="btnAutoStart">자동 문제풀이 시작</button>
+        <button id="btnAutoStop" class="danger">자동 문제풀이 정지</button>
       </div>
-
-      <div style="height:12px"></div>
 
       <div class="previewWrap">
         <video id="video" playsinline autoplay muted></video>
@@ -105,7 +92,9 @@
       <div class="hint">
         ① 시험지를 화면에 꽉 채우고<br/>
         ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
-        ③ “현재 페이지 촬영” 또는 “자동 문제풀이 시작” → OCR → 정답 생성 순서로 진행.
+        ③ 자동 문제풀이를 켜면, 페이지마다<br/>
+        &nbsp;&nbsp;&nbsp;- <b>“페이지 인식, 1 2 3”</b> (예고 TTS)<br/>
+        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 반복.
       </div>
     </div>
 
@@ -123,6 +112,8 @@
 
     <div class="card">
       <h2>정답</h2>
+      <div class="small">정답은 "1: A" 같은 형식 + 마지막 줄에 UNSURE: ... 로 나옴. 음성으로도 읽어줌.</div>
+      <div style="height:10px"></div>
       <textarea id="ansBox" placeholder="정답 결과가 여기에 표시됨" readonly></textarea>
     </div>
   </div>
@@ -130,16 +121,16 @@
   <script>
     const $ = (id) => document.getElementById(id);
 
-    const video = $("video");
-    const logEl = $("log");
-    const ocrBox = $("ocrBox");
-    const ansBox = $("ansBox");
+    const video   = $("video");
+    const logEl   = $("log");
+    const ocrBox  = $("ocrBox");
+    const ansBox  = $("ansBox");
     const btnShot = $("btnShot");
     const btnStart = $("btnStart");
-    const resEl = $("res");
     const btnTtsTest = $("btnTtsTest");
-    const btnAuto = $("btnAuto");
-    const autoStatusEl = $("autoStatus");
+    const btnAutoStart = $("btnAutoStart");
+    const btnAutoStop  = $("btnAutoStop");
+    const resEl  = $("res");
 
     function ts() {
       const d = new Date();
@@ -155,27 +146,18 @@
     }
 
     let stream = null;
-    let busy = false;        // 단일 실행 락
-    let autoMode = false;    // 자동 문제풀이 모드 on/off
-    let autoTimerId = null;
+    let busy = false;       // 수동 촬영 락
+    let autoMode = false;   // 자동 모드 on/off
+    let autoTimer = null;
+    let lastOcrNonEmpty = false; // 직전 자동 OCR에서 글자가 있었는지
     let wakeLock = null;
-    let speechEnabled = false; // 음성 테스트 후에만 정답 읽기
-    const AUTO_SOLVE_DELAY = 5000;  // 정답 읽고 다음 촬영까지 대기 (ms)
-    const AUTO_EMPTY_DELAY = 4000;  // 시험지 없을 때 재시도 간격 (ms)
 
-    // ===== 화면 꺼짐 방지 =====
-    async function requestWakeLock() {
-      if ("wakeLock" in navigator && !wakeLock) {
-        try {
-          wakeLock = await navigator.wakeLock.request("screen");
-          log("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
-        } catch (e) {
-          log("STATUS: 화면 꺼짐 방지 설정 실패: " + (e?.message || e));
-        }
-      }
+    // ---- 공통 유틸 ----
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    // ===== 카메라 =====
+    // ---- 카메라 ----
     async function startCamera() {
       if (stream) return;
 
@@ -213,8 +195,6 @@
         resEl.textContent = vw && vh ? `캠 해상도: ${vw}×${vh}` : "";
         log("STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
       }, 200);
-
-      requestWakeLock();
     }
 
     function captureDataURL() {
@@ -233,223 +213,136 @@
       return { dataUrl, vw, vh, length: dataUrl.length };
     }
 
-    async function doOCR(page, dataUrl, isAuto) {
+    async function doOCR(page, dataUrl) {
       const res = await fetch("/.netlify/functions/ocr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ page, image: dataUrl }),
       });
       const data = await res.json().catch(() => ({}));
-      if (isAuto) {
-        log(`[자동] OCR response ${JSON.stringify(data).slice(0, 1200)}`);
-      } else {
-        log(`OCR response ${JSON.stringify(data).slice(0, 1200)}`);
-      }
       return { ok: res.ok && data.ok, ...data };
     }
 
-    async function doSolve(page, ocrText, isAuto) {
+    async function doSolve(page, ocrText) {
       const res = await fetch("/.netlify/functions/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ page, ocrText }),
       });
       const data = await res.json().catch(() => ({}));
-      if (isAuto) {
-        log(`[자동] solve response ${JSON.stringify(data).slice(0, 1200)}`);
-      } else {
-        log(`solve response ${JSON.stringify(data).slice(0, 1200)}`);
-      }
       return { ok: res.ok && data.ok, ...data };
     }
 
-    // ===== TTS =====
-    function speakText(text) {
-      if (!window.speechSynthesis) return;
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "ko-KR";
-      window.speechSynthesis.speak(utter);
+    // ---- Wake Lock (화면 꺼짐 방지) ----
+    async function enableWakeLock() {
+      try {
+        if ("wakeLock" in navigator && !wakeLock) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener("release", () => {
+            log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
+            wakeLock = null;
+          });
+          log("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
+        }
+      } catch (e) {
+        log(`STATUS: wake lock 설정 실패: ${e?.message || e}`);
+      }
     }
 
-    function readAnswersAloud(ansText) {
-      if (!speechEnabled) return;
-      if (!ansText) return;
+    async function disableWakeLock() {
+      try {
+        if (wakeLock) {
+          await wakeLock.release();
+          wakeLock = null;
+          log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
+        }
+      } catch (e) {
+        // 무시
+      }
+    }
 
-      // XURTH 제거된 텍스트를 기준으로 호출된다는 가정
-      const lines = ansText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const answerLines = [];
-      let unsureLine = null;
+    // ---- TTS ----
+    let ttsEnabled = false;
 
-      for (const ln of lines) {
-        const m = ln.match(/^(\d{1,3})\s*:\s*([0-9A-Ea-e])\b/);
+    function speakNow(text) {
+      return new Promise((resolve) => {
+        if (!("speechSynthesis" in window)) return resolve();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "ko-KR";  // 유사 '유나' 스타일 한국어 여성 보이스 선택될 가능성↑
+        utter.rate = 1.0;
+        utter.pitch = 1.0;
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        window.speechSynthesis.speak(utter);
+      });
+    }
+
+    async function speakTest() {
+      ttsEnabled = true;
+      await speakNow("테스트");
+      log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
+    }
+
+    // ★ 여기: 페이지 인식 1 2 3 (예고용)
+    async function speakPageCountdown() {
+      if (!ttsEnabled) return;
+      await speakNow("페이지 인식, 일");
+      await sleep(400);
+      await speakNow("이");
+      await sleep(400);
+      await speakNow("삼");
+    }
+
+    function parseSolveTextForTts(text) {
+      const items = [];
+      let unsureList = [];
+
+      const lines = String(text || "").split(/\r?\n/);
+      for (const raw of lines) {
+        const ln = raw.trim();
+        if (!ln) continue;
+
+        let m = ln.match(/^(\d{1,3})\s*:\s*([A-E]|[1-5])\b/i);
         if (m) {
-          answerLines.push({ n: m[1], v: m[2].toUpperCase() });
+          const num = Number(m[1]);
+          const ans = m[2].toUpperCase();
+          items.push({ num, ans });
           continue;
         }
-        const u = ln.match(/^UNSURE\s*:\s*(.+)$/i);
-        if (u) {
-          unsureLine = u[1].trim();
+        m = ln.match(/^UNSURE\s*:\s*(.+)$/i);
+        if (m) {
+          const parts = m[1].split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+          unsureList = parts.map(x => Number(x)).filter(n => !isNaN(n));
         }
       }
-
-      let delay = 0;
-      const gap = 1500; // 1.5초 간격
-
-      // 각 문항 읽기: "1번 A", "2번 3" 형태
-      for (const { n, v } of answerLines) {
-        const spoken = `${n}번 ${v}`;
-        setTimeout(() => speakText(spoken), delay);
-        delay += gap;
-      }
-
-      // UNSURE 읽기
-      if (unsureLine && unsureLine !== "-") {
-        const nums = unsureLine.split(",").map(s => s.trim()).filter(Boolean);
-        if (nums.length) {
-          setTimeout(() => {
-            const msg = "확실하지 않은 번호: " + nums.join(", ");
-            speakText(msg);
-          }, delay);
-        }
-      }
+      return { items, unsure: unsureList };
     }
 
-    // ===== 한 번 찍고 풀기(수동/자동 공용) =====
-    async function solveOnce(page, isAuto) {
-      try {
-        await startCamera();
+    async function speakAnswers(text) {
+      if (!ttsEnabled) return;
+      const { items, unsure } = parseSolveTextForTts(text);
 
-        if (isAuto) {
-          log(`STATUS: [자동] 페이지 인식 3 2 1`);
-        } else {
-          log(`STATUS: 페이지 인식 3 2 1`);
+      for (const { num, ans } of items) {
+        let spokenAns = ans;
+        if ("ABCDE".includes(ans)) {
+          const map = { A:"에이", B:"비", C:"씨", D:"디", E:"이" };
+          spokenAns = map[ans] || ans;
         }
+        await speakNow(`${num}번, ${spokenAns}`);
+        await sleep(1500); // 문항 사이 1.5초 정도 쉼
+      }
 
-        // 간단한 카운트다운 후 촬영
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 정도 간격 (너무 길게 안 끔)
-
-        const cap = captureDataURL();
-        if (isAuto) {
-          log(`STATUS: [자동] 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-          log(`[자동] capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
-        } else {
-          log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-          log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
-        }
-
-        if (isAuto) {
-          log("STATUS: [자동] OCR 처리 중...");
-        } else {
-          log("STATUS: OCR 처리 중...");
-        }
-        const ocr = await doOCR(page, cap.dataUrl, isAuto);
-
-        if (!ocr.ok) {
-          const msg = `${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`;
-          if (isAuto) {
-            log(`STATUS: [자동] OCR 실패: ${msg}`);
-          } else {
-            log(`STATUS: OCR 실패: ${msg}`);
-          }
-          return false;
-        }
-
-        const text = (ocr.text || "").trim();
-        if (!text) {
-          if (isAuto) {
-            log("STATUS: [자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
-          } else {
-            log("STATUS: OCR 결과가 비어 있어. 시험지 위치/초점/조명을 다시 조정해줘.");
-          }
-          return false;
-        }
-
-        ocrBox.value = text;
-
-        if (isAuto) {
-          log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
-        } else {
-          log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
-        }
-
-        const solved = await doSolve(page, text, isAuto);
-        if (!solved.ok) {
-          if (isAuto) {
-            log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
-          } else {
-            log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
-          }
-          return false;
-        }
-
-        // 🔥 XURTH 제거: 맨 끝줄에 XURTH가 있으면 지우고, 전체에서 XURTH 텍스트 안 보이게
-        let ansText = String(solved.text || "");
-        ansText = ansText.replace(/XURTH\s*$/i, "").trimEnd();
-
-        ansBox.value = ansText;
-
-        if (isAuto) {
-          log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
-        } else {
-          log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
-        }
-
-        // 음성 읽기
-        readAnswersAloud(ansText);
-
-        return true;
-      } catch (e) {
-        if (isAuto) {
-          log(`STATUS: [자동] 처리 실패: ${e?.message || e}`);
-        } else {
-          log(`STATUS: 처리 실패: ${e?.message || e}`);
-        }
-        return false;
+      if (unsure.length) {
+        await speakNow(`불확실한 번호, ${unsure.join(", ")}`);
+        await sleep(1500);
       }
     }
 
-    // ===== 자동 문제풀이 루프 =====
-    function updateAutoStatus() {
-      autoStatusEl.textContent = autoMode ? "자동 모드 ON" : "자동 모드 OFF";
-      btnAuto.textContent = autoMode ? "자동 문제풀이 정지" : "자동 문제풀이 시작";
-    }
-
-    async function autoLoop() {
-      if (!autoMode) return;
-      const page = Number($("page").value || 1);
-
-      const ok = await solveOnce(page, true);
-
-      if (!autoMode) return; // 중간에 사용자가 끈 경우
-
-      const delay = ok ? AUTO_SOLVE_DELAY : AUTO_EMPTY_DELAY;
-      autoTimerId = setTimeout(autoLoop, delay);
-    }
-
-    function startAutoMode() {
-      if (autoMode) return;
-      autoMode = true;
-      updateAutoStatus();
-      log("STATUS: 자동 문제풀이 모드를 시작할게.");
-      autoLoop();
-    }
-
-    function stopAutoMode() {
-      if (!autoMode) return;
-      autoMode = false;
-      updateAutoStatus();
-      if (autoTimerId) {
-        clearTimeout(autoTimerId);
-        autoTimerId = null;
-      }
-      log("STATUS: 자동 문제풀이 모드를 종료할게.");
-      // 화면 꺼짐 방지는 그대로 두는 편이 안전하다고 판단(시험 중 계속 유지)
-    }
-
-    // ===== 이벤트 바인딩 =====
+    // ---- 수동 촬영 ----
     btnStart.addEventListener("click", async () => {
       try {
         await startCamera();
+        await enableWakeLock();
       } catch (e) {
         log(`STATUS: 카메라 실패: ${e?.message || e}`);
       }
@@ -462,29 +355,151 @@
 
       try {
         await startCamera();
+
         const page = Number($("page").value || 1);
-        await solveOnce(page, false);
+
+        log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+        const cap = captureDataURL();
+        log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
+
+        log("STATUS: OCR 처리 중...");
+        const ocr = await doOCR(page, cap.dataUrl);
+        log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
+
+        if (!ocr.ok) {
+          log(`STATUS: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
+          return;
+        }
+
+        ocrBox.value = ocr.text || "";
+
+        log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+        const solved = await doSolve(page, ocr.text || "");
+        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+        if (!solved.ok) {
+          log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
+          if (ttsEnabled) await speakNow("실패");
+          return;
+        }
+
+        ansBox.value = solved.text || "";
+        log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
+        await speakAnswers(solved.text || "");
+      } catch (e) {
+        log(`STATUS: 처리 실패: ${e?.message || e}`);
       } finally {
         busy = false;
         btnShot.disabled = false;
       }
     });
 
-    btnTtsTest.addEventListener("click", () => {
-      speechEnabled = true;
-      log("STATUS: 음성 테스트를 재생했어. 이후 자동/수동 정답도 소리로 읽어줄게.");
-      speakText("테스트");
-    });
+    // ---- 자동 문제풀이 ----
+    const AUTO_EMPTY_RETRY_MS = 4000;
+    const AUTO_AFTER_SOLVE_MS = 5000;
 
-    btnAuto.addEventListener("click", () => {
-      if (autoMode) {
-        stopAutoMode();
-      } else {
-        startAutoMode();
+    function scheduleAutoStep(delayMs) {
+      if (!autoMode) return;
+      if (autoTimer) clearTimeout(autoTimer);
+      autoTimer = setTimeout(() => {
+        autoStep().catch((e) => {
+          log(`STATUS: [자동] 처리 실패: ${e?.message || e}`);
+          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        });
+      }, delayMs);
+    }
+
+    async function autoStep() {
+      if (!autoMode) return;
+      const page = Number($("page").value || 1);
+
+      // ★ 이미 한 번 이상 텍스트가 인식된 이후에는, 다음 촬영 전에 "페이지 인식 1 2 3" 예고
+      if (lastOcrNonEmpty) {
+        log("STATUS: [자동] 페이지 인식 1 2 3 (예고).");
+        await speakPageCountdown();
+      }
+
+      log(`STATUS: [자동] 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+      const cap = captureDataURL();
+      log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
+
+      log("STATUS: [자동] OCR 처리 중...");
+      const ocr = await doOCR(page, cap.dataUrl);
+      log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
+
+      if (!ocr.ok) {
+        log(`STATUS: [자동] OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
+        if (ttsEnabled) await speakNow("실패");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        return;
+      }
+
+      const text = (ocr.text || "").trim();
+      if (!text) {
+        lastOcrNonEmpty = false;
+        log("STATUS: [자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        return;
+      }
+
+      lastOcrNonEmpty = true;
+      ocrBox.value = ocr.text || "";
+      log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+
+      const solved = await doSolve(page, ocr.text || "");
+      log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+      if (!solved.ok) {
+        log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
+        if (ttsEnabled) await speakNow("실패");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        return;
+      }
+
+      ansBox.value = solved.text || "";
+      log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
+
+      await speakAnswers(solved.text || "");
+
+      // 다음 페이지/동일 페이지 다시 인식까지 5초 쉼
+      scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
+    }
+
+    btnAutoStart.addEventListener("click", async () => {
+      if (autoMode) return;
+      try {
+        await startCamera();
+        await enableWakeLock();
+        autoMode = true;
+        lastOcrNonEmpty = false;
+        log("STATUS: 자동 문제풀이 모드를 시작할게.");
+        scheduleAutoStep(0);
+      } catch (e) {
+        log(`STATUS: 자동 모드 시작 실패: ${e?.message || e}`);
       }
     });
 
-    updateAutoStatus();
+    btnAutoStop.addEventListener("click", async () => {
+      if (!autoMode) return;
+      autoMode = false;
+      if (autoTimer) {
+        clearTimeout(autoTimer);
+        autoTimer = null;
+      }
+      await disableWakeLock();
+      log("STATUS: 자동 문제풀이 모드를 종료할게.");
+    });
+
+    btnTtsTest.addEventListener("click", () => {
+      speakTest();
+    });
+
+    // 페이지 나갈 때 wake lock 해제
+    window.addEventListener("beforeunload", () => {
+      autoMode = false;
+      if (autoTimer) clearTimeout(autoTimer);
+      disableWakeLock();
+    });
   </script>
 </body>
 </html>
