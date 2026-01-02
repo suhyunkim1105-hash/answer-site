@@ -46,6 +46,7 @@
         <button id="btnStart">카메라 시작</button>
         <button id="btnShot" class="secondary">현재 페이지 촬영</button>
         <button id="btnAuto" class="secondary">자동풀이 시작</button>
+        <button id="btnTts" class="secondary">음성 테스트</button>
         <span class="small">현재 페이지</span>
         <input id="page" type="number" value="1" min="1" style="width:70px" />
         <span id="res" class="small"></span>
@@ -60,7 +61,8 @@
       <div class="hint">
         ① 시험지를 화면에 꽉 채우고<br/>
         ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
-        ③ “현재 페이지 촬영” 또는 “자동풀이 시작” → OCR → 정답 생성.
+        ③ “현재 페이지 촬영” 또는 “자동풀이 시작” → OCR → 정답 생성.<br/>
+        ※ iOS라면 사용 전에 꼭 “음성 테스트” 버튼을 한 번 눌러서 소리 허용해줘.
       </div>
     </div>
 
@@ -94,6 +96,7 @@
     const btnShot = $("btnShot");
     const btnStart = $("btnStart");
     const btnAuto = $("btnAuto");
+    const btnTts = $("btnTts");
     const resEl = $("res");
 
     function ts() {
@@ -486,7 +489,7 @@
         ansBox.value = solved.text || "";
         log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
 
-        // 수동도 TTS로 읽어줌 (원하면 꺼도 됨)
+        // 수동도 TTS로 읽어줌
         speakAnswersTwiceWithPauses(solved.text || "");
 
       } catch (e) {
@@ -511,6 +514,20 @@
           window.speechSynthesis.cancel();
         }
       }
+    });
+
+    // 음성 테스트 버튼 (iOS용 권한 확보)
+    btnTts.addEventListener("click", () => {
+      if (!("speechSynthesis" in window)) {
+        log("STATUS: 이 브라우저는 음성 합성을 지원하지 않아.");
+        return;
+      }
+      if (!ttsVoice) {
+        ttsVoice = pickKoreanVoice();
+      }
+      window.speechSynthesis.cancel();
+      speakText("테스트", { rate: 1.0 });
+      log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
     });
   </script>
 </body>
