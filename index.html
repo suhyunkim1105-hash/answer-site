@@ -1,505 +1,435 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <title>편입 영어 자동 풀이 데모</title>
+    <title>성균관대 편입 자동 풀이</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      :root {
-        color-scheme: dark;
-        --bg: #050716;
-        --panel: #0f172a;
-        --accent: #22d3ee;
-        --accent-soft: rgba(34, 211, 238, 0.15);
-        --text: #e5e7eb;
-        --muted: #9ca3af;
-        --danger: #fb7185;
-      }
-
       * {
         box-sizing: border-box;
       }
-
       body {
         margin: 0;
         padding: 16px;
         font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        background: radial-gradient(circle at top, #111827 0, #020617 55%);
-        color: var(--text);
+        background: #0f172a;
+        color: #e5e7eb;
       }
-
       h1 {
-        font-size: 1.3rem;
-        margin: 0 0 8px;
+        margin: 0 0 4px;
+        font-size: 20px;
       }
-
-      h2 {
-        font-size: 1rem;
-        margin: 12px 0 4px;
+      small {
+        color: #9ca3af;
       }
-
-      .app {
-        max-width: 900px;
-        margin: 0 auto;
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+        gap: 16px;
       }
-
-      .top-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
+      @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
-
-      .video-wrap {
-        position: relative;
-        flex: 1 1 260px;
-        min-width: 260px;
+      .panel {
         background: #020617;
         border-radius: 12px;
-        padding: 8px;
-        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.9);
-        border: 1px solid rgba(148, 163, 184, 0.2);
+        padding: 12px 14px;
+        border: 1px solid #1f2937;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
       }
-
-      video {
-        width: 100%;
-        border-radius: 10px;
-        background: #000;
+      .panel-title {
+        margin: 0 0 8px;
+        font-size: 14px;
+        color: #9ca3af;
       }
-
       .controls {
-        flex: 1 1 220px;
-        min-width: 220px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .btn-row {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
       }
-
       button {
         border-radius: 999px;
         border: none;
-        padding: 8px 14px;
-        font-size: 0.9rem;
-        font-weight: 500;
+        padding: 6px 12px;
+        font-size: 14px;
+        background: #3b82f6;
+        color: #f9fafb;
         cursor: pointer;
-        background: var(--accent-soft);
-        color: var(--accent);
-        outline: none;
-        transition: background 0.12s ease, transform 0.06s ease;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
       }
-
-      button.primary {
-        background: var(--accent);
-        color: #0f172a;
+      button.secondary {
+        background: #4b5563;
       }
-
-      button.danger {
-        background: rgba(248, 113, 113, 0.18);
-        color: #fecaca;
-      }
-
       button:disabled {
-        opacity: 0.4;
+        opacity: 0.5;
         cursor: default;
-        transform: none !important;
       }
-
-      button:active:not(:disabled) {
-        transform: translateY(1px) scale(0.99);
+      label {
+        font-size: 13px;
+        color: #d1d5db;
       }
-
-      .pill {
-        font-size: 0.8rem;
-        padding: 4px 10px;
-        border-radius: 999px;
-        background: rgba(15, 23, 42, 0.8);
-        border: 1px solid rgba(148, 163, 184, 0.3);
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--muted);
-      }
-
-      .pill strong {
-        color: var(--accent);
-      }
-
-      .status-box,
-      .answer-box,
-      .log-box {
-        margin-top: 12px;
-        background: rgba(15, 23, 42, 0.96);
-        border-radius: 12px;
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        padding: 10px 12px;
-      }
-
-      .status-text {
-        font-size: 0.9rem;
-        color: var(--muted);
-        white-space: pre-wrap;
-      }
-
-      pre {
-        margin: 4px 0 0;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-          "Liberation Mono", "Courier New", monospace;
-        font-size: 0.85rem;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .answer-box pre {
+      input[type='number'] {
+        width: 60px;
+        padding: 4px 6px;
+        margin-left: 4px;
+        border-radius: 6px;
+        border: 1px solid #4b5563;
+        background: #020617;
         color: #e5e7eb;
       }
-
-      .log-box {
-        max-height: 220px;
-        overflow-y: auto;
-        font-size: 0.8rem;
+      video {
+        width: 100%;
+        border-radius: 10px;
+        background: #020617;
       }
-
-      .log-box pre {
-        color: #9ca3af;
+      textarea {
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid #111827;
+        background: #020617;
+        color: #e5e7eb;
+        padding: 8px;
+        resize: vertical;
       }
-
       .hint {
-        font-size: 0.75rem;
-        color: var(--muted);
-        margin-top: 6px;
-      }
-
-      canvas {
-        display: none;
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 4px;
       }
     </style>
   </head>
   <body>
-    <div class="app">
-      <h1>편입 영어 객관식 자동 풀이 (Page by Page)</h1>
-      <div class="top-row">
-        <div class="video-wrap">
-          <video id="video" autoplay playsinline muted></video>
-          <canvas id="canvas"></canvas>
-        </div>
+    <header style="margin-bottom: 12px">
+      <h1>성균관대 편입 영어 자동 풀이</h1>
+      <small>한 페이지씩 촬영하면 OCR → 정답 생성까지 자동으로 진행</small>
+    </header>
+
+    <div class="layout">
+      <!-- 좌측: 카메라 + 제어 -->
+      <section class="panel">
+        <h2 class="panel-title">카메라</h2>
         <div class="controls">
-          <div class="btn-row">
-            <button id="startCameraBtn" class="primary">카메라 켜기</button>
-            <button id="stopCameraBtn" class="danger" disabled>
-              카메라 끄기
-            </button>
-          </div>
-          <div class="btn-row">
-            <button id="captureSolveBtn" class="primary" disabled>
-              이 페이지 촬영 + 풀기
-            </button>
-            <button id="repeatSpeakBtn" disabled>정답 다시 읽기</button>
-          </div>
-          <div class="btn-row">
-            <button id="nextPageBtn" disabled>다음 페이지 번호로 이동</button>
-            <button id="resetPageBtn">페이지 1로 초기화</button>
-          </div>
-          <div class="pill">
-            현재 페이지: <strong id="pageLabel">1</strong>
-          </div>
-          <div class="hint">
-            · 시험지는 <strong>한 페이지씩</strong> 꽉 차게 찍어줘.<br />
-            · 첫 페이지부터 순서대로 찍는 걸 권장해.<br />
-            · BLANK, 밑줄, 번호는 미리 우리가 약속한 대로 수정해두면 좋아.
-          </div>
+          <button id="start-camera-btn">카메라 시작</button>
+          <button id="capture-btn" class="secondary">현재 페이지 촬영</button>
+          <label>
+            현재 페이지
+            <input id="page-input" type="number" min="1" value="1" />
+          </label>
         </div>
-      </div>
+        <video id="video" autoplay playsinline></video>
+        <canvas
+          id="capture-canvas"
+          style="display: none"
+          width="1080"
+          height="1920"
+        ></canvas>
+        <p class="hint">
+          ① 시험지를 화면에 꽉 채우고<br />
+          ② 번호·문항·보기까지 모두 나오게 맞춘 다음<br />
+          ③ 「현재 페이지 촬영」 버튼을 누르면 돼.
+        </p>
+      </section>
 
-      <div class="status-box">
-        <h2>진행 상태</h2>
-        <div id="status" class="status-text">
-          카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.
-        </div>
-      </div>
+      <!-- 우측: 로그 + OCR 결과 -->
+      <section class="panel">
+        <h2 class="panel-title">로그</h2>
+        <textarea
+          id="log-output"
+          rows="18"
+          readonly
+          style="font-size: 11px; line-height: 1.4; white-space: pre"
+        ></textarea>
+        <p class="hint">
+          STATUS 줄은 음성으로도 읽어 줌. capture / OCR / solve response 는
+          디버그용 텍스트만 기록.
+        </p>
 
-      <div class="answer-box">
-        <h2>이 페이지 정답 / 안내</h2>
-        <pre id="answer">(아직 정답이 없어)</pre>
-      </div>
-
-      <div class="log-box">
-        <h2>로그</h2>
-        <pre id="log"></pre>
-      </div>
-
-      <div class="hint">
-        * 음성 읽기(TTS)는 브라우저의 Web Speech API를 사용해. iOS 사파리는
-        잠시 기다리면 정상 동작하는 경우가 많아.
-      </div>
+        <!-- ====================== NEW: OCR 결과 패널 ====================== -->
+        <h2 class="panel-title" style="margin-top: 10px">OCR 결과 (원문 확인용)</h2>
+        <textarea
+          id="ocr-output"
+          rows="10"
+          readonly
+          style="
+            font-size: 12px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+          "
+        ></textarea>
+        <p class="hint">
+          여기에 인식된 원문이 그대로 보여. 안 맞는 부분이 있으면 기출 용지
+          수정하거나 카메라 각도/거리 조절하면 돼.
+        </p>
+        <!-- ==================== /NEW: OCR 결과 패널 끝 ==================== -->
+      </section>
     </div>
 
     <script>
-      const video = document.getElementById("video");
-      const canvas = document.getElementById("canvas");
-      const ctx = canvas.getContext("2d");
-      const startCameraBtn = document.getElementById("startCameraBtn");
-      const stopCameraBtn = document.getElementById("stopCameraBtn");
-      const captureSolveBtn = document.getElementById("captureSolveBtn");
-      const nextPageBtn = document.getElementById("nextPageBtn");
-      const resetPageBtn = document.getElementById("resetPageBtn");
-      const repeatSpeakBtn = document.getElementById("repeatSpeakBtn");
-      const statusEl = document.getElementById("status");
-      const answerEl = document.getElementById("answer");
-      const logEl = document.getElementById("log");
-      const pageLabel = document.getElementById("pageLabel");
+      const videoEl = document.getElementById('video');
+      const canvasEl = document.getElementById('capture-canvas');
+      const ctx = canvasEl.getContext('2d');
+      const logEl = document.getElementById('log-output');
+      const pageInput = document.getElementById('page-input');
 
       let currentStream = null;
       let currentPage = 1;
-      let isSolving = false;
-      let lastAnswerText = "";
-      let speaking = false;
 
-      // --------- 유틸 ---------
-      function nowLabel() {
-        const d = new Date();
-        const pad = (n) => String(n).padStart(2, "0");
-        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(
-          d.getSeconds()
-        )}`;
-      }
+      // =============== 공통 유틸 ===============
 
-      function log(msg, obj) {
-        const line =
-          "[" +
-          nowLabel() +
-          "] " +
-          msg +
-          (obj ? " " + JSON.stringify(obj) : "");
-        logEl.textContent += line + "\n";
-        logEl.scrollTop = logEl.scrollHeight;
+      function appendLog(message, speakIt = false) {
+        const now = new Date();
+        const ts = now.toTimeString().slice(0, 8);
+        const line = `[${ts}] ${message}`;
         console.log(line);
+        if (logEl) {
+          logEl.value += (logEl.value ? '\n' : '') + line;
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (speakIt) {
+          const spoken = message.startsWith('STATUS:')
+            ? message.replace(/^STATUS:\s*/, '')
+            : message;
+          speak(spoken);
+        }
       }
 
-      function setStatus(msg) {
-        statusEl.textContent = msg;
-        log("STATUS: " + msg);
-      }
-
-      function updatePageLabel() {
-        pageLabel.textContent = String(currentPage);
-      }
-
-      // --------- TTS ---------
       function speak(text) {
-        if (!window.speechSynthesis) return;
-        if (!text) return;
         try {
+          if (!('speechSynthesis' in window)) return;
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = 'ko-KR';
+          u.rate = 1.0;
           window.speechSynthesis.cancel();
-          const utter = new SpeechSynthesisUtterance(text);
-          utter.lang = "ko-KR";
-          utter.rate = 1.0;
-          speaking = true;
-          utter.onend = () => {
-            speaking = false;
-          };
-          window.speechSynthesis.speak(utter);
+          window.speechSynthesis.speak(u);
         } catch (e) {
-          console.warn("TTS error", e);
+          console.error('speech error', e);
         }
       }
 
-      function speakAnswerLines() {
-        if (!lastAnswerText) return;
-        const lines = lastAnswerText
-          .split(/\r?\n/)
-          .map((l) => l.trim())
-          .filter((l) => l && l !== "XURTH");
-        const mainLines = lines.filter((l) => !l.startsWith("※"));
-        const textToSpeak =
-          mainLines.slice(0, 12).join(", ") ||
-          "읽을 수 있는 정답이 없어.";
-        speak("이 페이지 정답을 읽을게. " + textToSpeak);
+      // ======================== NEW: OCR 출력 함수 ========================
+      function updateOcrOutput(text) {
+        try {
+          const el = document.getElementById('ocr-output');
+          if (!el) return;
+          el.value = (text || '').toString();
+          el.scrollTop = 0;
+        } catch (e) {
+          console.error('updateOcrOutput error:', e);
+        }
       }
+      // ====================== /NEW: OCR 출력 함수 끝 ======================
 
-      // --------- 카메라 ---------
+      // =============== 카메라 관련 ===============
+
       async function startCamera() {
-        try {
-          if (currentStream) return;
-          currentStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 }
-            },
-            audio: false
-          });
-          video.srcObject = currentStream;
-          startCameraBtn.disabled = true;
-          stopCameraBtn.disabled = false;
-          captureSolveBtn.disabled = false;
-          nextPageBtn.disabled = false;
-          setStatus("카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
-          speak("카메라를 켰어요. 시험지를 화면에 꽉 차게 맞춰 주세요.");
-        } catch (e) {
-          setStatus("카메라 켜기 실패: " + e.message);
-          log("camera error", { error: String(e) });
-          speak("카메라를 켜는 데 실패했어요.");
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          appendLog(
+            'STATUS: 이 브라우저에서는 카메라 접근을 지원하지 않아.',
+            true
+          );
+          return;
         }
-      }
-
-      function stopCamera() {
         if (currentStream) {
-          currentStream.getTracks().forEach((t) => t.stop());
-          currentStream = null;
+          appendLog('STATUS: 카메라는 이미 켜져 있어.', true);
+          return;
         }
-        video.srcObject = null;
-        startCameraBtn.disabled = false;
-        stopCameraBtn.disabled = true;
-        captureSolveBtn.disabled = true;
-        nextPageBtn.disabled = true;
-        setStatus("카메라를 껐어.");
-        speak("카메라를 껐어요.");
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' },
+            audio: false,
+          });
+          currentStream = stream;
+          videoEl.srcObject = stream;
+          await videoEl.play().catch(() => {});
+          appendLog(
+            'STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.',
+            true
+          );
+        } catch (err) {
+          console.error(err);
+          appendLog(
+            `STATUS: 카메라를 켜는 데 실패했어: ${err && err.message}`,
+            true
+          );
+        }
       }
 
-      // --------- OCR + 풀이 ---------
-      async function captureAndSolve() {
-        if (!currentStream || !video.videoWidth || !video.videoHeight) {
-          setStatus("카메라가 아직 준비 안 됐어. 조금만 기다렸다가 다시 눌러줘.");
-          speak("카메라 준비가 덜 됐어요. 잠시 후 다시 눌러 주세요.");
-          return;
-        }
-        if (isSolving) {
-          return;
-        }
-        isSolving = true;
-        captureSolveBtn.disabled = true;
-        repeatSpeakBtn.disabled = true;
-
-        setStatus(`페이지 ${currentPage} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-
-        const cw = video.videoWidth;
-        const ch = video.videoHeight;
-        canvas.width = cw;
-        canvas.height = ch;
-        ctx.drawImage(video, 0, 0, cw, ch);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        log("capture size", {
-          width: cw,
-          height: ch,
-          length: dataUrl.length
-        });
-
-        setStatus("OCR 처리 중...");
-        let ocrJson;
-        try {
-          const ocrResp = await fetch("/.netlify/functions/ocr", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ image: dataUrl })
-          });
-          ocrJson = await ocrResp.json();
-        } catch (e) {
-          setStatus("OCR 요청 실패: " + e.message);
-          log("OCR fetch error", { error: String(e) });
-          speak("OCR 요청에 실패했어요.");
-          isSolving = false;
-          captureSolveBtn.disabled = false;
+      async function captureCurrentPage() {
+        if (!videoEl || !videoEl.videoWidth) {
+          appendLog(
+            'STATUS: 아직 카메라 영상이 준비되지 않았어. 잠시 뒤에 다시 시도해 줘.',
+            true
+          );
           return;
         }
 
-        log("OCR response", ocrJson);
+        const pageVal = parseInt(pageInput.value, 10);
+        currentPage = Number.isFinite(pageVal) && pageVal > 0 ? pageVal : 1;
+        pageInput.value = String(currentPage);
 
-        if (!ocrJson.ok) {
-          setStatus("OCR 에러: " + (ocrJson.error || "알 수 없는 오류"));
-          speak("OCR에서 문제가 발생했어요. 시험지를 좀 더 크게, 선명하게 찍어 주세요.");
-          isSolving = false;
-          captureSolveBtn.disabled = false;
-          return;
-        }
-
-        setStatus(
-          `OCR 완료 (평균 신뢰도: ${ocrJson.conf}, 번호 패턴 수: ${ocrJson.hits}). 이제 정답을 생성할게.`
+        appendLog(
+          `STATUS: 페이지 ${currentPage} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`,
+          true
         );
 
-        // solve 호출
-        let solveJson;
-        try {
-          const solveResp = await fetch("/.netlify/functions/solve", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              text: ocrJson.text,
-              page: currentPage
-            })
-          });
-          solveJson = await solveResp.json().catch(() => ({}));
-        } catch (e) {
-          setStatus("풀이 요청 실패: " + e.message);
-          log("solve fetch error", { error: String(e) });
-          speak("정답을 생성하는 중에 오류가 났어요.");
-          isSolving = false;
-          captureSolveBtn.disabled = false;
-          return;
-        }
+        canvasEl.width = videoEl.videoWidth;
+        canvasEl.height = videoEl.videoHeight;
+        ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
 
-        log("solve response", solveJson);
-
-        if (!solveJson || !solveJson.ok) {
-          setStatus("풀이 실패: " + (solveJson?.error || "알 수 없는 오류"));
-          speak("정답을 만들지 못했어요. 이 페이지를 다시 한번 촬영해 주세요.");
-          isSolving = false;
-          captureSolveBtn.disabled = false;
-          return;
-        }
-
-        const text = String(solveJson.text || "").trim();
-        lastAnswerText = text;
-        answerEl.textContent = text || "(정답이 비어 있음)";
-
-        setStatus(
-          `페이지 ${currentPage} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`
+        const blob = await new Promise((resolve) =>
+          canvasEl.toBlob(resolve, 'image/jpeg', 0.9)
         );
-        speakAnswerLines();
+        if (!blob) {
+          appendLog('STATUS: 화면 캡처에 실패했어.', true);
+          return;
+        }
 
-        repeatSpeakBtn.disabled = false;
-        captureSolveBtn.disabled = false;
-        isSolving = false;
+        appendLog(
+          `capture size ${JSON.stringify({
+            width: canvasEl.width,
+            height: canvasEl.height,
+            length: blob.size,
+          })}`
+        );
+
+        await sendToOcr(blob, currentPage);
       }
 
-      // --------- 이벤트 바인딩 ---------
-      startCameraBtn.addEventListener("click", startCamera);
-      stopCameraBtn.addEventListener("click", stopCamera);
-      captureSolveBtn.addEventListener("click", captureAndSolve);
-      repeatSpeakBtn.addEventListener("click", speakAnswerLines);
+      // =============== 서버 통신 ===============
 
-      nextPageBtn.addEventListener("click", () => {
-        currentPage += 1;
-        updatePageLabel();
-        lastAnswerText = "";
-        answerEl.textContent = "(아직 정답이 없어)";
-        setStatus(
-          `페이지 번호를 ${currentPage}로 바꿨어. 이 페이지를 꽉 채우게 다시 촬영해줘.`
-        );
-        speak(
-          `페이지 번호를 ${currentPage}로 바꿨어요. 다음 페이지를 촬영해 주세요.`
-        );
+      async function sendToOcr(imageBlob, page) {
+        appendLog('STATUS: OCR 처리 중...', true);
+        try {
+          const form = new FormData();
+          form.append('file', imageBlob, `page-${page}.jpg`);
+          form.append('page', String(page));
+
+          const res = await fetch('/.netlify/functions/ocr', {
+            method: 'POST',
+            body: form,
+          });
+
+          let data;
+          try {
+            data = await res.json();
+          } catch (e) {
+            data = { ok: false, error: 'Invalid JSON from OCR function' };
+          }
+
+          appendLog(`OCR response ${JSON.stringify(data)}`);
+
+          if (!data || !data.ok) {
+            appendLog(
+              `STATUS: OCR 실패: ${
+                (data && data.error) || res.status || '알 수 없는 오류'
+              }`,
+              true
+            );
+            return;
+          }
+
+          const conf = data.conf ?? 0;
+          const hits = data.hits ?? 0;
+          appendLog(
+            `STATUS: OCR 완료 (평균 신뢰도: ${conf}, 번호 패턴 수: ${hits}). 이제 정답을 생성할게.`,
+            true
+          );
+
+          const ocrText = data.text || '';
+          updateOcrOutput(ocrText);
+
+          await sendToSolve(ocrText, page);
+        } catch (err) {
+          console.error(err);
+          appendLog(
+            `STATUS: OCR 호출 중 오류가 발생했어: ${
+              err && err.message ? err.message : err
+            }`,
+            true
+          );
+        }
+      }
+
+      async function sendToSolve(ocrText, page) {
+        try {
+          const body = {
+            ocrText,
+            page,
+          };
+
+          const res = await fetch('/.netlify/functions/solve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+
+          let data;
+          try {
+            data = await res.json();
+          } catch (e) {
+            data = { ok: false, error: 'Invalid JSON from solve function' };
+          }
+
+          appendLog(`solve response ${JSON.stringify(data)}`);
+
+          if (!data || !data.ok) {
+            appendLog(
+              `STATUS: 정답 생성에 실패했어: ${
+                (data && data.error) || res.status || '알 수 없는 오류'
+              }`,
+              true
+            );
+            return;
+          }
+
+          const answerText = (data.text || '').trim();
+          appendLog(
+            `STATUS: 페이지 ${page} 정답을 생성했어. XURTH가 들리면 이 페이지는 끝이야.`,
+            true
+          );
+
+          if (answerText) {
+            // 정답 자체도 읽어 주고 싶으면 이 라인 유지
+            speak(answerText);
+          }
+
+          const nextPage = page + 1;
+          currentPage = nextPage;
+          pageInput.value = String(nextPage);
+        } catch (err) {
+          console.error(err);
+          appendLog(
+            `STATUS: solve 함수 호출 중 오류가 발생했어: ${
+              err && err.message ? err.message : err
+            }`,
+            true
+          );
+        }
+      }
+
+      // =============== 이벤트 바인딩 ===============
+
+      document
+        .getElementById('start-camera-btn')
+        .addEventListener('click', startCamera);
+      document
+        .getElementById('capture-btn')
+        .addEventListener('click', captureCurrentPage);
+
+      pageInput.addEventListener('change', () => {
+        const v = parseInt(pageInput.value, 10);
+        currentPage = Number.isFinite(v) && v > 0 ? v : 1;
+        pageInput.value = String(currentPage);
       });
 
-      resetPageBtn.addEventListener("click", () => {
-        currentPage = 1;
-        updatePageLabel();
-        lastAnswerText = "";
-        answerEl.textContent = "(아직 정답이 없어)";
-        setStatus("페이지 번호를 1로 초기화했어.");
-        speak("페이지 번호를 1로 초기화했어요.");
-      });
-
-      // 초기 상태
-      updatePageLabel();
-      setStatus("카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
+      // 처음 안내 한 줄
+      appendLog(
+        'STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.',
+        true
+      );
     </script>
   </body>
 </html>
