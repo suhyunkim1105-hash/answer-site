@@ -1,130 +1,106 @@
 // netlify/functions/ocr.js
-export default async (request) => {
-  // CORS
-  if (request.method === "OPTIONS") {
-    return new Response("", {
-      status: 204,
-      headers: corsHeaders(),
-    });
-  }
-  if (request.method !== "POST") {
-    return json({ ok: false, error: "POST only" }, 405);
-  }
+// 입력: { page, image: "data:image/jpeg;base64,..." }
+// 출력: { ok, text, conf, patternCount }
 
-  try {
-    const body = await request.json();
-    const image = body?.image;
-    const page = Number(body?.page || 1);
+const fetch = globalThis.fetch;
 
-    if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
-      return json({ ok: false, error: "Invalid image dataURL" }, 400);
-    }
-
-    // OCR.Space expects base64Image or file
-    const fd = new FormData();
-    fd.append("base64Image", image);
-
-    // minimal, stable options
-    fd.append("language", "eng");
-    fd.append("OCREngine", "2");
-    fd.append("detectOrientation", "true");
-    fd.append("scale", "true");
-    fd.append("isTable", "true");
-    fd.append("isOverlayRequired", "false");
-
-    // endpoint/key are assumed to already work in your setup
-    const endpoint = process.env.OCR_SPACE_API_ENDPOINT;
-    const apiKey = process.env.OCR_SPACE_API_KEY;
-
-    if (!endpoint || !apiKey) {
-      return json({ ok: false, error: "OCR config missing" }, 500);
-    }
-
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 45000);
-
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { apikey: apiKey },
-      body: fd,
-      signal: controller.signal,
-    }).finally(() => clearTimeout(t));
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      return json({ ok: false, error: `OCR HTTP ${res.status}`, raw: data }, 500);
-    }
-
-    const parsedText = extractText(data);
-    const norm = normalizeOcrText(parsedText);
-    const patternCount = countPatterns(norm);
-
-    return json({
-      ok: true,
-      page,
-      text: norm,
-      patternCount,
-      rawError: data?.ErrorMessage || null,
-    });
-
-  } catch (e) {
-    return json({ ok: false, error: e?.name === "AbortError" ? "OCR timeout" : (e?.message || String(e)) }, 500);
-  }
-};
-
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
-  };
-}
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders() },
-  });
-}
-
-function extractText(data) {
-  // OCR.Space shape
-  // data.ParsedResults[0].ParsedText
-  const pr = Array.isArray(data?.ParsedResults) ? data.ParsedResults : [];
-  const t = pr.map(x => x?.ParsedText || "").join("\n").trim();
-  return t || "";
-}
-
-function normalizeOcrText(s) {
-  let t = String(s || "");
-
-  // unify weird quotes/brackets frequently produced
-  t = t
-    .replace(/[‹›«»]/g, " ")
+function normalizeText(s) {
+  if (!s) return "";
+  return String(s)
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00A0/g, " ")
     .replace(/[“”]/g, '"')
-    .replace(/[’]/g, "'");
-
-  // fix common OCR: O4 -> 04, O5 -> 05, etc.
-  t = t.replace(/\bO(\d)\b/g, "0$1");
-
-  // fix glued question numbers like 0505. / 0707.
-  t = t.replace(/\b(0[1-9]|[1-4]\d|50)(0[1-9]|[1-4]\d|50)\./g, (m, a, b) => {
-    if (a === b) return `${a} ${b}.`;
-    return m;
-  });
-
-  // collapse excessive spaces but keep newlines
-  t = t.replace(/[ \t]+/g, " ");
-  t = t.replace(/\n{3,}/g, "\n\n");
-
-  return t.trim();
+    .replace(/[‘’]/g, "'")
+    .replace(/[‐-‒–—]/g, "-")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-function countPatterns(t) {
-  // rough: counts things that look like question numbers
-  const re = /\b(0?[1-9]|[1-4]\d|50)\s*\.\s*(0?[1-9]|[1-4]\d|50)\s*\./g;
-  let c = 0;
-  while (re.exec(t)) c++;
+function countQuestionPatterns(text) {
+  // 최소 규칙: 줄 시작의 "13." / "13 13." / "16.16." 류만 카운트
+  const t = "\n" + text;
+  const re = /(?:\n)\s*(\d{1,2})\s*(?:[.\)]\s*(?:\1\s*[.\)])?)?/g;
+  let m, c = 0;
+  const seen = new Set();
+  while ((m = re.exec(t))) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 50 && !seen.has(n)) {
+      seen.add(n);
+      c++;
+    }
+  }
   return c;
 }
+
+exports.handler = async (event) => {
+  try {
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: JSON.stringify({ ok: false, error: "Method Not Allowed" }) };
+    }
+
+    const body = JSON.parse(event.body || "{}");
+    const image = body.image;
+    if (!image || typeof image !== "string" || !image.startsWith("data:image/")) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "BadRequest: image(dataURL) required" }) };
+    }
+
+    const endpoint = process.env.OCR_SPACE_API_ENDPOINT || "https://apipro1.ocr.space/parse/image";
+    const apiKey = process.env.OCR_SPACE_API_KEY;
+    if (!apiKey) {
+      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerMisconfig: OCR key missing" }) };
+    }
+
+    // OCR.Space는 base64Image로 dataURL 그대로 받음
+    const form = new URLSearchParams();
+    form.set("apikey", apiKey);
+    form.set("base64Image", image);
+    form.set("language", "eng");
+    form.set("isOverlayRequired", "false");
+    form.set("detectOrientation", "true");
+    form.set("scale", "true");            // 중요: 작은 글자 확대 보정
+    form.set("OCREngine", "2");           // 엔진 2가 대체로 더 잘 뽑힘
+    form.set("isTable", "false");
+
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString()
+    });
+
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
+      return { statusCode: 502, body: JSON.stringify({ ok: false, error: "OCR upstream failed" }) };
+    }
+
+    if (data.IsErroredOnProcessing) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          ok: false,
+          error: "OCRSpaceError",
+          detail: (data.ErrorMessage && data.ErrorMessage[0]) || data.ErrorMessage || data.ProcessingTimeInMilliseconds || "Unknown"
+        })
+      };
+    }
+
+    const parsed = (data.ParsedResults && data.ParsedResults[0] && data.ParsedResults[0].ParsedText) || "";
+    const text = normalizeText(parsed);
+
+    // OCR.Space 신뢰도는 구조가 일정치 않아서 최소로만
+    const patternCount = countQuestionPatterns(text);
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        text,
+        conf: null,
+        patternCount
+      })
+    };
+  } catch (e) {
+    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) }) };
+  }
+};
 
