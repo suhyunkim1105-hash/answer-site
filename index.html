@@ -65,7 +65,6 @@
       font-size: 13px;
     }
     .hint { opacity: 0.85; font-size: 13px; line-height: 1.5; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
   </style>
 </head>
 <body>
@@ -156,7 +155,6 @@
       try {
         appendStatus('카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.');
 
-        // iPhone Safari에서 최대 해상도를 강제하긴 어렵지만, ideal로 최대한 끌어올림
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
@@ -168,7 +166,6 @@
 
         video.srcObject = stream;
 
-        // 메타데이터 로딩 대기
         await new Promise((resolve) => {
           if (video.readyState >= 2) return resolve();
           video.onloadedmetadata = () => resolve();
@@ -180,6 +177,14 @@
         appendStatus('카메라 시작 실패: ' + (err && err.message ? err.message : String(err)));
         console.error(err);
       }
+    }
+
+    // dataURL -> base64 only
+    function dataUrlToBase64(dataUrl) {
+      if (!dataUrl) return '';
+      const i = dataUrl.indexOf('base64,');
+      if (i === -1) return '';
+      return dataUrl.slice(i + 'base64,'.length);
     }
 
     async function captureAndSolveCurrentPage() {
@@ -195,38 +200,37 @@
 
         const ctx = canvas.getContext('2d');
 
-        // ★ 핵심: video의 원본 해상도로 캡처
+        // 원본 해상도로 캡처
         const vw = video.videoWidth || 1080;
         const vh = video.videoHeight || 1920;
+
         canvas.width = vw;
         canvas.height = vh;
-
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        const blob = await new Promise((resolve) =>
-          canvas.toBlob(resolve, 'image/jpeg', 0.95)
-        );
+        // ★ 핵심: OCR 함수가 JSON(base64) 받는 구조라서 dataURL -> base64로 보내기
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        const b64 = dataUrlToBase64(dataUrl);
 
-        console.log(
-          'capture size',
-          JSON.stringify({
-            width: canvas.width,
-            height: canvas.height,
-            length: blob ? blob.size : 0,
-          })
-        );
+        console.log('capture size', JSON.stringify({
+          width: canvas.width,
+          height: canvas.height,
+          length: b64 ? b64.length : 0
+        }));
 
         appendStatus('OCR 처리 중...');
 
-        // ★ 핵심: FormData 필드 이름은 반드시 'image'
-        // ★ 핵심: Content-Type 헤더를 절대 수동으로 넣지 말 것 (boundary 깨짐)
-        const formData = new FormData();
-        formData.append('image', blob, 'capture.jpg');
-        formData.append('page', String(page));
-
+        // ★ 핵심: 서버가 뭘 기대하는지 몰라서 키를 여러 개로 같이 보냄(안전)
         const ocrRes = await fetch('/.netlify/functions/ocr', {
           method: 'POST',
-          body: formData
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            page,
+            // 가능한 케이스들을 모두 커버
+            image: b64,
+            imageBase64: b64,
+            dataUrl: dataUrl
+          })
         });
 
         let ocrJson = null;
@@ -282,8 +286,9 @@
     btnStart.addEventListener('click', startCamera);
     btnCapture.addEventListener('click', captureAndSolveCurrentPage);
 
-    // 초기 안내 로그
+    // 초기 안내(중복 싫으면 이 줄 지워도 됨)
     appendStatus('카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.');
   </script>
 </body>
 </html>
+
