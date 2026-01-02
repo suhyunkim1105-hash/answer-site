@@ -1,272 +1,263 @@
 // netlify/functions/solve.js
-// 목표: (1) 문항번호 감지 안정화(2단 OCR 합쳐짐 포함) (2) 무조건 답 출력 (3) UNSURE 유지 (4) A-E/1-5 모두 정규화
+// 입력: { page, ocrText }
+// 출력: { ok, text, usedNumbers, unsure, model }
 
-const VERSION = "solve.v3.1.0";
+const fetch = globalThis.fetch;
 
-export default async (request) => {
-  if (request.method === "OPTIONS") {
-    return new Response("", { status: 204, headers: corsHeaders() });
+function normalize(s) {
+  if (!s) return "";
+  return String(s)
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00A0/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[‐-‒–—]/g, "-")
+    .replace(/[①]/g, "1").replace(/[②]/g, "2").replace(/[③]/g, "3").replace(/[④]/g, "4").replace(/[⑤]/g, "5")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function findQuestionMarkers(text) {
+  const t = "\n" + text;
+  // 줄 시작에 가까운 번호 패턴들만 잡음 (연도/숫자 노이즈 최소화)
+  const re = /(?:\n)\s*(\d{1,2})\s*(?:[.\)]\s*(?:\1\s*[.\)])?)?/g;
+
+  let m;
+  const hits = [];
+  const seen = new Set();
+  while ((m = re.exec(t))) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 50 && !seen.has(n)) {
+      seen.add(n);
+      // index는 원문 기준으로 맞추기 위해 -1 (앞에 붙인 \n 보정)
+      hits.push({ n, idx: Math.max(0, m.index - 1) });
+    }
   }
-  if (request.method !== "POST") {
-    return json({ ok: false, error: "POST only" }, 405);
+  hits.sort((a,b) => a.idx - b.idx);
+  return hits;
+}
+
+function extractBlocks(text, maxChars = 9000) {
+  const markers = findQuestionMarkers(text);
+  if (markers.length === 0) {
+    // 문항 번호를 못 잡으면 텍스트 일부만 잘라서라도 보냄
+    return { usedNumbers: [], blocksText: text.slice(0, maxChars) };
   }
 
-  const startedAt = Date.now();
+  const blocks = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i].idx;
+    const end = (i + 1 < markers.length) ? markers[i+1].idx : text.length;
+    const chunk = text.slice(start, end).trim();
+    // 너무 짧은/의미없는 조각 제거
+    if (chunk.length >= 30) blocks.push({ n: markers[i].n, chunk });
+  }
+
+  // 너무 길면 앞에서부터 누적해서 maxChars까지만
+  let out = "";
+  const usedNumbers = [];
+  for (const b of blocks) {
+    const add = `\n\n[Q${b.n}]\n${b.chunk}`;
+    if ((out.length + add.length) > maxChars) break;
+    out += add;
+    usedNumbers.push(b.n);
+  }
+
+  return { usedNumbers, blocksText: out.trim() };
+}
+
+function mapChoiceToNumber(v) {
+  const s = String(v).trim().toUpperCase();
+  if (/^[1-5]$/.test(s)) return Number(s);
+  if (/^[A-E]$/.test(s)) return "ABCDE".indexOf(s) + 1;
+  return null;
+}
+
+function formatAnswers(answerMap, unsureList, stopToken) {
+  const nums = Object.keys(answerMap).map(Number).sort((a,b)=>a-b);
+  const lines = nums.map(n => `${n}: ${answerMap[n]}`);
+  const unsure = unsureList.length ? `UNSURE: ${unsureList.sort((a,b)=>a-b).join(",")}` : `UNSURE: -`;
+  return `${lines.join("\n")}\n${unsure}\n${stopToken}`;
+}
+
+async function callOpenRouter({ model, apiKey, stopToken, promptText, timeoutMs }) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
 
   try {
-    const body = await request.json();
-    const page = Number(body?.page || 1);
-    const rawText = String(body?.text || "");
-
-    const normText = normalizeOcrText(rawText);
-    const detected = detectQuestionNumbers(normText);
-
-    // fallback window when detection is weak
-    const target = chooseTargetNumbers({ detected, page });
-
-    const model = process.env.MODEL_NAME || "openai/gpt-5.1";
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    const stopToken = process.env.STOP_TOKEN || "XURTH";
-    const temperature = Number(process.env.TEMPERATURE ?? 0);
-
-    if (!apiKey) return json({ ok: false, error: "OPENROUTER_API_KEY missing" }, 500);
-
-    const prompt = buildPrompt({ page, target, stopToken, normText });
-
-    const controller = new AbortController();
-    // Netlify sync functions: default 60s limit (keep margin). :contentReference[oaicite:1]{index=1}
-    const timeoutMs = 50000;
-    const t = setTimeout(() => controller.abort(), timeoutMs);
-
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model,
-        temperature,
-        messages: prompt,
+        temperature: 0,
+        top_p: 1,
+        max_tokens: 220,             // 정답만: 아주 작게
         stop: [stopToken],
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an exam answer-key generator. " +
+              "Always output an answer for every question number provided, never leave blank. " +
+              "If uncertain, still guess but list those numbers in UNSURE at the end."
+          },
+          {
+            role: "user",
+            content:
+              "Return ONLY numeric choices 1-5.\n" +
+              "If options are A-E, map A=1,B=2,C=3,D=4,E=5.\n\n" +
+              "Answer all questions contained in the OCR blocks below.\n" +
+              "Output format:\n" +
+              "13: 2\n" +
+              "14: 4\n" +
+              "...\n" +
+              "UNSURE: 13,18\n" +
+              stopToken + "\n\n" +
+              "OCR BLOCKS:\n" + promptText
+          }
+        ]
       }),
-      signal: controller.signal,
-    }).finally(() => clearTimeout(t));
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      return json({ ok: false, error: `OpenRouter HTTP ${res.status}`, raw: data }, 500);
-    }
-
-    const content = (data.choices?.[0]?.message?.content || "").trim();
-    const parsed = parseModelOutput(content, target);
-
-    const elapsedMs = Date.now() - startedAt;
-
-    return json({
-      ok: true,
-      text: parsed.finalText,
-      debug: {
-        version: VERSION,
-        page,
-        model,
-        detected,
-        target,
-        unsure: parsed.unsure,
-        elapsedMs,
-        // small preview for sanity
-        ocrPreview: normText.slice(0, 600),
-      }
+      signal: ac.signal
     });
 
-  } catch (e) {
-    const msg = e?.name === "AbortError" ? "solve timeout" : (e?.message || String(e));
-    return json({ ok: false, error: msg }, 500);
-  }
-};
-
-function corsHeaders() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "POST,OPTIONS",
-  };
-}
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders() },
-  });
-}
-
-function normalizeOcrText(s) {
-  let t = String(s || "");
-
-  // normalize weird brackets and quotes
-  t = t
-    .replace(/[‹›«»]/g, " ")
-    .replace(/[“”]/g, '"')
-    .replace(/[’]/g, "'");
-
-  // OCR often produces: O4 for 04
-  t = t.replace(/\bO(\d)\b/g, "0$1");
-
-  // fix glued question numbers like 0505. / 0707.
-  t = t.replace(/\b(0[1-9]|[1-4]\d|50)(0[1-9]|[1-4]\d|50)\./g, (m, a, b) => {
-    if (a === b) return `${a} ${b}.`;
-    return m;
-  });
-
-  // unify spacing
-  t = t.replace(/[ \t]+/g, " ");
-  t = t.replace(/\n{3,}/g, "\n\n");
-
-  return t.trim();
-}
-
-function detectQuestionNumbers(t) {
-  const nums = new Set();
-
-  // [01-05] style ranges
-  const rangeRe = /\[(\d{2})\s*-\s*(\d{2})\]/g;
-  for (const m of t.matchAll(rangeRe)) {
-    const a = Number(m[1]), b = Number(m[2]);
-    if (Number.isFinite(a) && Number.isFinite(b) && a >= 1 && b <= 50 && a <= b) {
-      for (let i = a; i <= b; i++) nums.add(i);
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data) {
+      const msg = data?.error?.message || data?.message || `HTTP ${resp.status}`;
+      throw new Error(msg);
     }
+
+    const text = data.choices?.[0]?.message?.content || "";
+    return text;
+  } finally {
+    clearTimeout(t);
   }
-
-  // "01 01." / "13. 13." / "16.16." ANYWHERE (2단 OCR 합쳐짐 대응)
-  // 안전장치: 쉼표(13,000)와 구분되도록 '.' 패턴만 인정
-  const dupRe = /\b(0?[1-9]|[1-4]\d|50)\s*(?:\.\s*|\s+)(0?[1-9]|[1-4]\d|50)\s*\./g;
-  for (const m of t.matchAll(dupRe)) {
-    const a = Number(m[1]), b = Number(m[2]);
-    // 보통 a==b가 문항번호. 그래도 a만 사용(일부 OCR이 두 번째를 깨먹음)
-    if (a >= 1 && a <= 50) nums.add(a);
-    if (b >= 1 && b <= 50 && a === b) nums.add(b);
-  }
-
-  // line-start "18." patterns (보조)
-  const lineRe = /(?:^|\n)\s*(0?[1-9]|[1-4]\d|50)\s*\.(?!\d)/g;
-  for (const m of t.matchAll(lineRe)) {
-    const a = Number(m[1]);
-    if (a >= 1 && a <= 50) nums.add(a);
-  }
-
-  return Array.from(nums).sort((x, y) => x - y);
 }
 
-function chooseTargetNumbers({ detected, page }) {
-  // if detection is decent, trust it
-  if (detected.length >= 5) return detected;
+function parseModelOutput(text) {
+  const out = String(text || "");
+  const lines = out.split(/\n+/).map(s => s.trim()).filter(Boolean);
 
-  // if user shot partial page (like 13~19), detected can be small but still meaningful
-  if (detected.length >= 2) return detected;
-
-  // hard fallback by page
-  if (page === 1) return range(1, 20);
-  if (page === 2) return range(21, 40);
-  if (page === 3) return range(41, 50);
-  // generic fallback
-  return range(1, 20);
-}
-
-function range(a, b) {
-  const out = [];
-  for (let i = a; i <= b; i++) out.push(i);
-  return out;
-}
-
-function buildPrompt({ page, target, stopToken, normText }) {
-  const targetList = target.join(", ");
-
-  // “성균관대 문법 유형 약간만” + “답 무조건” + “정규화 최소세트”
-  const system = `
-너는 "성균관대 영어 편입" 객관식 정답 키 생성기다.
-최우선 목표: 오답 최소화 + 하지만 무응답 금지(모든 문항에 1~5 중 하나는 반드시 선택).
-
-정규화 규칙(최소):
-- 보기 A/B/C/D/E는 각각 1/2/3/4/5로 간주한다.
-- 문법오류(Choose one that is either ungrammatical or unacceptable) 유형은 문장 내 표시된 ①~⑤(또는 A~E) 중 '오류/부적절'한 부분 하나를 고르는 문제이며, 최종 출력은 1~5로만 한다.
-- 확신이 낮아도 답은 내되, 마지막 줄에 UNSURE: 문항번호들을 쉼표로 나열한다.
-
-문법오류에서 자주 나오는 포인트(최소):
-- include/avoid/consider 등 뒤 동명사/부정사 형태
-- 병렬(parallelism): to V / V-ing / 명사 형태 일치
-- 대명사 지시/수일치(its/their, he/they 등)
-- 전치사/관계사(where/which) 용법
-- 수일치/시제/태(수동·능동)
-
-출력 형식(설명 금지):
-각 줄: "문항번호-정답" (정답은 1~5)
-마지막에서 두 번째 줄: "UNSURE: ..." (없으면 빈칸 대신 UNSURE: 없음)
-마지막 줄: ${stopToken}
-`.trim();
-
-  const user = `
-[페이지] ${page}
-[풀어야 할 문항 번호들] ${targetList}
-
-[OCR 텍스트 원문]
-${normText}
-`.trim();
-
-  return [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
-}
-
-function parseModelOutput(content, target) {
-  const answers = new Map();
+  const answers = {};
   const unsure = new Set();
 
-  // capture UNSURE list
-  const unsureMatch = content.match(/UNSURE\s*:\s*([0-9,\s]+)/i);
-  if (unsureMatch && unsureMatch[1]) {
-    for (const part of unsureMatch[1].split(",")) {
-      const n = Number(part.trim());
-      if (Number.isFinite(n)) unsure.add(n);
+  for (const line of lines) {
+    // "13: 2" or "13 - B"
+    const m = line.match(/^(\d{1,2})\s*[:\-]\s*([1-5A-E])\b/i);
+    if (m) {
+      const q = Number(m[1]);
+      const v = mapChoiceToNumber(m[2]);
+      if (q >= 1 && q <= 50 && v) answers[q] = v;
+      continue;
+    }
+    const u = line.match(/^UNSURE\s*:\s*(.*)$/i);
+    if (u) {
+      const nums = (u[1] || "").split(/[, ]+/).map(x => Number(x)).filter(n => n>=1 && n<=50);
+      nums.forEach(n => unsure.add(n));
     }
   }
 
-  // parse lines: "13-2", "13 : B", "13) 2" etc.
-  const lineRe = /(?:^|\n)\s*(0?[1-9]|[1-4]\d|50)\s*[-:)\.]\s*([1-5]|[A-Ea-e])\b/g;
-  for (const m of content.matchAll(lineRe)) {
-    const q = Number(m[1]);
-    let a = m[2].toUpperCase();
-    let v = letterToNum(a);
-    if (!v) v = Number(a);
-    if (q >= 1 && q <= 50 && v >= 1 && v <= 5) answers.set(q, v);
-  }
+  return { answers, unsure: Array.from(unsure) };
+}
 
-  // fill missing with "best guess" = 3, but mark as unsure
-  for (const q of target) {
-    if (!answers.has(q)) {
-      answers.set(q, 3);
-      unsure.add(q);
+exports.handler = async (event) => {
+  try {
+    if (event.httpMethod !== "POST") {
+      return { statusCode: 405, body: JSON.stringify({ ok: false, error: "Method Not Allowed" }) };
     }
+
+    const body = JSON.parse(event.body || "{}");
+    const raw = body.ocrText || "";
+    const stopToken = process.env.STOP_TOKEN || "XURTH";
+
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerMisconfig: missing OpenRouter key" }) };
+    }
+
+    const modelPrimary = process.env.MODEL_NAME || "openai/gpt-5.1";
+    const modelFallback = process.env.FALLBACK_MODEL || "openai/gpt-4.1-mini"; // 빠른 탈출용
+
+    const text = normalize(raw);
+
+    // 1) 문항 블록만 추출해서 토큰/시간 줄이기
+    const { usedNumbers, blocksText } = extractBlocks(text, 9000);
+
+    // 2) 질문 번호를 못 잡아도 일단 진행 (무조건 답 출력)
+    const targetNumbers = (usedNumbers.length ? usedNumbers : findQuestionMarkers(text).map(x => x.n));
+    const uniqueTargets = Array.from(new Set(targetNumbers)).filter(n => n>=1 && n<=50).sort((a,b)=>a-b);
+
+    // 타겟이 0이면: 어쩔 수 없이 1~20 같은 범위도 못 정함 -> 빈 배열로 둠
+    // 대신 모델에 전체 블록 보내고, 파싱 안 되면 휴리스틱 채움
+    const promptText = blocksText || text.slice(0, 9000);
+
+    let modelUsed = modelPrimary;
+    let modelText = "";
+    let parsed = null;
+
+    // 3) 1차 모델(짧은 타임아웃). 실패하면 fallback
+    try {
+      modelText = await callOpenRouter({
+        model: modelPrimary,
+        apiKey,
+        stopToken,
+        promptText,
+        timeoutMs: 17000
+      });
+      parsed = parseModelOutput(modelText);
+    } catch (e1) {
+      try {
+        modelUsed = modelFallback;
+        modelText = await callOpenRouter({
+          model: modelFallback,
+          apiKey,
+          stopToken,
+          promptText,
+          timeoutMs: 12000
+        });
+        parsed = parseModelOutput(modelText);
+      } catch (e2) {
+        parsed = { answers: {}, unsure: [] };
+      }
+    }
+
+    // 4) “항상 답 출력” 보장: 빠진 문항은 3(C)로 채우고 UNSURE에 넣음
+    const answerMap = {};
+    const unsureSet = new Set(parsed.unsure || []);
+
+    // 타겟 번호가 없으면: 모델이 준 것만이라도 내보내되, 최소한 1~20은 채워주는 게 낫다
+    const finalTargets = uniqueTargets.length ? uniqueTargets : Object.keys(parsed.answers).map(Number);
+
+    // 그래도 아무것도 없으면: 1~20 채움(최소 안전망)
+    const safeTargets = finalTargets.length ? finalTargets : Array.from({ length: 20 }, (_,i)=>i+1);
+
+    for (const q of safeTargets) {
+      const v = parsed.answers[q];
+      if (v && v>=1 && v<=5) {
+        answerMap[q] = v;
+      } else {
+        answerMap[q] = 3;
+        unsureSet.add(q);
+      }
+    }
+
+    const outText = formatAnswers(answerMap, Array.from(unsureSet), stopToken);
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        text: outText,
+        model: modelUsed,
+        usedNumbers: safeTargets,
+        unsure: Array.from(unsureSet).sort((a,b)=>a-b)
+      })
+    };
+  } catch (e) {
+    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "ServerError", detail: e?.message || String(e) }) };
   }
-
-  // build final output strictly for target, sorted
-  const sorted = [...target].sort((a,b)=>a-b);
-  let out = "";
-  for (const q of sorted) {
-    out += `${q}-${answers.get(q)}\n`;
-  }
-
-  const unsureArr = [...unsure].filter(n => target.includes(n)).sort((a,b)=>a-b);
-  out += `UNSURE: ${unsureArr.length ? unsureArr.join(", ") : "없음"}\n`;
-  out += `${process.env.STOP_TOKEN || "XURTH"}`;
-
-  return { finalText: out.trim(), unsure: unsureArr };
-}
-
-function letterToNum(ch) {
-  if (ch === "A") return 1;
-  if (ch === "B") return 2;
-  if (ch === "C") return 3;
-  if (ch === "D") return 4;
-  if (ch === "E") return 5;
-  return 0;
-}
+};
