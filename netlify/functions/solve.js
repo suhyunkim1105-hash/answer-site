@@ -3,15 +3,15 @@
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || "").trim();
 const MODEL_NAME = (process.env.MODEL_NAME || "openai/gpt-5.1").trim();
 const STOP_TOKEN = (process.env.STOP_TOKEN || "XURTH").trim();
-const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 500);
+
+// 짧게 끊기도록 토큰/시간 줄임 (Netlify 타임아웃 방지)
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS || 200);
+// 기본 8초 정도로 제한
+const CHAT_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 8000);
 const TEMPERATURE = Number(
   process.env.TEMPERATURE != null ? process.env.TEMPERATURE : 0.1
 );
-const CHAT_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 25000);
 
-/**
- * Netlify handler
- */
 export async function handler(event) {
   if (event.httpMethod !== "POST") {
     return json(405, { ok: false, error: "Method Not Allowed" });
@@ -31,7 +31,7 @@ export async function handler(event) {
     return json(500, { ok: false, error: "Missing OPENROUTER_API_KEY" });
   }
 
-  // --- 1) 번호 추출 & 보정 --------------------------------------
+  // 1) OCR에서 번호 패턴 전체 스캔 (라인 앞만 보지 않음)
   const qInfo = extractQuestionNumbers(ocrText);
   const numbers = qInfo.normalized;
   const numberListStr = numbers.length ? numbers.join(", ") : "";
@@ -41,57 +41,52 @@ export async function handler(event) {
     normalized: numbers
   });
 
-  // --- 2) LLM 프롬프트 구성 -------------------------------------
   const cleanedText = normalizeSpaces(ocrText);
 
+  // 2) 프롬프트
   const systemPrompt = `
 You are an expert solver of Korean university transfer English multiple-choice exams.
-You always return **only** short answers (question number + option A-E).
+You MUST output only short answers in the required format.
 `.trim();
 
   const userPrompt = `
 You are given OCR text from page ${page} of an English multiple-choice exam.
-The text may include noise, wrong spacing, or misread characters.
 
-OCR TEXT (AS-IS):
+OCR TEXT:
 -----------------
 ${cleanedText}
 -----------------
 
-1. First, detect which question numbers actually appear on THIS PAGE.
-   - Typical format is "01.", "1.", "06)", etc, at the start of a line.
-   - OCR sometimes misreads "05." as "505." or "07." as "707.".
-   - If you see "505." or "707." etc, interpret them as "5." or "7." respectively.
+1. Detect which question numbers appear on THIS PAGE.
+   - Numbers are 1~50.
+   - OCR may misread "05." as "505." or "07." as "707.".
+   - Fix those obvious errors (e.g. 505 -> 5, 707 -> 7).
+   - The following is a rough list of detected numbers (may be incomplete or noisy):
+     ${numberListStr || "(you must infer the numbers yourself)"}
 
-2. Then solve ONLY the questions that belong to this page.
-   - If the following list is non-empty, those are the question numbers
-     we detected after post-processing:
-     ${numberListStr || "(you must detect them yourself, usually about 10 questions)"}
-   - DO NOT invent new question numbers.
-   - If some question text or choices are badly broken so that you cannot
-     reliably answer, you may still guess a choice, but mark that question
-     number as "unsure".
+2. Solve ONLY the questions that logically belong to this page.
+   - Typically about 10 questions (e.g. 1–10, 11–20, ...).
+   - If the question text/choices are too broken, you may still guess, but mark that number as "unsure".
 
 3. OUTPUT FORMAT (STRICT):
    - One line per question in ascending order.
    - Format exactly: "N: X"
-     where:
-       N = question number (integer)
-       X = chosen option (A, B, C, D, or E)
+       N = question number (integer, 1~50)
+       X = option letter (A, B, C, D, or E)
    - Example:
        1: B
        2: A
        3: D
 
-   - After listing all answers, add ONE line for uncertainty:
+   - After listing all answers, add ONE line:
        UNSURE: n1, n2
-     or if there is no especially doubtful question:
+     or, if no especially doubtful questions:
        UNSURE:
 
-   - Finally, on the very last line, output the stop token exactly:
+   - Finally, output the stop token as the LAST line:
        ${STOP_TOKEN}
 
-4. Be concise. No explanations. No Korean. Just follow the format above.
+4. No explanations. No additional text. Just follow the format above.
 `.trim();
 
   const messages = [
@@ -99,7 +94,7 @@ ${cleanedText}
     { role: "user", content: userPrompt }
   ];
 
-  // --- 3) OpenRouter 호출 ----------------------------------------
+  // 3) OpenRouter 호출
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
 
@@ -116,7 +111,8 @@ ${cleanedText}
         model: MODEL_NAME,
         messages,
         max_tokens: MAX_OUTPUT_TOKENS,
-        temperature: Number.isFinite(TEMPERATURE) ? TEMPERATURE : 0.1
+        temperature: Number.isFinite(TEMPERATURE) ? TEMPERATURE : 0.1,
+        stop: [STOP_TOKEN]
       })
     });
   } catch (e) {
@@ -143,8 +139,12 @@ ${cleanedText}
   let data;
   try {
     data = await apiResp.json();
-  } catch (_) {
-    data = {};
+  } catch (e) {
+    console.error("[solve] JSON parse error from OpenRouter", String(e));
+    return json(200, {
+      ok: false,
+      error: "OpenRouter JSON parse error"
+    });
   }
 
   const content =
@@ -156,24 +156,20 @@ ${cleanedText}
     console.error("[solve] empty completion", data);
     return json(200, {
       ok: false,
-      error: "Empty completion from model",
-      detail: data
+      error: "Empty completion from model"
     });
   }
 
-  // --- 4) 모델 출력 파싱 ------------------------------------------
+  // 4) 모델 출력 파싱
   const parsed = parseAnswerText(content, numbers);
   console.log("[solve] parsed answers", parsed);
 
   const displayLines = [];
-
-  // 정답 라인
   const sortedNums = [...parsed.answers.keys()].sort((a, b) => a - b);
   for (const n of sortedNums) {
     displayLines.push(`${n}: ${parsed.answers.get(n)}`);
   }
 
-  // 신뢰도 낮은 번호 표시
   if (parsed.unsure.length) {
     displayLines.push(
       `※ 다음 문항은 OCR 인식이 불안해서 정답 신뢰도가 낮습니다: ${parsed.unsure.join(
@@ -182,14 +178,14 @@ ${cleanedText}
     );
   }
 
-  // 모델이 이상한 번호를 만들어낸 경우 (예: 505)
   if (parsed.weird.length) {
     displayLines.push(
-      `※ 무시된 비정상 번호(모델 출력): ${parsed.weird.join(", ")}`
+      `※ 이 페이지에서 예상하지 못한 번호(검토 필요): ${parsed.weird.join(
+        ", "
+      )}`
     );
   }
 
-  // 마지막 XURTH
   displayLines.push(STOP_TOKEN);
 
   const finalText = displayLines.join("\n");
@@ -208,24 +204,23 @@ ${cleanedText}
   });
 }
 
-// ----------------- 유틸 함수들 ----------------------
+/* ---------- 번호 추출 / 파싱 유틸 ---------- */
 
+// OCR 전체에서 1~49 + '.' 또는 ')' 패턴을 전부 찾는다.
 function extractQuestionNumbers(text) {
   const raw = [];
   const normalized = [];
+  const regex = /\b(0?[1-9]|[1-4][0-9])\s*[\)\.]/g;
+  let m;
+  const seen = new Set();
 
-  const lines = String(text || "").split(/\r?\n/);
-
-  for (const line of lines) {
-    // 줄 맨 앞의 숫자 + . or )
-    const m = line.match(/^\s*(\d{1,3})\s*[\.\)]/);
-    if (!m) continue;
+  while ((m = regex.exec(text)) !== null) {
     const rawNum = m[1];
     raw.push(rawNum);
-
     const n = normalizeNumber(rawNum);
-    if (n != null && n >= 1 && n <= 50) {
-      if (!normalized.includes(n)) normalized.push(n);
+    if (n != null && n >= 1 && n <= 50 && !seen.has(n)) {
+      seen.add(n);
+      normalized.push(n);
     }
   }
 
@@ -233,29 +228,26 @@ function extractQuestionNumbers(text) {
   return { raw, normalized };
 }
 
+// 505 -> 5, 707 -> 7 같은 보정
 function normalizeNumber(rawNum) {
   if (!rawNum) return null;
   const s = String(rawNum).replace(/\D/g, "");
   if (!s) return null;
 
-  if (s.length <= 2) {
-    return Number(s);
-  }
+  if (s.length <= 2) return Number(s);
 
-  // 505, 707 같은 패턴 → 5,7
-  const m = s.match(/^([1-9])0\1$/);
+  const m = s.match(/^([1-9])0\1$/); // 505, 707, 808...
   if (m) return Number(m[1]);
 
-  // 그 외에는 뒤 2자리만 사용 (예: 015 → 15)
-  return Number(s.slice(-2));
+  return Number(s.slice(-2)); // 015 -> 15 같은 것
 }
 
 function normalizeSpaces(str) {
   return String(str || "").replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ");
 }
 
-function parseAnswerText(content, allowedNumbers) {
-  const allowedSet = new Set(allowedNumbers || []);
+function parseAnswerText(content, hintedNumbers) {
+  const hintedSet = new Set(hintedNumbers || []);
   const answers = new Map();
   const weird = [];
   let unsure = [];
@@ -278,10 +270,9 @@ function parseAnswerText(content, allowedNumbers) {
         continue;
       }
 
-      if (allowedSet.size && !allowedSet.has(n)) {
-        // 이 페이지 번호 범위 밖이면 weird로 처리
-        weird.push(rawNum);
-        continue;
+      // 힌트 범위 밖이면 weird로만 표시하고, 정답은 일단 채택
+      if (hintedSet.size && !hintedSet.has(n)) {
+        weird.push(n);
       }
 
       answers.set(n, choice);
@@ -296,13 +287,15 @@ function parseAnswerText(content, allowedNumbers) {
         .map((x) => x.trim())
         .filter(Boolean)
         .map((x) => normalizeNumber(x))
-        .filter((n) => n != null && (!allowedSet.size || allowedSet.has(n)));
+        .filter((n) => n != null && n >= 1 && n <= 50);
       unsure = Array.from(new Set(list)).sort((a, b) => a - b);
     }
   }
 
   return { answers, unsure, weird: Array.from(new Set(weird)) };
 }
+
+/* ---------- 공통 유틸 ---------- */
 
 function safeJson(str) {
   try {
@@ -322,4 +315,5 @@ function json(statusCode, obj) {
     body: JSON.stringify(obj)
   };
 }
+
 
