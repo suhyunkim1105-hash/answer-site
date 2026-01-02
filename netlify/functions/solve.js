@@ -1,6 +1,6 @@
 // netlify/functions/solve.js
 
-export async function handler(event) {
+exports.handler = async function (event) {
   try {
     if (event.httpMethod !== "POST") {
       return json(405, { ok: false, error: "Method Not Allowed" });
@@ -50,11 +50,11 @@ export async function handler(event) {
       "VERY IMPORTANT RULES:",
       "1. You MUST answer for EVERY question number in the given list.",
       "2. For each number N in the list, output EXACTLY ONE line with the format:",
-      '   "N: X"',
+      '   \"N: X\"',
       "   where X is one of: A, B, C, D, E, or 'n/a' if it is truly impossible to infer.",
       "3. Do NOT output answers for numbers that are NOT in the given list.",
       "4. At the end, output one more line:",
-      '   "UNSURE: n1, n2, ..."',
+      '   \"UNSURE: n1, n2, ...\"',
       "   listing the question numbers you are especially unsure about.",
       "   - If you are reasonably confident about all of them, you may output an empty list like:",
       '     \"UNSURE:\" or \"UNSURE: -\".",
@@ -152,7 +152,7 @@ export async function handler(event) {
       error: String(e && e.message ? e.message : e)
     });
   }
-}
+};
 
 // ---------- Helper: LLM 호출 ----------
 
@@ -172,7 +172,6 @@ async function callLLM({ apiBase, apiKey, model, systemPrompt, userPrompt }) {
   const headers = {
     "content-type": "application/json",
     authorization: `Bearer ${apiKey}`,
-    // OpenRouter 권장 헤더 (있으면 좋고, 없어도 동작은 함)
     "HTTP-Referer":
       (process.env.SITE_URL || "").trim() ||
       "https://beamish-alpaca-e3df59.netlify.app",
@@ -240,9 +239,8 @@ function normalizeNumbers(rawNumbers) {
   return Array.from(set).sort((a, b) => a - b);
 }
 
-// OCR가 너무 깨져서 번호가 하나도 안 잡힌 경우를 위한 fallback (지금은 거의 안 쓸 것임)
+// OCR가 너무 깨져서 번호가 하나도 안 잡힌 경우를 위한 fallback
 function inferFallbackNumbers(text) {
-  // 아주 단순하게: [01-05], [06-10], [11-20] 같은 구간을 보고 추측
   if (!text) return [];
 
   const ranges = [];
