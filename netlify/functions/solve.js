@@ -21,23 +21,24 @@ function safeJson(str) {
   }
 }
 
-// OCR 텍스트에서 문항 번호 추출 (1~50)
-// 01. / 1. / 01 01. / 0101. / 07 07. / 0707. 모두 대응
+/**
+ * OCR 텍스트에서 문항 번호 추출 (1~50)
+ *
+ * - 형태 예시:
+ *   "01." / "1." / "01 01." / "09.09." / "07 07." 등
+ * - 전략:
+ *   - "....11." 이면 마지막 점 앞의 숫자만 본다고 생각하고
+ *   - 그냥 "(\d{1,2})\s*[\.\)]" 패턴으로 싹 긁어옴
+ *   - 1~50 사이만 남기고, 중복 제거 후 오름차순 정렬
+ */
 function extractQuestionNumbers(text) {
   if (!text) return { rawNumbers: [], normalizedNumbers: [] };
 
   const rawNumbers = [];
-  // (예)
-  //  - "01."      → 1
-  //  - "1."       → 1
-  //  - "0101."    → 1 (앞의 01만 사용)
-  //  - "07 07."   → 7
-  //  - "0707."    → 7
-  const re = /\b(0?[1-9]|[1-4][0-9]|50)\s*(?:\1)?\s*[\.\)]/g;
-
+  const re = /\b(\d{1,2})\s*[\.\)]/g;
   let m;
   while ((m = re.exec(text)) !== null) {
-    rawNumbers.push(m[1]); // 그룹 1 (01, 05, 07 등)만 사용
+    rawNumbers.push(m[1]); // "1" ~ "12" 등
   }
 
   const normalizedNumbers = Array.from(
@@ -51,20 +52,26 @@ function extractQuestionNumbers(text) {
   return { rawNumbers, normalizedNumbers };
 }
 
-// ChatGPT 프롬프트 구성
+/**
+ * ChatGPT용 메시지 구성
+ * - 이번 버전에서는 무조건 A/B/C/D/E 중 하나를 찍게 하고
+ *   n/a는 금지함 (너가 말한 “억지로라도 답 주기” 반영)
+ */
 function buildMessages(text, page, numbers, stopToken) {
   const nums = numbers.join(", ");
 
   const systemContent =
     "You are solving an English multiple-choice exam page.\n\n" +
-    `- You will be given OCR text of one exam page and a list of question numbers on that page.\n` +
+    `- You will be given OCR text of ONE exam page and a list of question numbers on that page.\n` +
     `- The question numbers you MUST answer for this page are: ${nums}.\n` +
-    "- DO NOT invent any other question numbers.\n" +
-    "- For each question N, output exactly one line in the format: \"N: X\" where X is one of A, B, C, D, E, or \"n/a\" if the question text or choices are too garbled.\n" +
-    "- After answering, add a final line starting with \"UNSURE:\" followed by a comma-separated list of question numbers for which you are not confident because of OCR noise. Use \"-\" if you are reasonably confident for all.\n" +
+    "- For each question N, output exactly ONE line in the format: \"N: X\".\n" +
+    "- X MUST be one of A, B, C, D, or E. You MUST NOT output \"n/a\" or leave any question unanswered.\n" +
+    "- If the OCR is noisy and you are unsure, still choose the MOST LIKELY option, but mark that question number in the final UNSURE list.\n" +
+    "- After answering ALL listed questions, add a final line starting with \"UNSURE:\" followed by a comma-separated list of question numbers you are NOT confident about. Use \"-\" if you are reasonably confident for all.\n" +
     `- Finally, on the VERY LAST line, output exactly the stop token ${stopToken}.\n` +
-    "- Do NOT include explanations.\n" +
-    "- Follow this exact output format. No extra text.";
+    "- Do NOT include any explanations, reasoning, or extra text.\n" +
+    "- Do NOT invent any question numbers. ONLY answer for the numbers given in the list.\n" +
+    "- Do NOT repeat the same option for ALL questions unless the OCR genuinely supports that.\n";
 
   const userContent =
     `Page: ${page}\n` +
@@ -78,7 +85,9 @@ function buildMessages(text, page, numbers, stopToken) {
   ];
 }
 
-// OpenRouter 호출
+/**
+ * OpenRouter 호출
+ */
 async function callModelAndRespond(ctx) {
   const {
     text,
@@ -210,10 +219,10 @@ exports.handler = async function (event) {
 
     const { rawNumbers, normalizedNumbers } = extractQuestionNumbers(text);
 
-    // 기본: 추출된 번호 그대로 사용
+    // 기본: OCR에서 잡힌 번호 사용
     let numbersForPrompt = normalizedNumbers.slice();
 
-    // 번호 하나도 못 잡으면(정규식/레이아웃 이상) 백업으로 1~12 시도
+    // 혹시 아무 번호도 못 잡았을 때만 백업으로 1~12 사용
     if (!numbersForPrompt.length) {
       const fallback = [];
       for (let i = 1; i <= 12; i++) fallback.push(i);
@@ -235,5 +244,3 @@ exports.handler = async function (event) {
     });
   }
 };
-
-
