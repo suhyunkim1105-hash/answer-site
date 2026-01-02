@@ -1,29 +1,18 @@
 // netlify/functions/solve.js
 
-const MODEL_NAME = process.env.MODEL_NAME || 'openai/gpt-4.1';
-
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== 'POST') {
-      return {
-        statusCode: 405,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'POST only' }),
-      };
+      return json(405, { ok: false, error: 'POST only' });
     }
 
     let body;
     try {
       body = JSON.parse(event.body || '{}');
     } catch (e) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'Invalid JSON body' }),
-      };
+      return json(400, { ok: false, error: 'Invalid JSON body' });
     }
 
-    // 여러 경우 모두 지원: ocrText / text / ocr
     const ocrText = (body.ocrText || body.text || body.ocr || '').toString();
     const page =
       body.page !== undefined
@@ -33,44 +22,57 @@ exports.handler = async (event) => {
         : 1;
 
     if (!ocrText.trim()) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: false, error: 'Missing OCR text' }),
-      };
+      return json(400, { ok: false, error: 'Missing OCR text' });
     }
 
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      // 환경변수 안 잡혀 있으면 바로 에러 리턴
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ok: false,
-          error: 'OPENROUTER_API_KEY is not set on the server',
-        }),
-      };
+      return json(500, {
+        ok: false,
+        error: 'OPENROUTER_API_KEY is not set on the server',
+      });
     }
 
+    // MODEL_NAME 환경변수로 모델 바꾸기 (Netlify env key는 "MODEL_NAME")
+    const model = (process.env.MODEL_NAME || 'openai/gpt-4.1').toString();
+
     const systemPrompt = [
-      'You are an assistant that solves multiple-choice English questions',
-      'from Sungkyunkwan University transfer exams.',
+      'You are an expert solver for Sungkyunkwan University transfer English exams.',
       '',
-      '- You receive OCR text from a single exam page.',
-      '- Questions are numbered 1–50 overall, but each page only contains a subset.',
-      '- Each question has exactly 5 options: A, B, C, D, E.',
+      'Input:',
+      '- Raw OCR text from ONE page of the exam.',
+      '- The text includes section instructions like:',
+      '  * "[01-05] Choose one that is either ungrammatical or unacceptable."',
+      '  * "[06-10] Choose one that is closest in meaning to the underlined expression."',
+      '  * "[11-20] Choose one that is most appropriate for the blank."',
       '',
       'Your job:',
-      '1. Carefully read the OCR text.',
-      '2. Detect which question numbers appear on this page.',
-      '3. For EACH detected question number, choose exactly ONE best option (A–E).',
-      '4. Output ONLY in the strict format described below.',
+      '1. Carefully read the instructions for each block (e.g. 01-05, 06-10, 11-20).',
+      '2. For each question number that appears on this page (1–50), choose EXACTLY ONE best option A–E.',
       '',
-      'Important:',
-      '- Temperature is effectively zero: always give the most likely answer, not a random one.',
-      '- Do NOT output any explanation or reasoning.',
-      '- Think step by step silently, but NEVER print your reasoning.',
+      'Very important interpretation of instructions:',
+      '- If the instruction says "ungrammatical or unacceptable", choose the ONLY OPTION that is WRONG or UNNATURAL in context.',
+      '- If the instruction says "closest in meaning", choose the synonym that best matches the underlined word or phrase.',
+      '- If the instruction says "most appropriate for the blank", choose the option that makes the passage most natural and coherent.',
+      '',
+      'Output format (STRICT):',
+      '- One line per question:',
+      '  <number>: <letter>',
+      '  Example:',
+      '  1: B',
+      '  2: A',
+      '  3: C',
+      '',
+      '- After listing all questions, output:',
+      '  UNSURE: -',
+      '  XURTH',
+      '',
+      'Rules:',
+      '- ONLY list question numbers that clearly appear on this page.',
+      '- Question numbers are between 1 and 50.',
+      '- Use CAPITAL letters A–E only.',
+      '- Do NOT output explanations or reasoning.',
+      '- Reason internally step by step, but NEVER print your reasoning.',
     ].join('\n');
 
     const userPrompt = [
@@ -100,78 +102,68 @@ exports.handler = async (event) => {
       '- Do NOT write anything else.',
     ].join('\n');
 
-    const completionRes = await fetch(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: MODEL_NAME,
-          temperature: 0,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        }),
-      }
-    );
+    const completionRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
 
     if (!completionRes.ok) {
       const text = await completionRes.text().catch(() => '');
-      return {
-        statusCode: 502,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ok: false,
-          error: 'OpenRouter API error',
-          status: completionRes.status,
-          body: text,
-        }),
-      };
+      return json(502, {
+        ok: false,
+        error: 'OpenRouter API error',
+        status: completionRes.status,
+        body: text,
+      });
     }
 
     const completionData = await completionRes.json();
     const choice = completionData.choices && completionData.choices[0];
-    const answerText =
-      (choice && choice.message && choice.message.content) || '';
+    const answerText = (choice && choice.message && choice.message.content) || '';
 
     const parsed = parseAnswers(answerText);
 
-    const responseBody = {
+    return json(200, {
       ok: true,
       text: answerText.trim(),
       debug: {
         page,
-        model: MODEL_NAME,
+        model,
         questionNumbers: parsed.questionNumbers,
         answers: parsed.answers,
         ocrTextPreview: ocrText.slice(0, 500),
         finishReason: choice && choice.finish_reason,
         stopToken: 'XURTH',
       },
-    };
-
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(responseBody),
-    };
+    });
   } catch (err) {
     console.error('solve.js error:', err);
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ok: false,
-        error: 'Internal server error in solve function',
-        detail: String(err && err.message ? err.message : err),
-      }),
-    };
+    return json(500, {
+      ok: false,
+      error: 'Internal server error in solve function',
+      detail: String(err && err.message ? err.message : err),
+    });
   }
 };
+
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(obj),
+  };
+}
 
 /**
  * 모델이 뱉은 텍스트에서
