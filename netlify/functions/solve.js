@@ -270,5 +270,3 @@ function safeJson(str) {
   }
 }
 
-
-
