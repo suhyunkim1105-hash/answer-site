@@ -40,10 +40,9 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         model,
         temperature,
-        // ❌ stop 토큰 사용 안 함 (XURTH 완전 제거)
         messages: [
           { role: "system", content: "You output ONLY answers in the required format. No extra text." },
-          { role: "user", content: prompt }
+          { role: "user", content: prompt },
         ],
       }),
     });
@@ -61,8 +60,7 @@ exports.handler = async (event) => {
     try {
       data = JSON.parse(raw);
     } catch {
-      // 응답이 JSON이 아니면 에러 처리
-      return json(502, { ok: false, error: "Invalid JSON from OpenRouter", raw: raw.slice(0, 1500) });
+      // ignore parse error, text는 빈 문자열일 수 있음
     }
 
     const text = data?.choices?.[0]?.message?.content
@@ -113,7 +111,7 @@ ${ocrText}
 }
 
 function parseAnswers(text) {
-  const lines = text
+  const lines = String(text)
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
@@ -122,22 +120,14 @@ function parseAnswers(text) {
   const questionNumbers = [];
 
   for (const ln of lines) {
-    const m = ln.match(/^(\d{1,3})\s*:\s*([ABCDE0-9])\b/i);
+    const m = ln.match(/^(\d{1,3})\s*:\s*([ABCDE])\b/i);
     if (m) {
       const n = Number(m[1]);
       const a = m[2].toUpperCase();
-      // A~E → 1~5, 숫자면 그대로 숫자로 (둘 다 허용)
-      let val;
-      if ("ABCDE".includes(a)) {
-        val = "ABCDE".indexOf(a) + 1;
-      } else {
-        val = Number(a);
-      }
-      answers[String(n)] = val;
+      answers[String(n)] = "ABCDE".indexOf(a) + 1;
       questionNumbers.push(n);
     }
   }
-
   questionNumbers.sort((a, b) => a - b);
   return { questionNumbers, answers };
 }
