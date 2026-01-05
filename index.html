@@ -6,77 +6,31 @@
   <title>answer-site</title>
   <style>
     :root { color-scheme: dark; }
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      background: #0b1020;
-      color: #e9eefc;
-    }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b1020; color:#e9eefc; }
     .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
-    .card {
-      background: #0f1835;
-      border: 1px solid rgba(255,255,255,.08);
-      border-radius: 18px;
-      padding: 16px;
-      margin-bottom: 14px;
-      box-shadow: 0 8px 30px rgba(0,0,0,.25);
-    }
-    h2 { margin: 0 0 10px 0; font-size: 18px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    button {
-      background: #2b6cff;
-      border: none;
-      color: white;
-      padding: 10px 14px;
-      border-radius: 12px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    button.secondary { background: #243055; }
-    button:disabled { opacity: .55; cursor: not-allowed; }
-    input {
-      background: #0b1020;
-      color: #e9eefc;
-      border: 1px solid rgba(255,255,255,.14);
-      border-radius: 10px;
-      padding: 10px 12px;
-    }
+    .card { background:#0f1835; border:1px solid rgba(255,255,255,.08); border-radius: 18px; padding: 16px; margin-bottom: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+    h2 { margin:0 0 10px 0; font-size: 18px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    button { background:#2b6cff; border:none; color:white; padding:10px 14px; border-radius: 12px; font-weight: 700; cursor:pointer; }
+    button.secondary { background:#243055; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    input { background:#0b1020; color:#e9eefc; border:1px solid rgba(255,255,255,.14); border-radius: 10px; padding:10px 12px; }
     .previewWrap {
       height: 70vh;
       min-height: 360px;
       border-radius: 18px;
-      overflow: hidden;
-      background: #050a18;
-      border: 1px solid rgba(255,255,255,.08);
+      overflow:hidden;
+      background:#050a18;
+      border:1px solid rgba(255,255,255,.08);
     }
-    video, img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000;
-    }
-    .hint {
-      opacity: .8;
-      font-size: 13px;
-      line-height: 1.5;
-      margin-top: 10px;
-    }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-      line-height: 1.45;
-    }
+    video, img { width:100%; height:100%; object-fit: contain; background:#000; }
+    .hint { opacity:.8; font-size: 13px; line-height: 1.5; margin-top: 10px; }
+    pre { margin:0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
     textarea {
-      width: 100%;
-      min-height: 160px;
-      resize: vertical;
-      background: #0b1020;
-      color: #e9eefc;
-      border: 1px solid rgba(255,255,255,.14);
-      border-radius: 12px;
-      padding: 12px;
+      width:100%; min-height: 160px; resize: vertical;
+      background:#0b1020; color:#e9eefc;
+      border:1px solid rgba(255,255,255,.14);
+      border-radius: 12px; padding:12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 12px;
     }
@@ -88,10 +42,10 @@
     <div class="card">
       <h2>카메라</h2>
       <div class="row">
-        <button id="btnTtsTest" class="secondary">음성 테스트</button>
         <button id="btnStart">카메라 시작</button>
         <button id="btnAutoStart" class="secondary">자동 풀이 시작</button>
         <button id="btnAutoStop" class="secondary">자동 풀이 정지</button>
+        <button id="btnTtsTest" class="secondary">음성 테스트</button>
         <span class="small">현재 페이지</span>
         <input id="page" type="number" value="1" min="1" style="width:90px" />
         <span id="res" class="small"></span>
@@ -104,10 +58,9 @@
       </div>
 
       <div class="hint">
-        ① 먼저 <b>음성 테스트</b>로 소리가 잘 나오는지 확인하고<br/>
-        ② <b>카메라 시작</b>으로 시험지를 화면에 꽉 채운 뒤<br/>
-        ③ <b>자동 풀이 시작</b>을 누르면,<br/>
-        &nbsp;&nbsp;&nbsp;- "페이지 인식, 1 2 3" 음성 안내 후 자동 촬영 → OCR → 정답 생성 → 정답 음성 낭독 → 5초 쉬고 반복.
+        ① 시험지를 화면에 꽉 채우고<br/>
+        ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
+        ③ “자동 풀이 시작”을 누르면 → OCR → 정답 생성 → 음성 안내 → 페이지 인식 1 2 3 순서로 계속 반복.
       </div>
     </div>
 
@@ -141,12 +94,13 @@
     const btnAutoStop = $("btnAutoStop");
     const btnTtsTest = $("btnTtsTest");
     const resEl = $("res");
+    const pageInput = $("page");
 
     function ts() {
       const d = new Date();
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      const ss = String(d.getSeconds()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mm = String(d.getMinutes()).padStart(2,"0");
+      const ss = String(d.getSeconds()).padStart(2,"0");
       return `${hh}:${mm}:${ss}`;
     }
 
@@ -156,109 +110,14 @@
     }
 
     let stream = null;
-    let busy = false;
-    let autoMode = false;
-    let autoTimer = null;
+    let busy = false;       // 수동/자동 공통 연타 방지
+    let autoActive = false; // 자동 풀이 루프 on/off
+    let autoBusy = false;   // 자동 루프 내부 중복 방지
     let wakeLock = null;
-    let preferredVoice = null;
-
-    // --- TTS 설정 ---
-    function initVoices() {
-      if (!window.speechSynthesis) return;
-      const voices = window.speechSynthesis.getVoices() || [];
-      if (!voices.length) return;
-      // 한국어 여성스러운 목소리 우선 시도, 없으면 첫 번째
-      preferredVoice =
-        voices.find(v =>
-          v.lang && v.lang.toLowerCase().startsWith("ko") &&
-          /여|female|woman|Yuna/i.test((v.name || "") + " " + (v.voiceURI || ""))
-        ) ||
-        voices.find(v => v.lang && v.lang.toLowerCase().startsWith("ko")) ||
-        voices[0];
-    }
-
-    if (window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = initVoices;
-      initVoices();
-    }
-
-    function speak(text) {
-      if (!window.speechSynthesis) return;
-      const utter = new SpeechSynthesisUtterance(text);
-      if (preferredVoice) {
-        utter.voice = preferredVoice;
-      }
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
-      window.speechSynthesis.speak(utter);
-    }
-
-    function readAnswersAloud(text) {
-      const lines = String(text)
-        .split(/\r?\n/)
-        .map(l => l.trim())
-        .filter(Boolean);
-
-      let delay = 0;
-
-      for (const ln of lines) {
-        const m = ln.match(/^(\d{1,3})\s*:\s*(.+)$/);
-        if (m) {
-          const num = m[1];
-          let ans = m[2].trim();
-          ans = ans.split(/\s+/)[0]; // 코멘트 붙어도 첫 토큰만
-
-          let spokenAns = ans;
-          if (/^[1-5]$/.test(ans)) {
-            spokenAns = `${ans}번`;
-          }
-          const sentence = `${num}번, ${spokenAns}.`;
-          setTimeout(() => speak(sentence), delay);
-          delay += 1500; // 1.5초 간격
-          continue;
-        }
-
-        const mUnsure = ln.match(/^UNSURE\s*:\s*(.+)$/i);
-        if (mUnsure) {
-          const unsurePart = mUnsure[1].trim();
-          const sentence =
-            !unsurePart || unsurePart === "-"
-              ? "모두 확실해."
-              : `확실하지 않은 번호: ${unsurePart}.`;
-          setTimeout(() => speak(sentence), delay);
-          delay += 1500;
-        }
-      }
-    }
-
-    // --- Wake Lock ---
-    async function enableWakeLock() {
-      try {
-        if ("wakeLock" in navigator && !wakeLock) {
-          wakeLock = await navigator.wakeLock.request("screen");
-          wakeLock.addEventListener("release", () => {
-            log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
-          });
-          log("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
-        }
-      } catch (e) {
-        log(`STATUS: wake lock 설정 실패: ${e?.message || e}`);
-      }
-    }
-
-    async function disableWakeLock() {
-      try {
-        if (wakeLock) {
-          await wakeLock.release();
-          wakeLock = null;
-          log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
-        }
-      } catch (_) {
-        // ignore
-      }
-    }
+    let ttsEnabled = false;
 
     // --- 카메라 ---
+
     async function startCamera() {
       if (stream) return;
 
@@ -268,9 +127,9 @@
         audio: false,
         video: {
           facingMode: { ideal: "environment" },
-          width: { min: 1280, ideal: 1920 },
-          height: { min: 720, ideal: 1080 },
-        },
+          width:  { min: 1280, ideal: 1920 },
+          height: { min: 720,  ideal: 1080 },
+        }
       };
 
       stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -285,8 +144,8 @@
         await track.applyConstraints({
           advanced: [
             { width: 1920, height: 1080 },
-            { width: 1280, height: 720 },
-          ],
+            { width: 1280, height: 720 }
+          ]
         });
       } catch (_) {}
 
@@ -334,92 +193,184 @@
       return { ok: res.ok && data.ok, ...data };
     }
 
-    // --- 자동 루프 ---
-    function scheduleNextAuto(delayMs) {
-      if (!autoMode) return;
-      if (autoTimer) {
-        clearTimeout(autoTimer);
-        autoTimer = null;
+    // --- Wake Lock ---
+
+    async function requestWakeLock() {
+      if (!("wakeLock" in navigator)) return;
+      try {
+        wakeLock = await navigator.wakeLock.request("screen");
+        log("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
+        wakeLock.addEventListener("release", () => {
+          log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
+        });
+      } catch (e) {
+        log(`STATUS: 화면 꺼짐 방지 설정 실패: ${e?.message || e}`);
       }
-      autoTimer = setTimeout(runAutoOnce, delayMs);
     }
 
-    function runAutoOnce() {
-      if (!autoMode) return;
-      const page = Number($("page").value || 1);
-      log(`STATUS: [자동] 페이지 ${page} 인식을 시작할게. (페이지 인식 1 2 3)`);
-      speak("페이지 인식, 1, 2, 3");
-      setTimeout(() => {
-        if (!autoMode) return;
-        captureAndProcess(true);
-      }, 2000);
+    async function releaseWakeLock() {
+      if (wakeLock) {
+        try { await wakeLock.release(); } catch (_) {}
+        wakeLock = null;
+      }
     }
 
-    async function captureAndProcess(isAuto) {
-      if (busy) {
-        log("STATUS: 이미 처리 중이야. 잠시만 기다려줘.");
+    // --- TTS ---
+
+    function speak(text, rate = 1.0, onend) {
+      if (!window.speechSynthesis || !ttsEnabled || !text) {
+        if (onend) onend();
         return;
       }
-      busy = true;
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "ko-KR";
+        u.rate = rate;
+        if (onend) u.onend = onend;
+        window.speechSynthesis.speak(u);
+      } catch (_) {
+        if (onend) onend();
+      }
+    }
+
+    function buildAnswerSpeech(rawText) {
+      if (!rawText) return "";
+      const lines = rawText.split(/\r?\n/);
+      const parts = [];
+      let unsure = "";
+
+      for (const ln of lines) {
+        const m = ln.match(/^(\d{1,3})\s*:\s*([A-E1-5])/);
+        if (m) {
+          const num = Number(m[1]);
+          const ans = m[2];
+          const qWord = `${num}번`;
+          const up = String(ans).toUpperCase();
+          let aWord = "";
+
+          if ("ABCDE".includes(up)) {
+            const map = { A: "에이", B: "비", C: "씨", D: "디", E: "이" };
+            aWord = map[up] || up;
+          } else {
+            aWord = `${ans}번`;
+          }
+
+          parts.push(`${qWord} ${aWord}.`);
+          continue;
+        }
+
+        const mu = ln.match(/^UNSURE\s*:\s*(.*)$/i);
+        if (mu) {
+          const s = mu[1].trim();
+          if (s && s !== "-") {
+            unsure = `확실하지 않은 번호: ${s}.`;
+          }
+        }
+      }
+
+      if (!parts.length && !unsure) return "정답을 찾지 못했어.";
+      return (parts.join(" ") + (unsure ? " " + unsure : "")).trim();
+    }
+
+    // --- 자동 루프 본체 ---
+
+    async function autoCaptureAndSolve() {
+      if (!autoActive) return;
+      if (autoBusy) return;
+      autoBusy = true;
 
       try {
         await startCamera();
-        const page = Number($("page").value || 1);
+        const page = Number(pageInput.value || 1);
 
-        log(`STATUS: ${isAuto ? "[자동] " : ""}페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+        log(`[자동] 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
         const cap = captureDataURL();
-        log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length / 4) })}`);
+        log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
 
-        log(`STATUS: ${isAuto ? "[자동] " : ""}OCR 처리 중...`);
+        log("[자동] OCR 처리 중...");
         const ocr = await doOCR(page, cap.dataUrl);
         log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
 
-        if (!ocr.ok) {
-          log(`STATUS: ${isAuto ? "[자동] " : ""}OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
-          if (isAuto) scheduleNextAuto(4000);
-          return;
-        }
+        const text = (ocr && ocr.text) ? String(ocr.text) : "";
 
-        const text = (ocr.text || "").trim();
-        if (!text) {
-          log(`STATUS: ${isAuto ? "[자동] " : ""}아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.`);
-          if (isAuto) scheduleNextAuto(4000);
+        if (!ocr.ok || !text.trim()) {
+          log("[자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
+          scheduleNextCycle();
           return;
         }
 
         ocrBox.value = text;
 
-        log(`STATUS: ${isAuto ? "[자동] " : ""}OCR 완료. 이제 정답을 생성할게.`);
+        log("[자동] OCR 완료. 이제 정답을 생성할게.");
         const solved = await doSolve(page, text);
         log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
 
         if (!solved.ok) {
-          log(`STATUS: ${isAuto ? "[자동] " : ""}solve 실패: ${solved.error || "Unknown"}`);
-          if (isAuto) scheduleNextAuto(5000);
+          log(`[자동] solve 실패: ${solved.error || "Unknown"}`);
+          speak("정답 생성에 실패했어. 다시 시도할게.", 1.0, () => {
+            scheduleNextCycle();
+          });
           return;
         }
 
-        const answerText = solved.text || "";
-        ansBox.value = answerText;
-        log(`STATUS: ${isAuto ? "[자동] " : ""}페이지 ${page} 정답을 생성했어.`);
+        ansBox.value = solved.text || "";
+        log(`[자동] 페이지 ${page} 정답을 생성했어.`);
 
-        if (answerText.trim()) {
-          readAnswersAloud(answerText);
-        }
-
-        if (isAuto) {
-          // 정답 읽고 난 뒤 다음 촬영까지 5초 정도 쉬기
-          scheduleNextAuto(5000);
-        }
+        const speechText = buildAnswerSpeech(solved.text || "");
+        // 정답 다 읽은 뒤 → 페이지 인식 1 2 3 → 다음 촬영
+        speak(speechText, 1.0, () => {
+          scheduleNextCycle();
+        });
       } catch (e) {
-        log(`STATUS: 처리 실패: ${e?.message || e}`);
-        if (isAuto) scheduleNextAuto(5000);
+        log(`[자동] 처리 중 오류: ${e?.message || e}`);
+        speak("처리 중 오류가 발생했어. 다시 시도할게.", 1.0, () => {
+          scheduleNextCycle();
+        });
       } finally {
-        busy = false;
+        autoBusy = false;
       }
     }
 
-    // --- 버튼 이벤트 ---
+    function scheduleNextCycle() {
+      if (!autoActive) return;
+      const page = Number(pageInput.value || 1);
+      const NEXT_DELAY_MS = 5000; // 정답 다 읽고 쉬는 시간 5초
+
+      setTimeout(() => {
+        if (!autoActive) return;
+        log(`[자동] 페이지 ${page} 인식을 시작할게. (페이지 인식 1 2 3)`);
+        speak("페이지 인식, 하나, 둘, 셋.", 1.0, () => {
+          if (!autoActive) return;
+          autoCaptureAndSolve();
+        });
+      }, NEXT_DELAY_MS);
+    }
+
+    async function startAuto() {
+      if (autoActive) return;
+      autoActive = true;
+      log("STATUS: 자동 문제풀이 모드를 시작할게.");
+      await startCamera();
+      await requestWakeLock();
+
+      // 첫 사이클: 바로 페이지 인식 1 2 3 후 촬영
+      const page = Number(pageInput.value || 1);
+      log(`[자동] 페이지 ${page} 인식을 시작할게. (페이지 인식 1 2 3)`);
+      speak("페이지 인식, 하나, 둘, 셋.", 1.0, () => {
+        if (!autoActive) return;
+        autoCaptureAndSolve();
+      });
+    }
+
+    async function stopAuto() {
+      if (!autoActive) return;
+      autoActive = false;
+      log("STATUS: 자동 문제풀이 모드를 종료했어.");
+      await releaseWakeLock();
+    }
+
+    // --- 이벤트 바인딩 ---
+
     btnStart.addEventListener("click", async () => {
       try {
         await startCamera();
@@ -429,34 +380,32 @@
     });
 
     btnAutoStart.addEventListener("click", async () => {
-      if (autoMode) return;
-      autoMode = true;
-      log("STATUS: 자동 문제풀이 모드를 시작할게.");
-      await startCamera();
-      await enableWakeLock();
-      scheduleNextAuto(0);
+      try {
+        await startAuto();
+      } catch (e) {
+        log(`STATUS: 자동 모드 시작 실패: ${e?.message || e}`);
+      }
     });
 
     btnAutoStop.addEventListener("click", async () => {
-      if (!autoMode) return;
-      autoMode = false;
-      if (autoTimer) {
-        clearTimeout(autoTimer);
-        autoTimer = null;
-      }
-      await disableWakeLock();
-      log("STATUS: 자동 문제풀이 모드를 종료했어.");
+      await stopAuto();
     });
 
     btnTtsTest.addEventListener("click", () => {
-      try {
-        if (window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-        }
-        speak("테스트");
-        log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
-      } catch (e) {
-        log(`STATUS: 음성 테스트 실패: ${e?.message || e}`);
+      if (!window.speechSynthesis) {
+        log("STATUS: 이 브라우저는 음성 기능을 지원하지 않아.");
+        return;
+      }
+      ttsEnabled = true;
+      window.speechSynthesis.cancel();
+      speak("테스트.", 1.0);
+      log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
+    });
+
+    // 탭을 벗어나면 자동 모드 & wake lock 정리
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        stopAuto();
       }
     });
   </script>
