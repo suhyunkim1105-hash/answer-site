@@ -1,188 +1,288 @@
-// netlify/functions/ocr.js
-// OCR.Space PRO 호출 (apipro1/apipro2). JSON(dataURL base64) 받아서 base64Image로 전달.
-// - env: OCR_SPACE_API_KEY (필수)
-// - env: OCR_SPACE_API_ENDPOINT (권장: https://apipro1.ocr.space/parse/image)
-// - env: OCR_SPACE_API_ENDPOINT_BACKUP (권장: https://apipro2.ocr.space/parse/image)
-// - env: OCR_SPACE_TIMEOUT_MS (옵션, 기본 30000)
+// netlify/functions/solve.js
+// OpenRouter를 호출해서 객관식 정답만 뽑아주는 함수.
+// - env: OPENROUTER_API_KEY (필수)
+// - env: MODEL_NAME (예: openai/gpt-5.2)
+// - env: STOP_TOKEN (예: XURTH, optional – stop 시퀀스로 사용)
+// - env: TEMPERATURE (예: 0.1, optional)
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const API_KEY = process.env.OPENROUTER_API_KEY;
+const MODEL_NAME = process.env.MODEL_NAME || "openai/gpt-5.2";
+const STOP_TOKEN = process.env.STOP_TOKEN || "XURTH";
+const TEMPERATURE = parseFloat(process.env.TEMPERATURE || "0.1");
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*"
     },
-    body: JSON.stringify(obj),
+    body: JSON.stringify(obj)
   };
 }
 
-function normalizeEndpoint(url) {
-  if (!url) return "";
-  let s = String(url).trim();
+// A~E → 1~5
+const LETTER_TO_INDEX = { A: 1, B: 2, C: 3, D: 4, E: 5 };
+const INDEX_TO_LETTER = { 1: "A", 2: "B", 3: "C", 4: "D", 5: "E" };
 
-  // 흔한 실수 자동 수정:
-  // api-pro1.ocr.space -> apipro1.ocr.space
-  // api-pro2.ocr.space -> apipro2.ocr.space
-  s = s.replace("://api-pro1.ocr.space", "://apipro1.ocr.space");
-  s = s.replace("://api-pro2.ocr.space", "://apipro2.ocr.space");
+// 모델이 죽거나 JSON 파싱이 안 되는 경우에도
+// 무조건 모든 문항에 대해 답을 찍어서 돌려주는 fallback.
+function fallbackGuess(ocrText, questionNumbers, page, reason) {
+  const answersLetters = {};
+  const unsure = [];
+  const letters = ["A", "B", "C", "D", "E"];
 
-  // 혹시 api.ocr.space(무료)로 들어오면 그대로 두되, PRO키면 403 날 수 있으니 디버그에 노출
-  return s;
+  for (let i = 0; i < questionNumbers.length; i++) {
+    const q = questionNumbers[i];
+    // 완전 랜덤보다, 질문 번호 기반으로 결정해서 항상 동일하게.
+    const letter = letters[q % letters.length];
+    answersLetters[q] = letter;
+    unsure.push(q);
+  }
+
+  const lines = questionNumbers.map((q) => `${q}: ${answersLetters[q]}`);
+  if (unsure.length > 0) {
+    lines.push(`UNSURE: ${unsure.join(", ")}`);
+  }
+
+  const answersIndex = {};
+  for (const q of questionNumbers) {
+    const letter = answersLetters[q];
+    answersIndex[q] = LETTER_TO_INDEX[letter] || 1;
+  }
+
+  return json(200, {
+    ok: true,
+    text: lines.join("\n"),
+    answers: answersIndex,
+    unsure,
+    debug: {
+      page,
+      model: MODEL_NAME,
+      reason,
+      questionNumbers,
+      ocrTextPreview: (ocrText || "").slice(0, 200)
+    }
+  });
 }
 
-async function fetchWithTimeout(url, options, timeoutMs) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+// 모델 응답에서 JSON만 뽑아서 파싱
+function safeParseJsonFromText(content) {
+  if (!content || typeof content !== "string") return null;
+  const firstBrace = content.indexOf("{");
+  const lastBrace = content.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) return null;
+  const slice = content.slice(firstBrace, lastBrace + 1);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(id);
+    return JSON.parse(slice);
+  } catch {
+    return null;
   }
 }
 
-// 대충 문항번호 패턴 카운트(너가 쓰던 hits 느낌 유지)
-function countQuestionPatterns(text) {
-  if (!text) return 0;
-  const m = String(text).match(/\b(\d{1,2})\b[.)\s]/g);
-  return m ? m.length : 0;
-}
-
-exports.handler = async (event) => {
+exports.handler = async function (event) {
   try {
-    if (event.httpMethod !== "POST") {
-      return json(405, { ok: false, error: "POST only" });
+    if (event.httpMethod && event.httpMethod !== "POST") {
+      return json(405, { ok: false, error: "Method not allowed" });
     }
 
-    const apiKey = (process.env.OCR_SPACE_API_KEY || "").trim();
-    if (!apiKey) {
-      return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
-    }
-
+    // ------ 요청 파싱 ------
     let body = {};
     try {
-      body = JSON.parse(event.body || "{}");
-    } catch {
-      return json(400, { ok: false, error: "Invalid JSON body" });
-    }
-
-    const page = body.page !== undefined ? body.page : 1;
-    const image = (body.image || body.dataUrl || "").toString();
-
-    if (!image || !image.startsWith("data:image/")) {
-      return json(400, {
-        ok: false,
-        error: "Missing image (expected data URL in JSON body: { image: 'data:image/...base64,...' })",
-      });
-    }
-
-    const timeoutMs = Math.max(5000, Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000));
-
-    const primary = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT || "https://apipro1.ocr.space/parse/image");
-    const backup = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT_BACKUP || "https://apipro2.ocr.space/parse/image");
-
-    const endpoints = [primary, backup].filter(Boolean);
-
-    const payload = new URLSearchParams();
-    payload.set("apikey", apiKey);
-    payload.set("language", "eng");
-    payload.set("isOverlayRequired", "false");
-    payload.set("scale", "true");
-    payload.set("detectOrientation", "true");
-    payload.set("OCREngine", "2"); // 필요하면 3으로 바꿔 테스트 가능
-    payload.set("base64Image", image);
-
-    const maxTries = 3;
-    let lastErr = null;
-    let lastRaw = "";
-    let endpointUsed = "";
-
-    for (let epIdx = 0; epIdx < endpoints.length; epIdx++) {
-      const endpoint = endpoints[epIdx];
-      endpointUsed = endpoint;
-
-      for (let i = 0; i < maxTries; i++) {
-        try {
-          const res = await fetchWithTimeout(
-            endpoint,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: payload.toString(),
-            },
-            timeoutMs
-          );
-
-          lastRaw = await res.text().catch(() => "");
-          let data = null;
-          try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
-
-          if (!res.ok) {
-            // 가장 흔한 원인: PRO키를 무료 endpoint에 쏨 => "The API key is invalid"
-            lastErr = `OCR.Space HTTP ${res.status}${data ? " / " + (data.ErrorMessage?.join(" | ") || data.ErrorDetails || "") : ""}`;
-            if (i < maxTries - 1) await sleep(350 * (i + 1));
-            continue;
-          }
-
-          if (!data) {
-            lastErr = "OCR.Space returned non-JSON";
-            if (i < maxTries - 1) await sleep(350 * (i + 1));
-            continue;
-          }
-
-          if (data.IsErroredOnProcessing) {
-            const msg = (data.ErrorMessage && data.ErrorMessage.join(" | ")) || data.ErrorDetails || "OCR.Space processing error";
-            lastErr = msg;
-            if (i < maxTries - 1) await sleep(350 * (i + 1));
-            continue;
-          }
-
-          const parsed = (data.ParsedResults && data.ParsedResults[0]) || null;
-          const text = (parsed && parsed.ParsedText) ? String(parsed.ParsedText) : "";
-
-          return json(200, {
-            ok: true,
-            text,
-            conf: 0,
-            hits: countQuestionPatterns(text),
-            debug: {
-              page,
-              endpointUsed,
-              ocrSpace: {
-                exitCode: data.OCRExitCode,
-                processingTimeInMilliseconds: data.ProcessingTimeInMilliseconds,
-              },
-            },
-          });
-        } catch (e) {
-          const msg = e?.message ? e.message : String(e);
-          lastErr = msg;
-          if (i < maxTries - 1) await sleep(350 * (i + 1));
-        }
+      if (typeof event.body === "string") {
+        body = JSON.parse(event.body || "{}");
+      } else if (event.body && typeof event.body === "object") {
+        body = event.body;
       }
-      // primary 다 실패하면 backup으로 넘어감
+    } catch {
+      body = {};
     }
 
-    return json(502, {
-      ok: false,
-      error: "OCR.Space upstream error",
-      detail: lastErr || "Unknown",
-      raw: (lastRaw || "").slice(0, 1500),
-      debug: { endpointUsed },
-      hint:
-        "1) PRO 키면 엔드포인트는 https://apipro1.ocr.space/parse/image (하이픈 없음) 이어야 함. " +
-        "2) Netlify env OCR_SPACE_API_KEY/OCR_SPACE_API_ENDPOINT 값을 확인 후 재배포.",
+    // OCR 텍스트: text / ocrText / ocr / content 중 뭐가 오든 다 받아줌
+    const ocrTextRaw =
+      body.text ??
+      body.ocrText ??
+      body.ocr ??
+      body.content ??
+      "";
+
+    const ocrText = String(ocrTextRaw || "");
+
+    // 페이지 번호 (디버그용)
+    const page = Number(body.page || 1);
+
+    // questionNumbers 배열 (예: [1,2,3,4,5])
+    let questionNumbers = [];
+    if (Array.isArray(body.questionNumbers)) {
+      questionNumbers = body.questionNumbers;
+    } else if (Array.isArray(body.questions)) {
+      questionNumbers = body.questions;
+    }
+
+    // number로 정리
+    questionNumbers = questionNumbers
+      .map((n) => parseInt(n, 10))
+      .filter((n) => Number.isFinite(n));
+
+    // 혹시라도 비어 있으면 안전하게 1~5 기본값 (절대 비우지 않기)
+    if (questionNumbers.length === 0) {
+      questionNumbers = [1, 2, 3, 4, 5];
+    }
+
+    // 🔴 여기서 예전 코드처럼 "Empty OCR text" 로 에러 주던 체크는 **삭제**.
+    // OCR가 비어 있어도, 모델에게 그대로 보내서 어떻게든 찍게 만들거나,
+    // 최악의 경우 fallbackGuess로 찍어서라도 답을 돌려준다.
+
+    // ------ OpenRouter 호출 준비 ------
+    if (!API_KEY) {
+      // 키 없으면 바로 fallback
+      return fallbackGuess(
+        ocrText,
+        questionNumbers,
+        page,
+        "Missing OPENROUTER_API_KEY"
+      );
+    }
+
+    const systemPrompt =
+      "You are an answer-key generator for an English multiple-choice exam.\n" +
+      "For each question number, choose exactly ONE option from A, B, C, D, E.\n" +
+      "You MUST answer ALL questions in the list.\n" +
+      "If the OCR text is incomplete or unclear, make your best educated guess.\n" +
+      "Mark such low-confidence questions in an 'unsure' list.\n" +
+      'Respond ONLY with valid JSON like:\n' +
+      '{\n' +
+      '  "answers": {"1": "B", "2": "E"},\n' +
+      '  "unsure": [2]\n' +
+      "}";
+
+    const userPrompt =
+      "OCR_TEXT:\n" +
+      ocrText +
+      "\n\n" +
+      "QUESTION_NUMBERS: " +
+      questionNumbers.join(", ") +
+      "\n\n" +
+      'Return JSON now with keys "answers" and "unsure". ' +
+      'Do NOT include any extra commentary or formatting.';
+
+    const bodyForApi = {
+      model: MODEL_NAME,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: isNaN(TEMPERATURE) ? 0.1 : TEMPERATURE,
+      max_tokens: 512
+    };
+
+    if (STOP_TOKEN) {
+      bodyForApi.stop = [STOP_TOKEN];
+    }
+
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+        // 이 두 헤더는 OpenRouter 권장(없어도 동작은 하지만 넣어두는 게 좋음)
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site-solve"
+      },
+      body: JSON.stringify(bodyForApi)
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return fallbackGuess(
+        ocrText,
+        questionNumbers,
+        page,
+        `OpenRouter HTTP ${resp.status}: ${text.slice(0, 200)}`
+      );
+    }
+
+    const data = await resp.json().catch(() => null);
+    const choice = data && data.choices && data.choices[0];
+    const content =
+      choice && choice.message && typeof choice.message.content === "string"
+        ? choice.message.content
+        : "";
+
+    let parsed = safeParseJsonFromText(content);
+    if (!parsed || typeof parsed !== "object") {
+      return fallbackGuess(
+        ocrText,
+        questionNumbers,
+        page,
+        "Model JSON parse failed"
+      );
+    }
+
+    const answersObj = parsed.answers || {};
+    const unsureListRaw = Array.isArray(parsed.unsure) ? parsed.unsure : [];
+
+    const answersLetters = {};
+    const answersIndex = {};
+    const unsureSet = new Set();
+
+    // unsure 배열을 숫자 집합으로 정리
+    for (const u of unsureListRaw) {
+      const num = parseInt(u, 10);
+      if (Number.isFinite(num)) unsureSet.add(num);
+    }
+
+    // 각 문항별로 최종 답 결정
+    for (const q of questionNumbers) {
+      let letter =
+        answersObj[String(q)] ||
+        answersObj[Number(q)] ||
+        answersObj[q] ||
+        "";
+
+      if (typeof letter === "number") {
+        letter = INDEX_TO_LETTER[letter] || "";
+      } else if (typeof letter === "string") {
+        letter = letter.trim().toUpperCase();
+      }
+
+      if (!["A", "B", "C", "D", "E"].includes(letter)) {
+        // 모델이 이상하게 답하면 기본값으로 A를 넣고 unsure에 포함
+        letter = "A";
+        unsureSet.add(q);
+      }
+
+      answersLetters[q] = letter;
+      answersIndex[q] = LETTER_TO_INDEX[letter] || 1;
+    }
+
+    const lines = questionNumbers.map((q) => `${q}: ${answersLetters[q]}`);
+    const unsureArr = Array.from(unsureSet).sort((a, b) => a - b);
+    if (unsureArr.length > 0) {
+      lines.push(`UNSURE: ${unsureArr.join(", ")}`);
+    }
+
+    return json(200, {
+      ok: true,
+      text: lines.join("\n"),
+      answers: answersIndex,
+      unsure: unsureArr,
+      debug: {
+        page,
+        model: MODEL_NAME,
+        questionNumbers,
+        finishReason: choice && choice.finish_reason,
+        ocrTextPreview: ocrText.slice(0, 200),
+        rawModelContent: content.slice(0, 200)
+      }
     });
   } catch (err) {
-    return json(500, {
-      ok: false,
-      error: "Internal server error in ocr function",
-      detail: String(err?.message || err),
-    });
+    return fallbackGuess(
+      "",
+      [1, 2, 3, 4, 5],
+      1,
+      "Top-level error: " + String(err && err.message ? err.message : err)
+    );
   }
 };
 
