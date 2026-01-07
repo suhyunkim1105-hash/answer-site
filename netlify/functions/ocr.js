@@ -30,6 +30,7 @@ function normalizeEndpoint(url) {
   s = s.replace("://api-pro1.ocr.space", "://apipro1.ocr.space");
   s = s.replace("://api-pro2.ocr.space", "://apipro2.ocr.space");
 
+  // 혹시 api.ocr.space(무료)로 들어오면 그대로 두되, PRO키면 403 날 수 있으니 디버그에 노출
   return s;
 }
 
@@ -44,6 +45,13 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
+// 대충 문항번호 패턴 카운트(너가 쓰던 hits 느낌 유지)
+function countQuestionPatterns(text) {
+  if (!text) return 0;
+  const m = String(text).match(/\b(\d{1,2})\b[.)\s]/g);
+  return m ? m.length : 0;
+}
+
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -52,10 +60,7 @@ exports.handler = async (event) => {
 
     const apiKey = (process.env.OCR_SPACE_API_KEY || "").trim();
     if (!apiKey) {
-      return json(500, {
-        ok: false,
-        error: "OCR_SPACE_API_KEY is not set on the server",
-      });
+      return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set on the server" });
     }
 
     let body = {};
@@ -71,24 +76,14 @@ exports.handler = async (event) => {
     if (!image || !image.startsWith("data:image/")) {
       return json(400, {
         ok: false,
-        error:
-          "Missing image (expected data URL in JSON body: { image: 'data:image/...base64,...' })",
+        error: "Missing image (expected data URL in JSON body: { image: 'data:image/...base64,...' })",
       });
     }
 
-    const timeoutMs = Math.max(
-      5000,
-      Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000)
-    );
+    const timeoutMs = Math.max(5000, Number(process.env.OCR_SPACE_TIMEOUT_MS || 30000));
 
-    const primary = normalizeEndpoint(
-      process.env.OCR_SPACE_API_ENDPOINT ||
-        "https://apipro1.ocr.space/parse/image"
-    );
-    const backup = normalizeEndpoint(
-      process.env.OCR_SPACE_API_ENDPOINT_BACKUP ||
-        "https://apipro2.ocr.space/parse/image"
-    );
+    const primary = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT || "https://apipro1.ocr.space/parse/image");
+    const backup = normalizeEndpoint(process.env.OCR_SPACE_API_ENDPOINT_BACKUP || "https://apipro2.ocr.space/parse/image");
 
     const endpoints = [primary, backup].filter(Boolean);
 
@@ -104,9 +99,11 @@ exports.handler = async (event) => {
     const maxTries = 3;
     let lastErr = null;
     let lastRaw = "";
+    let endpointUsed = "";
 
     for (let epIdx = 0; epIdx < endpoints.length; epIdx++) {
       const endpoint = endpoints[epIdx];
+      endpointUsed = endpoint;
 
       for (let i = 0; i < maxTries; i++) {
         try {
@@ -122,21 +119,11 @@ exports.handler = async (event) => {
 
           lastRaw = await res.text().catch(() => "");
           let data = null;
-          try {
-            data = JSON.parse(lastRaw);
-          } catch {
-            /* ignore */
-          }
+          try { data = JSON.parse(lastRaw); } catch { /* ignore */ }
 
           if (!res.ok) {
-            lastErr = `OCR.Space HTTP ${res.status}${
-              data
-                ? " / " +
-                  (data.ErrorMessage?.join(" | ") ||
-                    data.ErrorDetails ||
-                    "")
-                : ""
-            }`;
+            // 가장 흔한 원인: PRO키를 무료 endpoint에 쏨 => "The API key is invalid"
+            lastErr = `OCR.Space HTTP ${res.status}${data ? " / " + (data.ErrorMessage?.join(" | ") || data.ErrorDetails || "") : ""}`;
             if (i < maxTries - 1) await sleep(350 * (i + 1));
             continue;
           }
@@ -148,22 +135,28 @@ exports.handler = async (event) => {
           }
 
           if (data.IsErroredOnProcessing) {
-            const msg =
-              (data.ErrorMessage && data.ErrorMessage.join(" | ")) ||
-              data.ErrorDetails ||
-              "OCR.Space processing error";
+            const msg = (data.ErrorMessage && data.ErrorMessage.join(" | ")) || data.ErrorDetails || "OCR.Space processing error";
             lastErr = msg;
             if (i < maxTries - 1) await sleep(350 * (i + 1));
             continue;
           }
 
           const parsed = (data.ParsedResults && data.ParsedResults[0]) || null;
-          const text = parsed && parsed.ParsedText ? String(parsed.ParsedText) : "";
+          const text = (parsed && parsed.ParsedText) ? String(parsed.ParsedText) : "";
 
           return json(200, {
             ok: true,
             text,
             conf: 0,
+            hits: countQuestionPatterns(text),
+            debug: {
+              page,
+              endpointUsed,
+              ocrSpace: {
+                exitCode: data.OCRExitCode,
+                processingTimeInMilliseconds: data.ProcessingTimeInMilliseconds,
+              },
+            },
           });
         } catch (e) {
           const msg = e?.message ? e.message : String(e);
@@ -179,6 +172,7 @@ exports.handler = async (event) => {
       error: "OCR.Space upstream error",
       detail: lastErr || "Unknown",
       raw: (lastRaw || "").slice(0, 1500),
+      debug: { endpointUsed },
       hint:
         "1) PRO 키면 엔드포인트는 https://apipro1.ocr.space/parse/image (하이픈 없음) 이어야 함. " +
         "2) Netlify env OCR_SPACE_API_KEY/OCR_SPACE_API_ENDPOINT 값을 확인 후 재배포.",
@@ -191,4 +185,3 @@ exports.handler = async (event) => {
     });
   }
 };
-
