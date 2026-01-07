@@ -1,4 +1,4 @@
-// netlify/functions/solve.js
+// netlify/functions/solve.js 
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
