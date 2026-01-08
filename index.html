@@ -90,9 +90,7 @@
       <div class="hint">
         ① 먼저 “카메라 시작”을 누른 뒤<br/>
         ② 시험지를 화면에 꽉 채우고, 글자/문항번호/보기(A~E)가 선명하게 보이게 맞춘 다음<br/>
-        ③ “현재 페이지 촬영”을 누르면<br/>
-        &nbsp;&nbsp;&nbsp;- <b>“페이지 인식, 1 2 3”</b> (예고 TTS)<br/>
-        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 한 번 실행됨.
+        ③ “현재 페이지 촬영”을 누르면 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 한 번 실행됨.
       </div>
     </div>
 
@@ -274,15 +272,6 @@
       log("STATUS: 음성 테스트를 재생했어. 이후 문제풀이 정답도 소리로 읽어줄게.");
     }
 
-    async function speakPageCountdown() {
-      if (!ttsEnabled) return;
-      await speakNow("페이지 인식, 일");
-      await sleep(400);
-      await speakNow("이");
-      await sleep(400);
-      await speakNow("삼");
-    }
-
     function parseSolveTextForTts(text) {
       const items = [];
       let unsureList = [];
@@ -347,10 +336,6 @@
         await startCamera();
 
         const page = Number($("page").value || 1);
-
-        // 페이지 인식 1 2 3 (예고 후 촬영)
-        log("STATUS: 페이지 인식 1 2 3 (예고).");
-        await speakPageCountdown();
 
         log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
         const cap = captureDataURL();
