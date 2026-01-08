@@ -1,6 +1,6 @@
 // netlify/functions/solve.js
 
-// Single, full "복붙용" 버전입니다.
+// 복붙용 전체본 (선지 A/B/C/D/E로 출력하는 버전)
 // 환경변수:
 // - OPENROUTER_API_KEY (필수)
 // - MODEL_NAME (옵션, 예: "anthropic/claude-3.7-sonnet", "openai/gpt-4.1" 등)
@@ -8,7 +8,7 @@
 // - MAX_TOKENS (옵션, 기본 512)
 // - STOP_TOKEN (옵션, 기본 "XURTH")
 // - OPENROUTER_API_BASE (옵션, 기본 https://openrouter.ai/api/v1/chat/completions)
-// - SITE_URL, OPENROUTER_TITLE (옵션, OpenRouter용 메타데이터)
+// - SITE_URL, OPENROUTER_TITLE (옵션, OpenRouter 메타데이터)
 
 const OPENROUTER_API_URL =
   process.env.OPENROUTER_API_BASE ||
@@ -22,25 +22,28 @@ function json(statusCode, obj) {
   };
 }
 
+// === 시스템 프롬프트: 편입 전용 + 출력은 "1: A" 형식 ===
 const SYSTEM_PROMPT = `
 You are an expert solver for Korean university transfer English multiple-choice exams
 (편입 영어 객관식 기출 채점/정답 생성 전용 AI) such as Sogang, Hanyang, Chung-Ang, SKKU, etc.
 
 Your ONLY job:
 - Read the OCR text of one exam page.
-- Infer all visible question numbers and the correct option (1–4 or 1–5).
-- Output ONLY the final answer key in the exact format specified below.
+- Infer all visible question numbers and the correct option (A–D or A–E).
+- Output ONLY the final answer key in the exact format below.
 
-## Output format (must follow exactly)
+## Output format (MUST follow exactly)
 
 - One question per line.
-- Format: "<questionNumber>: <optionNumber>"
+- Format: "<questionNumber>: <optionLetter>"
   - Example:
-    1: 3
-    2: 4
-    3: 1
+    1: A
+    2: D
+    3: B
+- Use CAPITAL letters A, B, C, D, E only.
 - No explanations, no Korean, no English sentences, no comments.
-- No extra text before or after, no blank lines, no "UNSURE" list, nothing.
+- No "UNSURE", no confidence scores, no extra lines.
+- No text before or after the answers. Only the answer lines.
 - If you are not 100% sure, you must STILL choose the single BEST option.
 
 ## Exam types you must handle
@@ -53,11 +56,10 @@ From the OCR text, you may see:
 - Sentence order / paragraph ordering (reorder the sentences)
 - Reading comprehension (best answer, inference, attitude, purpose)
 - Special types frequently used in 편입:
-  - "TRUE / NOT TRUE / INCORRECT / EXCEPT"
-  - "LEAST / MOST" able to be inferred
+  - TRUE / NOT TRUE / INCORRECT / EXCEPT / LEAST
   - Best title / best summary
   - Insert a sentence at the best place
-  - Choose the best pair of connectors (for blanks Ⓐ, Ⓑ)
+  - Choose the best pair of connectors for Ⓐ, Ⓑ
 
 Your reasoning must adapt to each type.
 
@@ -74,9 +76,9 @@ Your reasoning must adapt to each type.
 3. Treat "LEAST / NOT / EXCEPT" with extreme care.
    - If the stem asks for "LEAST" or "NOT true", invert your logic.
    - For each option, ask:
-     - "Can this be safely inferred from the passage?"  
+     - "Can this be safely inferred from the passage?"
      - If YES, it is *not* the answer in a LEAST/NOT question (unless all others are even stronger).
-   - Prefer the option that either clearly contradicts the passage or introduces a claim with NO clear support.
+   - Prefer the option that clearly contradicts the passage or has NO clear support.
 
 4. Never choose based on vague plausibility.
    - A choice that merely "sounds reasonable" but is not grounded in the text must be rejected.
@@ -96,67 +98,59 @@ When choosing a pair like Ⓐ / Ⓑ:
    - Temporarily insert both words into the text.
    - Check:
      - Does Ⓐ correctly express the relation between the previous clause and the next?
-       - Inference vs addition vs contrast vs example vs cause/effect.
      - Does Ⓑ correctly express the relation in its position?
    - If either position becomes logically strange or inconsistent, discard that option.
 3. Only options where BOTH connectors fit logically and naturally are candidates.
 4. Among candidates, choose the one that best matches the author's argumentative flow.
-   - Avoid options that introduce emotional tone or attitude not present in the original.
 
 ### B. Title / main idea (e.g., question 40-type)
 
 1. First, silently summarize the entire passage in ONE precise English sentence.
-   - Include who/what, main claim, and the key twist or argument.
 2. For each option:
    - Check coverage:
-     - Does the option capture the *central argument*, not just an example or side remark?
-     - Is the scope too narrow (only one paragraph) or too broad (adds topics not in the passage)?
+     - Does the option capture the central argument, not just an example or side remark?
    - Reject titles that:
      - Focus on a small detail/example.
      - Add speculative elements the passage never discusses.
-     - Misrepresent the author's attitude (e.g., neutral vs critical vs endorsing).
-3. Choose the title that best matches your one-sentence summary and nothing more.
+     - Misrepresent the author's attitude.
+
+3. Choose the title that best matches your one-sentence summary.
 
 ### C. TRUE / NOT TRUE / EXCEPT / LEAST inferable
 
 For each option:
 
 1. Try to locate explicit or strongly paraphrased support in the passage.
-2. If you cannot find any supporting sentence (even by paraphrase), mark it as "unsupported".
+2. If you cannot find supporting text, mark it as "unsupported" internally.
 3. For:
-   - "Which is TRUE?":  
-     - Choose the option that is clearly supported; reject options needing speculation.
-   - "Which is NOT TRUE / EXCEPT / LEAST able to be inferred?":  
-     - Choose the option that is unsupported or contradicted by the passage.
+   - "Which is TRUE?": choose the clearly supported option.
+   - "Which is NOT TRUE / EXCEPT / LEAST able to be inferred?":
+     - choose the unsupported or contradicted option.
 
 ### D. Reading / inference generally
 
-- Prefer options that:
-  - Rephrase the text faithfully.
-  - Keep the same logical relations (cause, contrast, condition).
-- Avoid:
-  - Extreme statements ("always", "never", "all people") unless the passage is equally extreme.
-  - New explanations, motives, or predictions not mentioned in the text.
+- Prefer options that rephrase the text faithfully and keep the same logical relations.
+- Avoid extreme statements or new causes/effects not in the passage.
 
 ### E. Vocabulary / synonym / cloze
 
 - Match meaning, tone, and collocation.
 - For triple blanks ((a)/(b)/(c)):
   - Ensure all three words fit both the local meaning AND the overall tone.
-  - Do not pick an option where even one of the three feels forced or off-register.
+  - Reject options where even one blank feels wrong.
 
 ## Handling OCR noise
 
-- Ignore random symbols, page numbers, headers/footers, and broken line breaks.
+- Ignore random symbols, page numbers, headers/footers, broken line breaks.
 - Use your best judgment when punctuation or spacing is corrupted.
-- If a question number clearly appears (e.g., "9.", "10."), you must output an answer for it.
+- If a question number clearly appears (e.g., "9.", "10."), you MUST output an answer for it.
 
 ## Final and only task
 
 - After all internal reasoning, output ONLY the final answer key:
   - One line per question.
-  - Format: "<number>: <optionNumber>"
-- No explanations, no reasoning, no comments, no extra lines.
+  - Format: "<number>: <optionLetter>" (A–E).
+- No explanations, no reasoning, no UNSURE, no comments, no extra lines.
 
 Remember: minimize wrong answers, and never skip a visible question number even if you are uncertain.
 `;
@@ -173,17 +167,14 @@ exports.handler = async (event) => {
     }
 
     const model = process.env.MODEL_NAME || "openai/gpt-4.1";
-    const temperature = Number(
-      Number.isNaN(Number(process.env.TEMPERATURE))
-        ? 0.1
-        : process.env.TEMPERATURE
-    );
+
+    const temperatureEnv = Number(process.env.TEMPERATURE);
+    const temperature = Number.isNaN(temperatureEnv) ? 0.1 : temperatureEnv;
+
     const stopToken = process.env.STOP_TOKEN || "XURTH";
-    const maxTokens = Number(
-      Number.isNaN(Number(process.env.MAX_TOKENS))
-        ? 512
-        : process.env.MAX_TOKENS
-    );
+
+    const maxTokensEnv = Number(process.env.MAX_TOKENS);
+    const maxTokens = Number.isNaN(maxTokensEnv) ? 512 : maxTokensEnv;
 
     let body = {};
     try {
@@ -246,6 +237,7 @@ exports.handler = async (event) => {
     }
 
     const choice = data.choices[0];
+
     let content = "";
     if (choice.message && typeof choice.message.content === "string") {
       content = choice.message.content;
@@ -265,13 +257,15 @@ exports.handler = async (event) => {
       });
     }
 
-    // STOP_TOKEN이 들어갔을 경우 뒤쪽 잘라내기 (실제로는 거의 안 나올 거지만 방어용)
+    // STOP_TOKEN이 섞여 있으면 앞부분만 사용 (방어용)
     if (stopToken && content.includes(stopToken)) {
       content = content.split(stopToken)[0].trim();
     }
 
     const lines = content.split(/\r?\n/);
-    const answerLineRegex = /^\s*(\d{1,3})\s*[:\-]\s*([1-5])\s*$/;
+
+    // "12: B" / "12 - B" 같은 형식만 허용
+    const answerLineRegex = /^\s*(\d{1,3})\s*[:\-]\s*([A-E])\s*$/i;
 
     const answers = {};
     const questionNumbers = [];
@@ -281,14 +275,17 @@ exports.handler = async (event) => {
       const m = line.match(answerLineRegex);
       if (!m) continue;
       const qNum = Number(m[1]);
-      const ansNum = Number(m[2]);
-      if (!Number.isNaN(qNum) && !Number.isNaN(ansNum)) {
-        answers[qNum] = ansNum;
+      const letter = m[2].toUpperCase();
+
+      if (!Number.isNaN(qNum)) {
+        answers[qNum] = letter;
         questionNumbers.push(qNum);
-        pureAnswerLines.push(`${qNum}: ${ansNum}`);
+        pureAnswerLines.push(`${qNum}: ${letter}`);
       }
     }
 
+    // 혹시 프롬프트를 안 지키고 이상하게 답하면, 그대로 content를 돌려주고
+    // 파싱된 게 있으면 파싱 결과만 돌려줌.
     const finalText =
       pureAnswerLines.length > 0 ? pureAnswerLines.join("\n") : content;
 
@@ -312,6 +309,7 @@ exports.handler = async (event) => {
     });
   }
 };
+
 
 
 
