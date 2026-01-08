@@ -1,292 +1,250 @@
 // netlify/functions/solve.js
-// 편입 영어 객관식 기출 전용 정답 생성 함수.
-// - env: OPENROUTER_API_KEY (필수)
-// - env: MODEL_NAME (옵션, 기본 openai/gpt-4.1)
-// - env: TEMPERATURE (옵션, 기본 0.1)
-// - env: SOLVE_MAX_TOKENS (옵션, 기본 512)
-// - env: STOP_TOKEN (옵션, 있으면 stop 시그널로만 사용. 출력에는 절대 쓰지 말 것.)
+// 편입영어 객관식 기출 자동 채점용 solve 함수
+// - 입력: { page, ocrText } (또는 { text })
+// - 출력: { ok, text: "1: A\n2: D...", debug: { ... } }
+
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    },
-    body: JSON.stringify(obj)
-  };
-}
-
-async function callOpenRouter(messages) {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set");
-  }
-
-  const model = process.env.MODEL_NAME || "openai/gpt-4.1";
-  const temperature = Number(
-    Number.isFinite(Number(process.env.TEMPERATURE))
-      ? process.env.TEMPERATURE
-      : 0.1
-  );
-  const maxTokensEnv = Number(process.env.SOLVE_MAX_TOKENS);
-  const maxTokens = Number.isFinite(maxTokensEnv) && maxTokensEnv > 0
-    ? maxTokensEnv
-    : 512;
-
-  const stopToken = process.env.STOP_TOKEN || "";
-
-  const body = {
-    model,
-    messages,
-    temperature,
-    max_tokens: maxTokens
-  };
-
-  if (stopToken) {
-    // 출력에서 stopToken을 넣지 말고, 여기서만 컷하는 용도로 사용.
-    body.stop = [stopToken];
-  }
-
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "X-Title": "answer-site"
     },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    throw new Error(`OpenRouter HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data;
+    body: JSON.stringify(obj),
+  };
 }
 
-function parseAnswers(rawText) {
-  const lines = (rawText || "")
+// 모델 출력에서 "번호: 선택지"만 뽑아서 정리
+function parseAnswers(raw) {
+  if (!raw) return { questionNumbers: [], answers: {} };
+
+  const lines = raw
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .filter(Boolean);
+    .filter((l) => l.length > 0);
 
   const answers = {};
   const questionNumbers = [];
 
-  const lineRe = /^(\d{1,3})\s*[:\-\.]?\s*([A-E])/i;
+  const choiceMapDigitToLetter = {
+    "1": "A",
+    "2": "B",
+    "3": "C",
+    "4": "D",
+    "5": "E",
+  };
 
   for (const line of lines) {
-    const m = line.match(lineRe);
+    // 기대 포맷: "12: A" 또는 "12:A" 또는 "12 - A"
+    const m = line.match(/^(\d+)\s*[:\-]\s*([A-E1-5])/i);
     if (!m) continue;
-    const qn = Number(m[1]);
-    const letter = m[2].toUpperCase();
-    if (!Number.isNaN(qn)) {
-      answers[qn] = letter;
-      questionNumbers.push(qn);
+
+    const qNum = parseInt(m[1], 10);
+    let choice = m[2].toUpperCase();
+
+    if (choiceMapDigitToLetter[choice]) {
+      choice = choiceMapDigitToLetter[choice];
     }
+
+    if (!["A", "B", "C", "D", "E"].includes(choice)) continue;
+
+    answers[String(qNum)] = choice;
+    questionNumbers.push(qNum);
   }
 
-  return { answers, questionNumbers };
+  // 중복 제거 + 정렬
+  const uniqNums = Array.from(new Set(questionNumbers)).sort((a, b) => a - b);
+  return { questionNumbers: uniqNums, answers };
 }
 
 exports.handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return json(200, { ok: true });
-  }
-  if (event.httpMethod !== "POST") {
-    return json(405, { ok: false, error: "POST only" });
-  }
-
-  let body = {};
   try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return json(400, { ok: false, error: "Invalid JSON body" });
-  }
+    if (event.httpMethod !== "POST") {
+      return json(405, { ok: false, error: "POST only" });
+    }
 
-  const ocrText = String(body.ocrText || body.text || "").trim();
-  const page = body.page ?? null;
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      return json(500, { ok: false, error: "OPENROUTER_API_KEY is not set" });
+    }
 
-  if (!ocrText) {
-    return json(400, { ok: false, error: "ocrText is required" });
-  }
+    const model = process.env.MODEL_NAME || "openai/gpt-4.1";
+    const temperature = Number(process.env.TEMPERATURE ?? 0.0);
+    const maxTokens = Number(process.env.MAX_TOKENS ?? 512);
 
-  const systemPrompt = `
-You are a professional multiple-choice exam solver for Korean university transfer exams
-(편입 영어 객관식). Your ONLY job is to read the OCR text of an exam page and output
-a clean answer key.
+    let body = {};
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { ok: false, error: "Invalid JSON body" });
+    }
 
-The input:
-- A single long string with the full OCR text of ONE exam page.
-- It includes question numbers, questions, and options.
-- Question numbers appear as patterns like:
-  "1.", "1)", "1 :", "1 -", or at the start of a line.
-- Options can be:
-  - A, B, C, D, E
-  - (A), (B), (C) ...
-  - ① ② ③ ④ ⑤  or 1) 2) 3) 4) 5)
-- The exam may include English instructions, school names (e.g. SOGANG UNIVERSITY),
-  page headers, etc. You must IGNORE all non-question noise.
+    const page = body.page ?? 1;
+    const ocrText = String(body.ocrText || body.text || "").trim();
 
-Your goals (strict priority order):
-1) Minimize wrong answers.
-2) Absolutely ZERO question-number omissions: if a question number is visible in the OCR,
-   you must output AN answer for it (best guess allowed, but no blanks).
-3) Output FORMAT must be extremely strict:
-   - Each line: "<question-number>: <letter>"
-   - Example:
+    if (!ocrText) {
+      return json(400, { ok: false, error: "Missing ocrText/text" });
+    }
+
+    // ----------------- 프롬프트 (방어용, 시험 전용) -----------------
+    const systemPrompt = `
+You are an answer-key generator for Korean university transfer English multiple-choice exams.
+You receive raw OCR text of one test page, including:
+- Question numbers (e.g., 1., 2., 16., 24., 33., etc.)
+- Question stems and options (A–E or ①–⑤)
+- Section headings like [QUESTIONS 1-4], instructions, etc.
+
+Your ONLY job:
+- For EVERY visible question number in the OCR text,
+  output EXACTLY one final answer choice.
+
+STRONG RULES:
+
+1) Output format
+   - One line per question
+   - Format: "<number>: <choice>"
+     - Example:
        1: A
        2: D
        3: C
-   - No extra text, no explanations, no headers, no comments, no "UNSURE", no punctuation
-     other than the colon after the number.
-   - DO NOT output anything else.
+   - <number> is the integer question number (1, 2, 3, ..., 40, etc.).
+   - <choice> is a SINGLE letter among A, B, C, D, E.
+   - DO NOT output anything else:
+     - No explanations
+     - No comments
+     - No "UNSURE"
+     - No extra text above or below
 
-How to think (internal steps, DO NOT print these steps):
+2) Coverage (NO missing questions)
+   - Carefully scan the whole OCR text and detect ALL question numbers that truly belong to the page.
+   - If a question number appears with a stem and visible choices, you MUST output an answer line for it.
+   - Even if the last options are partially cut off, you MUST still choose the BEST guess and output an answer.
+   - Never skip a visible, valid question number.
 
-0) Question number detection
-   - Scan the OCR text line-by-line and detect question numbers by patterns like:
-       line starts with "number." or "number)" or "number :" etc.
-   - Treat each detected number as the start of a "question block" that continues
-     until the next detected question number.
-   - Only use question numbers that ACTUALLY appear in the OCR text. Do NOT hallucinate
-     numbers that are not present.
+3) Handling NOT / EXCEPT / LEAST / FALSE
+   - If the question stem includes words like:
+     - NOT, EXCEPT, LEAST, FALSE, INCORRECT, WRONG
+   - Then you must:
+     - First, decide what the passage or stem is actually claiming.
+     - Eliminate options that are clearly supported or correct.
+     - Choose the option that is MOST inconsistent, least supported, or clearly false.
+   - In these problems, do NOT just pick the option that sounds most related.
+   - Specifically for "LEAST" / "NOT" / "EXCEPT" questions, the correct answer is the option that does NOT match the main idea or evidence.
 
-1) Block-level solving
-   - For each question block:
-     - Read the stem and all options.
-     - Identify which options are the choices.
-     - Convert options into letters A–E:
-       * If options are written as (A)(B)..., keep letters.
-       * If options are numbered 1–5 (e.g., ① ② ③ ④ ⑤), map them to letters:
-         1 → A, 2 → B, 3 → C, 4 → D, 5 → E.
-     - Solve the question using normal exam reasoning.
+4) Inference and passage questions (like Q24–Q40 in Sogang-type exams)
+   - For questions asking about the author’s attitude, purpose, or the type of text:
+     - “editorial” → argumentative about current issues, strong opinion.
+     - “graduate term paper” → formal, analytical, with classification and examples.
+     - “avant-garde artist statement” → experimental, subjective, breaking norms.
+     - “ethnologist / cultural theory” → describing and analyzing patterns across cultures or societies.
+   - Always choose the option that best matches what the passage is DOING overall, not just one sentence.
 
-2) Special handling of tricky question types
-   - Error correction / underlined parts:
-     * Often options like A. B. C. D. correspond to underlined segments.
-     * Choose the segment that is ungrammatical, unacceptable, or incorrect,
-       according to the stem.
-   - Reordering / sequence questions:
-     * Options such as "A-B-C-D", "C-D-A-B" etc. require ordering sentences.
-   - Vocabulary / closest meaning:
-     * Focus on the main target word and match the best synonym.
+5) Last questions of a passage
+   - For the final questions of each passage (e.g., 33–40):
+     - Re-check the passage’s overall theme, structure, and tone.
+     - Prefer options that fit the global logic of the whole passage.
+     - Avoid options that are too extreme (always/never) unless the passage itself is extreme.
 
-3) Critical rules for LEAST / EXCEPT / NOT / FALSE
-   - If the stem includes words like **NOT, EXCEPT, LEAST, FALSE**:
-     * First identify what the passage or stem is clearly SUPPORTING.
-     * Eliminate options that are consistent with the passage.
-     * Choose the option that is MOST inconsistent or LEAST supported,
-       even if all options look partially related.
-   - Be extra careful: do NOT choose the "most plausible" sentence overall.
-     Choose the one that is LEAST supported when the question asks for LEAST/EXCEPT/NOT.
+6) Ambiguous / partial OCR
+   - If some words are broken or noisy due to OCR, infer the most likely original phrase from context.
+   - Still pick the single best answer for each question number.
 
-4) Text-type / author-type questions (e.g. "The author's presentation is MOST like that of:")
-   - Use the overall behavior of the passage:
-     * "editorial": argumentative, about current affairs, strong opinion.
-     * "term paper": formal, structured, analytic, with classification/examples.
-     * "avant-garde artist": experimental, subjective, trying to shock or innovate.
-     * "ethnologist / cultural theorist": analyzing cultural patterns, societies,
-       "old vs new", "national literature", etc.
-   - Decide which description best matches WHAT THE PASSAGE IS DOING overall.
+7) Choices mapping
+   - If options appear as ①②③④⑤ (or 1,2,3,4,5), convert them internally:
+     1 → A, 2 → B, 3 → C, 4 → D, 5 → E
+   - Your final output must ALWAYS use letters A–E.
 
-5) Last few questions in a passage (global questions: tone, main idea, structure)
-   - Always reconsider the entire passage:
-     * Re-read the first sentence and the last sentence.
-     * Summarize the main theme and tone.
-     * Reject options that are too extreme (always, never, completely) unless
-       the passage itself is that extreme.
-   - Choose the option that fits the global logic and tone, not just one sentence.
-
-6) Output formatting (VERY IMPORTANT)
-   - For every detected question number, output exactly ONE line:
-       "<question-number>: <letter>"
-   - The letter must be in A–E only.
-   - If the question has only 4 options (A–D), you can only choose A, B, C, or D.
-   - If you are unsure, still choose the BEST GUESS and do NOT mark it as unsure.
-   - DO NOT output any explanations, analysis, or extra lines.
-   - DO NOT output "UNSURE" or "?".
-   - DO NOT output the stop token, if any.
-
-If you follow all of the above, you will minimize wrong answers and avoid missing
-any question numbers, which is critical for high exam scores.
+Remember:
+- Your final output must be ONLY the answer map lines,
+  one per question, in ascending order of question number.
 `;
 
-  const userPrompt = ocrText;
+    const userPrompt = `
+Here is the raw OCR text of one exam page.
 
-  const messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt }
-  ];
+OCR TEXT (page ${page}):
+--------------------------------------------------
+${ocrText}
+--------------------------------------------------
 
-  try {
-    // 1차 호출
-    let data = await callOpenRouter(messages);
+Now:
+- Detect every question number that belongs to this page.
+- For each detected question number, choose the single best answer.
+- Output ONLY lines in the format "<number>: <choice>" (e.g., "16: B").
+- Sort lines by question number in ascending order.
+`;
 
-    let choice =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message;
+    // ----------------- OpenRouter 호출 -----------------
+    const resp = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer":
+          process.env.OPENROUTER_REFERRER ||
+          "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site-solve",
+      },
+      body: JSON.stringify({
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        messages: [
+          { role: "system", content: systemPrompt.trim() },
+          { role: "user", content: userPrompt.trim() },
+        ],
+      }),
+    });
 
-    let rawText = (choice && choice.content && choice.content.trim()) || "";
-
-    // 혹시라도 비어 있으면 1번만 재시도 (다른 모델/설정은 유지)
-    if (!rawText) {
-      data = await callOpenRouter(messages);
-      choice =
-        data &&
-        data.choices &&
-        data.choices[0] &&
-        data.choices[0].message;
-      rawText = (choice && choice.content && choice.content.trim()) || "";
-    }
-
-    if (!rawText) {
-      return json(500, {
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return json(502, {
         ok: false,
-        error: "Empty answer from model"
+        error: `OpenRouter request failed: ${resp.status}`,
+        detail: text.slice(0, 500),
       });
     }
 
-    const { answers, questionNumbers } = parseAnswers(rawText);
+    const data = await resp.json().catch(() => null);
+    const choice = data && data.choices && data.choices[0];
+    const content =
+      choice && choice.message && typeof choice.message.content === "string"
+        ? choice.message.content.trim()
+        : "";
 
-    // 한 개도 못 파싱했으면 에러로 취급 (프롬프트/모델 튜닝 필요)
-    if (!questionNumbers.length) {
+    if (!content) {
       return json(500, {
         ok: false,
-        error: "No answers parsed from model output",
-        raw: rawText.slice(0, 400)
+        error: "Empty answer from model",
+        dataPreview: JSON.stringify(data || {}, null, 2).slice(0, 500),
       });
     }
 
-    const modelName = data && data.model;
-    const finishReason =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].finish_reason;
+    const { questionNumbers, answers } = parseAnswers(content);
+
+    // 최종 text (정답맵 그대로)
+    const finalText = questionNumbers
+      .map((n) => `${n}: ${answers[String(n)]}`)
+      .join("\n");
 
     return json(200, {
       ok: true,
-      text: rawText,
+      text: finalText,
       debug: {
         page,
-        model: modelName,
+        model,
         questionNumbers,
         answers,
-        finishReason,
-        ocrTextPreview: ocrText.slice(0, 400)
-      }
+        finishReason: choice.finish_reason || choice.native_finish_reason || "",
+        ocrTextPreview: ocrText.slice(0, 500),
+      },
     });
   } catch (err) {
     return json(500, {
       ok: false,
-      error: err.message || "Unexpected solve error"
+      error: "solve internal error",
+      detail: String(err && err.message ? err.message : err),
     });
   }
 };
