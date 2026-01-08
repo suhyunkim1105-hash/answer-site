@@ -1,237 +1,292 @@
 // netlify/functions/solve.js
-// -------------------------
-// 역할: 편입 영어 객관식 기출 "정답만" 생성하는 함수
-// 입력: { ocrText: string, page?: number }
-// 출력: { ok: true, text: "1: A\n2: D\n...", debug: {...} } 또는 { ok: false, error: "..." }
-//
-// 필요한 환경변수 (Netlify 에서 설정):
-// - OPENROUTER_API_KEY  (필수)
-// - MODEL_NAME          (선택, 예: "anthropic/claude-sonnet-4.5", 기본값: "openai/gpt-4.1")
-// - TEMPERATURE         (선택, 기본 0.1)
+// 편입 영어 객관식 기출 전용 정답 생성 함수.
+// - env: OPENROUTER_API_KEY (필수)
+// - env: MODEL_NAME (옵션, 기본 openai/gpt-4.1)
+// - env: TEMPERATURE (옵션, 기본 0.1)
+// - env: SOLVE_MAX_TOKENS (옵션, 기본 512)
+// - env: STOP_TOKEN (옵션, 있으면 stop 시그널로만 사용. 출력에는 절대 쓰지 말 것.)
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
     },
-    body: JSON.stringify(obj),
+    body: JSON.stringify(obj)
   };
 }
 
+async function callOpenRouter(messages) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not set");
+  }
+
+  const model = process.env.MODEL_NAME || "openai/gpt-4.1";
+  const temperature = Number(
+    Number.isFinite(Number(process.env.TEMPERATURE))
+      ? process.env.TEMPERATURE
+      : 0.1
+  );
+  const maxTokensEnv = Number(process.env.SOLVE_MAX_TOKENS);
+  const maxTokens = Number.isFinite(maxTokensEnv) && maxTokensEnv > 0
+    ? maxTokensEnv
+    : 512;
+
+  const stopToken = process.env.STOP_TOKEN || "";
+
+  const body = {
+    model,
+    messages,
+    temperature,
+    max_tokens: maxTokens
+  };
+
+  if (stopToken) {
+    // 출력에서 stopToken을 넣지 말고, 여기서만 컷하는 용도로 사용.
+    body.stop = [stopToken];
+  }
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "X-Title": "answer-site"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    throw new Error(`OpenRouter HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data;
+}
+
+function parseAnswers(rawText) {
+  const lines = (rawText || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const answers = {};
+  const questionNumbers = [];
+
+  const lineRe = /^(\d{1,3})\s*[:\-\.]?\s*([A-E])/i;
+
+  for (const line of lines) {
+    const m = line.match(lineRe);
+    if (!m) continue;
+    const qn = Number(m[1]);
+    const letter = m[2].toUpperCase();
+    if (!Number.isNaN(qn)) {
+      answers[qn] = letter;
+      questionNumbers.push(qn);
+    }
+  }
+
+  return { answers, questionNumbers };
+}
+
 exports.handler = async (event) => {
+  if (event.httpMethod === "OPTIONS") {
+    return json(200, { ok: true });
+  }
+  if (event.httpMethod !== "POST") {
+    return json(405, { ok: false, error: "POST only" });
+  }
+
+  let body = {};
   try {
-    // 1) POST 만 허용
-    if (event.httpMethod !== "POST") {
-      return json(405, { ok: false, error: "POST only" });
-    }
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return json(400, { ok: false, error: "Invalid JSON body" });
+  }
 
-    // 2) API Key 확인
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return json(500, { ok: false, error: "OPENROUTER_API_KEY is not set" });
-    }
+  const ocrText = String(body.ocrText || body.text || "").trim();
+  const page = body.page ?? null;
 
-    // 3) 환경변수 (모델, 온도)
-    const model = process.env.MODEL_NAME || "openai/gpt-4.1";
-    const temperature = Number(process.env.TEMPERATURE ?? 0.1);
+  if (!ocrText) {
+    return json(400, { ok: false, error: "ocrText is required" });
+  }
 
-    // 4) body 파싱
-    let body = {};
-    try {
-      body = JSON.parse(event.body || "{}");
-    } catch (e) {
-      return json(400, { ok: false, error: "Invalid JSON body" });
-    }
+  const systemPrompt = `
+You are a professional multiple-choice exam solver for Korean university transfer exams
+(편입 영어 객관식). Your ONLY job is to read the OCR text of an exam page and output
+a clean answer key.
 
-    const page = body.page ?? null;
-    const ocrText = String(body.ocrText || body.text || "").trim();
+The input:
+- A single long string with the full OCR text of ONE exam page.
+- It includes question numbers, questions, and options.
+- Question numbers appear as patterns like:
+  "1.", "1)", "1 :", "1 -", or at the start of a line.
+- Options can be:
+  - A, B, C, D, E
+  - (A), (B), (C) ...
+  - ① ② ③ ④ ⑤  or 1) 2) 3) 4) 5)
+- The exam may include English instructions, school names (e.g. SOGANG UNIVERSITY),
+  page headers, etc. You must IGNORE all non-question noise.
 
-    if (!ocrText) {
-      return json(400, { ok: false, error: "Missing ocrText" });
-    }
+Your goals (strict priority order):
+1) Minimize wrong answers.
+2) Absolutely ZERO question-number omissions: if a question number is visible in the OCR,
+   you must output AN answer for it (best guess allowed, but no blanks).
+3) Output FORMAT must be extremely strict:
+   - Each line: "<question-number>: <letter>"
+   - Example:
+       1: A
+       2: D
+       3: C
+   - No extra text, no explanations, no headers, no comments, no "UNSURE", no punctuation
+     other than the colon after the number.
+   - DO NOT output anything else.
 
-    // 5) 편입 기출 전용 프롬프트 (전체 기출 공용)
-    const TASK_PROMPT = `
-You are an expert grader for Korean university transfer English exams ("편입 영어"), covering all schools and all years.
-You see OCR text from one printed test page (multiple-choice only).
+How to think (internal steps, DO NOT print these steps):
 
-Your job:
-- Read ALL visible questions on this page.
-- For EVERY visible question number, choose EXACTLY ONE answer choice (A, B, C, D, or E).
-- Some questions may only have 4 choices (A–D). If there is no E, never invent E.
-- Always output answers for ALL visible question numbers on this page. No missing numbers.
+0) Question number detection
+   - Scan the OCR text line-by-line and detect question numbers by patterns like:
+       line starts with "number." or "number)" or "number :" etc.
+   - Treat each detected number as the start of a "question block" that continues
+     until the next detected question number.
+   - Only use question numbers that ACTUALLY appear in the OCR text. Do NOT hallucinate
+     numbers that are not present.
 
-Answer format (very important):
-- Final output must contain ONLY lines like:
-  1: A
-  2: D
-  3: B
-- One question per line.
-- Use the question number as a plain integer, then colon, then a single capital letter A–E.
-- No extra text, no explanations, no comments, no "UNSURE", no blank lines.
+1) Block-level solving
+   - For each question block:
+     - Read the stem and all options.
+     - Identify which options are the choices.
+     - Convert options into letters A–E:
+       * If options are written as (A)(B)..., keep letters.
+       * If options are numbered 1–5 (e.g., ① ② ③ ④ ⑤), map them to letters:
+         1 → A, 2 → B, 3 → C, 4 → D, 5 → E.
+     - Solve the question using normal exam reasoning.
 
-General rules (for ALL question types):
-- Carefully match each answer to the correct question number shown in the OCR text.
-- If OCR is slightly noisy (typos, broken words), try to infer the original sentence.
-- NEVER use outside real-world knowledge to override the passage logic. Follow the passage itself.
-- If two options both look plausible, choose the one that best fits the exact wording and logic of the question.
+2) Special handling of tricky question types
+   - Error correction / underlined parts:
+     * Often options like A. B. C. D. correspond to underlined segments.
+     * Choose the segment that is ungrammatical, unacceptable, or incorrect,
+       according to the stem.
+   - Reordering / sequence questions:
+     * Options such as "A-B-C-D", "C-D-A-B" etc. require ordering sentences.
+   - Vocabulary / closest meaning:
+     * Focus on the main target word and match the best synonym.
 
-Specific rules by type:
+3) Critical rules for LEAST / EXCEPT / NOT / FALSE
+   - If the stem includes words like **NOT, EXCEPT, LEAST, FALSE**:
+     * First identify what the passage or stem is clearly SUPPORTING.
+     * Eliminate options that are consistent with the passage.
+     * Choose the option that is MOST inconsistent or LEAST supported,
+       even if all options look partially related.
+   - Be extra careful: do NOT choose the "most plausible" sentence overall.
+     Choose the one that is LEAST supported when the question asks for LEAST/EXCEPT/NOT.
 
-1) Vocabulary / closest meaning / synonym questions:
-- Focus on the underlined word and sentence context.
-- Pick the option whose meaning fits BOTH the dictionary sense AND the tone of the sentence.
-- Avoid options that are too general, too weak, or the wrong connotation.
+4) Text-type / author-type questions (e.g. "The author's presentation is MOST like that of:")
+   - Use the overall behavior of the passage:
+     * "editorial": argumentative, about current affairs, strong opinion.
+     * "term paper": formal, structured, analytic, with classification/examples.
+     * "avant-garde artist": experimental, subjective, trying to shock or innovate.
+     * "ethnologist / cultural theorist": analyzing cultural patterns, societies,
+       "old vs new", "national literature", etc.
+   - Decide which description best matches WHAT THE PASSAGE IS DOING overall.
 
-2) Error-identification / "must be corrected" questions:
-- Typically: one sentence with four underlined parts (A, B, C, D).
-- Assume EXACTLY ONE underlined part is wrong, unless the test clearly says otherwise.
-- Treat CLEAR collocation/word-choice errors (e.g., wrong verb + object like "posted a dilemma" instead of "posed a dilemma") as strong errors,
-  even if grammar is otherwise okay.
-- Do NOT choose parts that are only slightly awkward in style if they are grammatically and collocationally acceptable.
-- When in doubt, prefer the part that is clearly wrong in standard written English.
+5) Last few questions in a passage (global questions: tone, main idea, structure)
+   - Always reconsider the entire passage:
+     * Re-read the first sentence and the last sentence.
+     * Summarize the main theme and tone.
+     * Reject options that are too extreme (always, never, completely) unless
+       the passage itself is that extreme.
+   - Choose the option that fits the global logic and tone, not just one sentence.
 
-3) Reading / inference / EXCEPT / NOT TRUE / LEAST / UNABLE TO BE INFERRED:
-- Identify whether the question asks for:
-  - something supported (TRUE / BEST summary / MAIN idea),
-  - or something NOT supported (EXCEPT / NOT true / LEAST / UNABLE to be inferred).
-- For "NOT true" / "LEAST" / "UNABLE to be inferred" types:
-  - Check each option against the passage ONLY.
-  - Reject options that add new information or overgeneralize beyond what the passage says,
-    even if they sound plausible in the real world.
-  - Choose the option that is least supported, not mentioned, or contradicted by the passage.
-- For "TRUE"/"BEST" types:
-  - Choose the option that is MOST directly supported and accurately reflects the passage’s nuance,
-    not the one that introduces extra assumptions.
+6) Output formatting (VERY IMPORTANT)
+   - For every detected question number, output exactly ONE line:
+       "<question-number>: <letter>"
+   - The letter must be in A–E only.
+   - If the question has only 4 options (A–D), you can only choose A, B, C, or D.
+   - If you are unsure, still choose the BEST GUESS and do NOT mark it as unsure.
+   - DO NOT output any explanations, analysis, or extra lines.
+   - DO NOT output "UNSURE" or "?".
+   - DO NOT output the stop token, if any.
 
-4) Sentence-order / paragraph reordering questions:
-- When reordering sentences (A, B, C, D etc.), think in terms of:
-  - topic introduction,
-  - time/space sequence,
-  - cause → effect,
-  - general → specific,
-  - problem → solution.
-- Prefer the order that gives the smoothest logical flow and natural pronoun/reference links.
-
-5) Sentence-insertion / position-of-sentence questions:
-- You must choose the position where the given sentence works best as a BRIDGE:
-  - It should follow naturally from the previous sentence,
-  - AND prepare or support the next sentence.
-- Do NOT rely only on simple word overlap (e.g., "navel", "shame", "gods").
-  Instead, think about the rhetorical role:
-  - Is it giving an example, an explanation of a symbol, a contrast, a result, or a generalization?
-- Place it where that role is needed in the paragraph’s logical progression.
-
-6) Discourse markers / connectors (however, therefore, in consequence, instead of, etc.):
-- Always check:
-  - Does this connector match the relationship between the two sentences (cause–effect, contrast, sequence)?
-- Do not choose a strong contrast or emotional word ("however", "tired of", "recklessly") if the logic is simple cause–effect or explanation.
-- Prefer connectors that match the actual logical relation, even if another option feels more dramatic.
-
-Output requirements (repeat):
-- Output ONLY lines of "number: LETTER" (A–E).
-- Do NOT output any explanation, reasoning, or comments.
-- Do NOT output any other words before, between, or after the answers.
+If you follow all of the above, you will minimize wrong answers and avoid missing
+any question numbers, which is critical for high exam scores.
 `;
 
-    const userContent = `${TASK_PROMPT}
+  const userPrompt = ocrText;
 
-[OCR TEXT START]
-${ocrText}
-[OCR TEXT END]
-`;
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt }
+  ];
 
-    // 6) OpenRouter API 호출
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app/",
-        "X-Title": "answer-site-solve",
-      },
-      body: JSON.stringify({
-        model,
-        temperature,
-        max_tokens: 512,
-        messages: [
-          {
-            role: "system",
-            content: "You are a precise multiple-choice exam solver. Follow the user's format instructions exactly and never output explanations.",
-          },
-          {
-            role: "user",
-            content: userContent,
-          },
-        ],
-      }),
-    });
+  try {
+    // 1차 호출
+    let data = await callOpenRouter(messages);
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      return json(502, { ok: false, error: "OpenRouter HTTP error", status: response.status, body: text });
+    let choice =
+      data &&
+      data.choices &&
+      data.choices[0] &&
+      data.choices[0].message;
+
+    let rawText = (choice && choice.content && choice.content.trim()) || "";
+
+    // 혹시라도 비어 있으면 1번만 재시도 (다른 모델/설정은 유지)
+    if (!rawText) {
+      data = await callOpenRouter(messages);
+      choice =
+        data &&
+        data.choices &&
+        data.choices[0] &&
+        data.choices[0].message;
+      rawText = (choice && choice.content && choice.content.trim()) || "";
     }
 
-    const data = await response.json();
-
-    const choice = data.choices && data.choices[0];
-    const content = choice && choice.message && typeof choice.message.content === "string"
-      ? choice.message.content.trim()
-      : "";
-
-    if (!content) {
+    if (!rawText) {
       return json(500, {
         ok: false,
-        error: "Empty answer from model",
-        dataPreview: JSON.stringify(data).slice(0, 400),
+        error: "Empty answer from model"
       });
     }
 
-    // 7) 결과 파싱해서 디버그용 구조 만들기
-    const lines = content.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+    const { answers, questionNumbers } = parseAnswers(rawText);
 
-    const answersMap = {};
-    for (const line of lines) {
-      // 허용 형식 예: "1: A" 또는 "1 - A" 또는 "1 A"
-      const m = line.match(/^(\d+)\s*[:\-]?\s*([A-E1-5])$/i);
-      if (!m) continue;
-      const qNum = Number(m[1]);
-      let ansRaw = m[2].toUpperCase();
-
-      // 혹시 숫자(1~5)로 주면 A~E로 변환
-      if (/[1-5]/.test(ansRaw)) {
-        const idx = Number(ansRaw) - 1;
-        const letters = ["A", "B", "C", "D", "E"];
-        ansRaw = letters[idx] || ansRaw;
-      }
-
-      answersMap[qNum] = ansRaw;
+    // 한 개도 못 파싱했으면 에러로 취급 (프롬프트/모델 튜닝 필요)
+    if (!questionNumbers.length) {
+      return json(500, {
+        ok: false,
+        error: "No answers parsed from model output",
+        raw: rawText.slice(0, 400)
+      });
     }
 
-    const questionNumbers = Object.keys(answersMap)
-      .map((n) => Number(n))
-      .sort((a, b) => a - b);
+    const modelName = data && data.model;
+    const finishReason =
+      data &&
+      data.choices &&
+      data.choices[0] &&
+      data.choices[0].finish_reason;
 
     return json(200, {
       ok: true,
-      text: content,
+      text: rawText,
       debug: {
         page,
-        model,
+        model: modelName,
         questionNumbers,
-        answers: answersMap,
-        finishReason: choice.finish_reason || choice.native_finish_reason || "unknown",
-        ocrTextPreview: ocrText.slice(0, 300),
-      },
+        answers,
+        finishReason,
+        ocrTextPreview: ocrText.slice(0, 400)
+      }
     });
   } catch (err) {
     return json(500, {
       ok: false,
-      error: "Unexpected error in solve",
-      detail: String(err && err.message ? err.message : err),
+      error: err.message || "Unexpected solve error"
     });
   }
 };
-
