@@ -71,7 +71,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <h2>카메라 / 자동 문제풀이</h2>
+      <h2>카메라 / 문제풀이</h2>
       <div class="row" style="margin-bottom:8px;">
         <button id="btnStart">카메라 시작</button>
         <button id="btnShot" class="secondary">현재 페이지 촬영</button>
@@ -81,8 +81,6 @@
       </div>
       <div class="row" style="margin-bottom:8px;">
         <button id="btnTtsTest" class="secondary">음성 테스트</button>
-        <button id="btnAutoStart">자동 문제풀이 시작</button>
-        <button id="btnAutoStop" class="danger">자동 문제풀이 정지</button>
       </div>
 
       <div class="previewWrap">
@@ -92,9 +90,8 @@
       <div class="hint">
         ① 시험지를 화면에 꽉 채우고<br/>
         ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
-        ③ 자동 문제풀이를 켜면, 페이지마다<br/>
-        &nbsp;&nbsp;&nbsp;- <b>“페이지 인식, 1 2 3”</b> (예고 TTS)<br/>
-        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 반복.
+        ③ <b>현재 페이지 촬영</b> 버튼을 누르면,<br/>
+        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 한 번 처리된다.
       </div>
     </div>
 
@@ -128,8 +125,6 @@
     const btnShot = $("btnShot");
     const btnStart = $("btnStart");
     const btnTtsTest = $("btnTtsTest");
-    const btnAutoStart = $("btnAutoStart");
-    const btnAutoStop  = $("btnAutoStop");
     const resEl  = $("res");
 
     function ts() {
@@ -147,9 +142,6 @@
 
     let stream = null;
     let busy = false;       // 수동 촬영 락
-    let autoMode = false;   // 자동 모드 on/off
-    let autoTimer = null;
-    let lastOcrNonEmpty = false; // 직전 자동 OCR에서 글자가 있었는지
     let wakeLock = null;
 
     // ---- 공통 유틸 ----
@@ -268,7 +260,7 @@
       return new Promise((resolve) => {
         if (!("speechSynthesis" in window)) return resolve();
         const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = "ko-KR";
+        utter.lang = "ko-KR";  // 한국어 여성 음성 선택될 확률↑
         utter.rate = 1.0;
         utter.pitch = 1.0;
         utter.onend = () => resolve();
@@ -281,16 +273,6 @@
       ttsEnabled = true;
       await speakNow("테스트");
       log("STATUS: 음성 테스트를 재생했어. 이후 문제풀이 정답도 소리로 읽어줄게.");
-    }
-
-    // ★ 페이지 인식 1 2 3 (예고용) — 촬영 전에 항상 호출
-    async function speakPageCountdown() {
-      if (!ttsEnabled) return;
-      await speakNow("페이지 인식, 일");
-      await sleep(400);
-      await speakNow("이");
-      await sleep(400);
-      await speakNow("삼");
     }
 
     function parseSolveTextForTts(text) {
@@ -395,112 +377,12 @@
       }
     });
 
-    // ---- 자동 문제풀이 ----
-    const AUTO_EMPTY_RETRY_MS = 4000;
-    const AUTO_AFTER_SOLVE_MS = 5000;
-
-    function scheduleAutoStep(delayMs) {
-      if (!autoMode) return;
-      if (autoTimer) clearTimeout(autoTimer);
-      autoTimer = setTimeout(() => {
-        autoStep().catch((e) => {
-          log(`STATUS: [자동] 처리 실패: ${e?.message || e}`);
-          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        });
-      }, delayMs);
-    }
-
-    async function autoStep() {
-      if (!autoMode) return;
-      if (busy) {        // 수동 촬영 중이면 조금 뒤에 다시
-        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        return;
-      }
-      const page = Number($("page").value || 1);
-
-      // ★ 촬영 전에 항상 "페이지 인식 1 2 3"
-      log("STATUS: [자동] 페이지 인식 1 2 3 (예고).");
-      await speakPageCountdown();
-
-      log(`STATUS: [자동] 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-      const cap = captureDataURL();
-      log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
-
-      log("STATUS: [자동] OCR 처리 중...");
-      const ocr = await doOCR(page, cap.dataUrl);
-      log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
-
-      if (!ocr.ok) {
-        log(`STATUS: [자동] OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
-        if (ttsEnabled) await speakNow("실패");
-        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        return;
-      }
-
-      const text = (ocr.text || "").trim();
-      if (!text) {
-        lastOcrNonEmpty = false;
-        log("STATUS: [자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
-        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        return;
-      }
-
-      lastOcrNonEmpty = true;
-      ocrBox.value = ocr.text || "";
-      log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
-
-      const solved = await doSolve(page, ocr.text || "");
-      log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
-
-      if (!solved.ok) {
-        log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
-        if (ttsEnabled) await speakNow("실패");
-        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        return;
-      }
-
-      ansBox.value = solved.text || "";
-      log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
-
-      await speakAnswers(solved.text || "");
-
-      // 다음 촬영까지 5초 쉼
-      scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
-    }
-
-    btnAutoStart.addEventListener("click", async () => {
-      if (autoMode) return;
-      try {
-        await startCamera();
-        await enableWakeLock();
-        autoMode = true;
-        lastOcrNonEmpty = false;
-        log("STATUS: 자동 문제풀이 모드를 시작할게.");
-        scheduleAutoStep(0);
-      } catch (e) {
-        log(`STATUS: 자동 모드 시작 실패: ${e?.message || e}`);
-      }
-    });
-
-    btnAutoStop.addEventListener("click", async () => {
-      if (!autoMode) return;
-      autoMode = false;
-      if (autoTimer) {
-        clearTimeout(autoTimer);
-        autoTimer = null;
-      }
-      await disableWakeLock();
-      log("STATUS: 자동 문제풀이 모드를 종료할게.");
-    });
-
     btnTtsTest.addEventListener("click", () => {
       speakTest();
     });
 
     // 페이지 나갈 때 wake lock 해제
     window.addEventListener("beforeunload", () => {
-      autoMode = false;
-      if (autoTimer) clearTimeout(autoTimer);
       disableWakeLock();
     });
   </script>
