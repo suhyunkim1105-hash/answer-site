@@ -1,7 +1,18 @@
 // netlify/functions/solve.js
-// 편입영어 객관식 기출용 solve 함수 (OpenRouter + universal 프롬프트)
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// Single, full "복붙용" 버전입니다.
+// 환경변수:
+// - OPENROUTER_API_KEY (필수)
+// - MODEL_NAME (옵션, 예: "anthropic/claude-3.7-sonnet", "openai/gpt-4.1" 등)
+// - TEMPERATURE (옵션, 기본 0.1)
+// - MAX_TOKENS (옵션, 기본 512)
+// - STOP_TOKEN (옵션, 기본 "XURTH")
+// - OPENROUTER_API_BASE (옵션, 기본 https://openrouter.ai/api/v1/chat/completions)
+// - SITE_URL, OPENROUTER_TITLE (옵션, OpenRouter용 메타데이터)
+
+const OPENROUTER_API_URL =
+  process.env.OPENROUTER_API_BASE ||
+  "https://openrouter.ai/api/v1/chat/completions";
 
 function json(statusCode, obj) {
   return {
@@ -11,153 +22,144 @@ function json(statusCode, obj) {
   };
 }
 
-// 모든 학교/모든 연도 편입영어 객관식 기출 공용 SYSTEM 프롬프트
 const SYSTEM_PROMPT = `
-You are an expert grader for Korean university transfer exams
-("편입 영어" 객관식). Your job is to read OCR text of the test paper
-and output ONLY the correct options for each visible question.
+You are an expert solver for Korean university transfer English multiple-choice exams
+(편입 영어 객관식 기출 채점/정답 생성 전용 AI) such as Sogang, Hanyang, Chung-Ang, SKKU, etc.
 
-Exam style:
-- English multiple-choice questions (vocabulary, grammar, error spotting,
-  sentence ordering, reading comprehension, etc.).
-- Each question has exactly 4 options: 1–4 (or A–D).
-- Numbers like 1., 2), 3] or "QUESTION 17" mark question numbers.
+Your ONLY job:
+- Read the OCR text of one exam page.
+- Infer all visible question numbers and the correct option (1–4 or 1–5).
+- Output ONLY the final answer key in the exact format specified below.
 
-Your goals, in order:
-1) Minimize wrong answers.
-2) Do NOT miss any visible question number in the OCR text.
-3) Keep the output extremely short and regular so it is easy to parse.
+## Output format (must follow exactly)
 
---------------------------------
-HOW TO INTERPRET THE OCR TEXT
---------------------------------
-- Ignore line breaks, page breaks, weird symbols, and OCR noise.
-- Underlined words may appear in () or <> or with stray characters.
-- If a passage header like [QUESTIONS 24–26] or "Questions 33-35" appears,
-  all those question numbers share that passage.
-- Only answer for question numbers whose stem and choices actually appear
-  in the OCR text. Do NOT invent answers for unseen questions.
+- One question per line.
+- Format: "<questionNumber>: <optionNumber>"
+  - Example:
+    1: 3
+    2: 4
+    3: 1
+- No explanations, no Korean, no English sentences, no comments.
+- No extra text before or after, no blank lines, no "UNSURE" list, nothing.
+- If you are not 100% sure, you must STILL choose the single BEST option.
 
---------------------------------
-DECISION RULES (VERY IMPORTANT)
---------------------------------
-Use these rules INTERNALLY; do NOT explain them in the output.
+## Exam types you must handle
 
-1) Single-blank vocabulary / meaning questions
-   - Choose the option that best matches BOTH:
-     • the meaning required by the sentence AND
-     • the most natural collocation and register.
-   - Strongly PREFER standard collocations like "pose a dilemma",
-     "insignificant amount of time", "boon to astronomers".
-   - If an option is grammatically OK but sounds odd or rare,
-     and another option is clearly a common expression, pick the common one.
+From the OCR text, you may see:
 
-2) Multi-blank questions (two or more blanks in one sentence or passage)
-   - Evaluate each choice as a SET.
-   - A choice is acceptable ONLY if **all** blanks are natural and coherent
-     with the sentence and passage.
-   - If even one blank in a choice is clearly wrong, REJECT that choice.
-   - Prefer choices where:
-     • meaning fits the context,
-     • collocations are standard,
-     • tone matches the passage (formal, academic, journalistic, etc.).
+- Vocabulary / synonym questions (CLOSEST meaning, underlined word)
+- Single-blank or multi-blank cloze (BLANK, (a)/(b)/(c))
+- Error correction (one underlined expression that must be corrected)
+- Sentence order / paragraph ordering (reorder the sentences)
+- Reading comprehension (best answer, inference, attitude, purpose)
+- Special types frequently used in 편입:
+  - "TRUE / NOT TRUE / INCORRECT / EXCEPT"
+  - "LEAST / MOST" able to be inferred
+  - Best title / best summary
+  - Insert a sentence at the best place
+  - Choose the best pair of connectors (for blanks Ⓐ, Ⓑ)
 
-3) Error-identification questions (find the underlined error)
-   - Pick the **most clearly wrong** or ungrammatical underlined part.
-   - Do NOT choose a phrase that is merely a bit awkward but still
-     grammatical and used in real English.
-   - Prioritize obvious errors in:
-     • verb tense/agreement,
-     • word choice / idiom / collocation,
-     • prepositions, articles, or basic syntax.
-   - Example principle: "posted a dilemma" is incorrect; "in order to steer
-     quotas" may be slightly awkward but can be acceptable → choose the
-     clearly incorrect one.
+Your reasoning must adapt to each type.
 
-4) Sentence ordering / paragraph ordering
-   - Ensure the order gives a coherent paragraph:
-     • introductions before details,
-     • causes before results,
-     • chronological or logical flow (past → later; general → specific).
-   - Check for pronouns, discourse markers (however, therefore, then, etc.)
-     and time expressions that constrain the order.
+## Global rules (very important)
 
-5) Author / tone / purpose questions
-   - Judge the passage style: academic article, science paper, newspaper
-     editorial, popular science for lay readers, exam instructions, etc.
-   - Consider:
-     • technical vs everyday vocabulary,
-     • presence of citations/data,
-     • intended audience (experts vs general public),
-     • tone (neutral, persuasive, critical, ironic, etc.).
-   - Choose the option that best matches both content AND level/audience.
+1. Use ONLY information from the given text.
+   - Do NOT bring in outside knowledge about politics, history, science, etc.
+   - A choice is correct only if its core content is supported by the passage.
 
-6) Always answer
-   - Even if the OCR is messy or the information is incomplete, you MUST
-     pick the single BEST option among 1–4 for every visible question
-     number.
+2. Read the ENTIRE relevant passage before answering any question about it.
+   - For title / summary / inference questions, do not answer from a single sentence.
+   - Always build a one-sentence mental summary of the passage first.
 
---------------------------------
-OUTPUT FORMAT (STRICT)
---------------------------------
-- Output ONLY the final answers, nothing else.
-- ONE line per question, in ascending order by question number.
-- Format of each line must be:
+3. Treat "LEAST / NOT / EXCEPT" with extreme care.
+   - If the stem asks for "LEAST" or "NOT true", invert your logic.
+   - For each option, ask:
+     - "Can this be safely inferred from the passage?"  
+     - If YES, it is *not* the answer in a LEAST/NOT question (unless all others are even stronger).
+   - Prefer the option that either clearly contradicts the passage or introduces a claim with NO clear support.
 
-  <question_number>: <option_letter>
+4. Never choose based on vague plausibility.
+   - A choice that merely "sounds reasonable" but is not grounded in the text must be rejected.
+   - Penalize options that:
+     - Add new causes, effects, or time periods not discussed in the passage.
+     - Introduce extra actors (e.g., governments, technology, digital age) that the passage never mentions.
+     - Over-generalize (e.g., "always", "never", "all societies") when the passage is more limited.
 
-  where <option_letter> is one of: A, B, C, D corresponding to 1–4.
+## Special strategies by question type
 
-- Examples of VALID output:
-  1: A
-  2: D
-  3: B
-  4: C
+### A. Connector / discourse marker pairs (e.g., question 39-type)
 
-- Do NOT add explanations, reasoning, comments, headings,
-  "UNSURE", percent signs, or any extra text.
-- NEVER output options beyond A–D.
-  • Do NOT output E, 5, or anything similar.
-  • If none of the options seems perfect, still choose the LEAST WRONG
-    among A–D.
+When choosing a pair like Ⓐ / Ⓑ:
 
-Think carefully, follow the decision rules above, and then reply ONLY
-with lines of the form "<number>: <A|B|C|D>".
+1. Carefully reconstruct the sentences around Ⓐ and Ⓑ.
+2. For EACH option set (①–④):
+   - Temporarily insert both words into the text.
+   - Check:
+     - Does Ⓐ correctly express the relation between the previous clause and the next?
+       - Inference vs addition vs contrast vs example vs cause/effect.
+     - Does Ⓑ correctly express the relation in its position?
+   - If either position becomes logically strange or inconsistent, discard that option.
+3. Only options where BOTH connectors fit logically and naturally are candidates.
+4. Among candidates, choose the one that best matches the author's argumentative flow.
+   - Avoid options that introduce emotional tone or attitude not present in the original.
+
+### B. Title / main idea (e.g., question 40-type)
+
+1. First, silently summarize the entire passage in ONE precise English sentence.
+   - Include who/what, main claim, and the key twist or argument.
+2. For each option:
+   - Check coverage:
+     - Does the option capture the *central argument*, not just an example or side remark?
+     - Is the scope too narrow (only one paragraph) or too broad (adds topics not in the passage)?
+   - Reject titles that:
+     - Focus on a small detail/example.
+     - Add speculative elements the passage never discusses.
+     - Misrepresent the author's attitude (e.g., neutral vs critical vs endorsing).
+3. Choose the title that best matches your one-sentence summary and nothing more.
+
+### C. TRUE / NOT TRUE / EXCEPT / LEAST inferable
+
+For each option:
+
+1. Try to locate explicit or strongly paraphrased support in the passage.
+2. If you cannot find any supporting sentence (even by paraphrase), mark it as "unsupported".
+3. For:
+   - "Which is TRUE?":  
+     - Choose the option that is clearly supported; reject options needing speculation.
+   - "Which is NOT TRUE / EXCEPT / LEAST able to be inferred?":  
+     - Choose the option that is unsupported or contradicted by the passage.
+
+### D. Reading / inference generally
+
+- Prefer options that:
+  - Rephrase the text faithfully.
+  - Keep the same logical relations (cause, contrast, condition).
+- Avoid:
+  - Extreme statements ("always", "never", "all people") unless the passage is equally extreme.
+  - New explanations, motives, or predictions not mentioned in the text.
+
+### E. Vocabulary / synonym / cloze
+
+- Match meaning, tone, and collocation.
+- For triple blanks ((a)/(b)/(c)):
+  - Ensure all three words fit both the local meaning AND the overall tone.
+  - Do not pick an option where even one of the three feels forced or off-register.
+
+## Handling OCR noise
+
+- Ignore random symbols, page numbers, headers/footers, and broken line breaks.
+- Use your best judgment when punctuation or spacing is corrupted.
+- If a question number clearly appears (e.g., "9.", "10."), you must output an answer for it.
+
+## Final and only task
+
+- After all internal reasoning, output ONLY the final answer key:
+  - One line per question.
+  - Format: "<number>: <optionNumber>"
+- No explanations, no reasoning, no comments, no extra lines.
+
+Remember: minimize wrong answers, and never skip a visible question number even if you are uncertain.
 `;
-
-// "1: A" 같은 텍스트에서 번호와 보기를 파싱
-function parseAnswersFromText(text) {
-  const answers = {};
-  const questionNumbers = [];
-  const lines = String(text || "").split(/\r?\n/);
-
-  for (const line of lines) {
-    const m = line.match(/^\s*(\d+)\s*[:\-]\s*([A-Da-d1-4])/);
-    if (!m) continue;
-
-    const q = parseInt(m[1], 10);
-    if (!Number.isFinite(q)) continue;
-
-    let token = m[2].toUpperCase();
-    let idx;
-
-    if (/[A-D]/.test(token)) {
-      idx = token.charCodeAt(0) - 64; // A→1, B→2 ...
-    } else {
-      idx = parseInt(token, 10);
-      if (!(idx >= 1 && idx <= 4)) continue;
-      token = String.fromCharCode(64 + idx);
-    }
-
-    if (!(q in answers)) {
-      answers[q] = idx; // 1–4
-      questionNumbers.push(q);
-    }
-  }
-
-  questionNumbers.sort((a, b) => a - b);
-  return { questionNumbers, answers };
-}
 
 exports.handler = async (event) => {
   try {
@@ -170,10 +172,18 @@ exports.handler = async (event) => {
       return json(500, { ok: false, error: "OPENROUTER_API_KEY is not set" });
     }
 
-    const model =
-      process.env.MODEL_NAME || "anthropic/claude-3.7-sonnet";
-    const maxTokens = Number(process.env.MAX_TOKENS || 256);
-    const temperature = Number(process.env.TEMPERATURE ?? 0.1);
+    const model = process.env.MODEL_NAME || "openai/gpt-4.1";
+    const temperature = Number(
+      Number.isNaN(Number(process.env.TEMPERATURE))
+        ? 0.1
+        : process.env.TEMPERATURE
+    );
+    const stopToken = process.env.STOP_TOKEN || "XURTH";
+    const maxTokens = Number(
+      Number.isNaN(Number(process.env.MAX_TOKENS))
+        ? 512
+        : process.env.MAX_TOKENS
+    );
 
     let body = {};
     try {
@@ -182,11 +192,11 @@ exports.handler = async (event) => {
       return json(400, { ok: false, error: "Invalid JSON body" });
     }
 
-    const page = Number(body.page || 1);
+    const page = body.page ?? 1;
     const ocrTextRaw = body.ocrText || body.text || "";
-    const ocrText = String(ocrTextRaw || "").trim();
+    const ocrText = String(ocrTextRaw || "");
 
-    if (!ocrText) {
+    if (!ocrText.trim()) {
       return json(400, { ok: false, error: "Missing ocrText" });
     }
 
@@ -195,45 +205,59 @@ exports.handler = async (event) => {
       { role: "user", content: ocrText },
     ];
 
-    const reqBody = {
-      model,
-      messages,
-      max_tokens: maxTokens,
-      temperature,
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
     };
-
-    const resp = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "HTTP-Referer":
-          process.env.OPENROUTER_REFERRER ||
-          "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site-solve",
-      },
-      body: JSON.stringify(reqBody),
-    });
-
-    if (!resp.ok) {
-      let errBody;
-      try {
-        errBody = await resp.json();
-      } catch {
-        errBody = await resp.text();
-      }
-      const message =
-        (errBody && errBody.error && errBody.error.message) ||
-        (typeof errBody === "string" ? errBody : "OpenRouter error");
-      return json(500, { ok: false, error: message, raw: errBody });
+    if (process.env.SITE_URL) {
+      headers["HTTP-Referer"] = process.env.SITE_URL;
+    }
+    if (process.env.OPENROUTER_TITLE) {
+      headers["X-Title"] = process.env.OPENROUTER_TITLE;
     }
 
-    const data = await resp.json();
-    const choice = data.choices && data.choices[0];
-    const content =
-      (choice && choice.message && choice.message.content) || "";
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+        stop: [stopToken],
+      }),
+    });
 
-    if (!content.trim()) {
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      return json(502, {
+        ok: false,
+        error: "OpenRouter error",
+        raw: errorText.slice(0, 800),
+      });
+    }
+
+    const data = await response.json().catch(() => null);
+    if (!data || !data.choices || !data.choices[0]) {
+      return json(502, {
+        ok: false,
+        error: "Invalid response from OpenRouter",
+      });
+    }
+
+    const choice = data.choices[0];
+    let content = "";
+    if (choice.message && typeof choice.message.content === "string") {
+      content = choice.message.content;
+    } else if (typeof choice.text === "string") {
+      content = choice.text;
+    } else {
+      content = "";
+    }
+
+    content = String(content || "").trim();
+
+    if (!content) {
       return json(500, {
         ok: false,
         error: "Empty answer from model",
@@ -241,49 +265,53 @@ exports.handler = async (event) => {
       });
     }
 
-    const { questionNumbers, answers } = parseAnswersFromText(content);
-
-    if (!questionNumbers.length) {
-      return json(500, {
-        ok: false,
-        error: "No answers parsed from model output",
-        raw: content,
-        dataPreview: JSON.stringify(data).slice(0, 400),
-      });
+    // STOP_TOKEN이 들어갔을 경우 뒤쪽 잘라내기 (실제로는 거의 안 나올 거지만 방어용)
+    if (stopToken && content.includes(stopToken)) {
+      content = content.split(stopToken)[0].trim();
     }
 
-    // 정규화된 "번호: 보기" 텍스트로 다시 구성
-    const lines = questionNumbers.map((q) => {
-      const idx = answers[q]; // 1–4
-      const letter = String.fromCharCode(64 + idx); // 1→A
-      return `${q}: ${letter}`;
-    });
-    const finalText = lines.join("\n");
+    const lines = content.split(/\r?\n/);
+    const answerLineRegex = /^\s*(\d{1,3})\s*[:\-]\s*([1-5])\s*$/;
 
-    const finishReason =
-      choice.finish_reason || choice.native_finish_reason || null;
+    const answers = {};
+    const questionNumbers = [];
+    const pureAnswerLines = [];
+
+    for (const line of lines) {
+      const m = line.match(answerLineRegex);
+      if (!m) continue;
+      const qNum = Number(m[1]);
+      const ansNum = Number(m[2]);
+      if (!Number.isNaN(qNum) && !Number.isNaN(ansNum)) {
+        answers[qNum] = ansNum;
+        questionNumbers.push(qNum);
+        pureAnswerLines.push(`${qNum}: ${ansNum}`);
+      }
+    }
+
+    const finalText =
+      pureAnswerLines.length > 0 ? pureAnswerLines.join("\n") : content;
 
     return json(200, {
       ok: true,
       text: finalText,
       debug: {
         page,
-        model: data.model || model,
+        model,
         questionNumbers,
         answers,
-        finishReason,
+        finishReason:
+          choice.finish_reason || choice.native_finish_reason || null,
         ocrTextPreview: ocrText.slice(0, 400),
       },
     });
   } catch (err) {
     return json(500, {
       ok: false,
-      error: err && err.message ? err.message : "Unknown error",
-      stack: err && err.stack ? String(err.stack).split("\n").slice(0, 3).join("\n") : undefined,
+      error: err && err.message ? err.message : "Solve function error",
     });
   }
 };
-
 
 
 
