@@ -12,6 +12,8 @@ exports.handler = async (event) => {
 
     const model = process.env.MODEL_NAME || "openai/gpt-4.1";
     const temperature = Number(process.env.TEMPERATURE ?? 0.1);
+    // 🔹 출력 토큰 상한 (없으면 512)
+    const maxTokens = Number(process.env.MAX_OUTPUT_TOKENS || 512);
 
     let body = {};
     try {
@@ -40,7 +42,8 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         model,
         temperature,
-        // ❌ stop 토큰 사용 안 함 (XURTH 완전 제거)
+        max_tokens: maxTokens, // 🔹 여기 한 줄만 실제 요청에 추가
+        // ❌ stop 토큰 사용 안 함
         messages: [
           { role: "system", content: "You output ONLY answers in the required format. No extra text." },
           { role: "user", content: prompt }
@@ -149,3 +152,4 @@ function json(statusCode, obj) {
     body: JSON.stringify(obj),
   };
 }
+
