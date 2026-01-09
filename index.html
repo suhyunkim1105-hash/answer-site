@@ -2,44 +2,51 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>answer-site - 편입 영어 자동 채점</title>
+  <title>answer-site (편입 자동 풀이)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       margin: 0;
       padding: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #111;
-      color: #f5f5f5;
-    }
-
-    .wrap {
-      max-width: 900px;
-      margin: 0 auto;
-      padding: 16px;
-    }
-
-    h1 {
-      font-size: 20px;
-      margin: 0 0 8px;
-    }
-
-    .row {
+      color: #eee;
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-bottom: 12px;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 10px 14px;
+      background: #181818;
+      border-bottom: 1px solid #333;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      font-size: 16px;
+      margin: 0;
+      font-weight: 600;
+    }
+
+    header .controls {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
     }
 
     button {
-      padding: 8px 14px;
-      border-radius: 6px;
-      border: none;
+      border: 1px solid #444;
+      background: #222;
+      color: #eee;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 13px;
       cursor: pointer;
-      font-size: 14px;
-      background: #2b7cff;
-      color: #fff;
     }
 
     button:disabled {
@@ -47,128 +54,229 @@
       cursor: default;
     }
 
-    .danger {
-      background: #ff3b30;
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px;
     }
 
-    video, canvas {
-      max-width: 100%;
-      border-radius: 8px;
-      background: #000;
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+      }
     }
 
-    .col {
-      flex: 1 1 280px;
-      min-width: 0;
+    .panel {
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px;
+      background: #161616;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      min-height: 0;
     }
 
-    textarea {
+    .panel h2 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    #videoContainer {
+      position: relative;
       width: 100%;
-      min-height: 120px;
-      resize: vertical;
-      border-radius: 6px;
-      border: 1px solid #444;
-      padding: 8px;
-      font-family: "SF Mono", Menlo, Consolas, monospace;
-      font-size: 12px;
+      height: 70vh; /* 네가 말한 크게 보이는 프리뷰 */
+      max-height: 70vh;
       background: #000;
-      color: #f5f5f5;
+      border-radius: 6px;
+      overflow: hidden;
     }
 
-    .label {
-      font-size: 13px;
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+
+    #pageInfo {
+      font-size: 12px;
       opacity: 0.8;
     }
 
-    .status {
-      font-size: 12px;
-      white-space: pre-wrap;
-      background: #000;
-      border-radius: 6px;
+    textarea, pre {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 4px;
       border: 1px solid #333;
-      padding: 8px;
-      max-height: 240px;
-      overflow-y: auto;
+      background: #111;
+      color: #eee;
+      font-size: 12px;
+      padding: 6px;
+      resize: vertical;
+      min-height: 80px;
+      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
 
-    .answers {
-      font-family: "SF Mono", Menlo, Consolas, monospace;
-      white-space: pre-wrap;
-      font-size: 14px;
+    #log {
+      height: 140px;
+      overflow-y: auto;
+      font-size: 11px;
       background: #000;
-      border-radius: 6px;
+      border-radius: 4px;
+      padding: 6px;
       border: 1px solid #333;
-      padding: 8px;
-      min-height: 60px;
+      white-space: pre-wrap;
+    }
+
+    .section-label {
+      font-size: 12px;
+      font-weight: 500;
+      margin-top: 4px;
+    }
+
+    .row {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .row span {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #222;
+      border: 1px solid #444;
+      font-size: 11px;
+      opacity: 0.8;
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>편입 영어 자동 채점 (카메라 → OCR → GPT)</h1>
-    <div class="row">
-      <button id="btnStartCamera">카메라 켜기</button>
-      <button id="btnCapture" disabled>촬영 + OCR + 채점</button>
-      <button id="btnStopCamera" class="danger" disabled>카메라 끄기</button>
+  <header>
+    <h1>answer-site · 편입 영어 자동 풀이</h1>
+    <div class="controls">
+      <button id="btnStartCam">카메라 켜기</button>
+      <button id="btnCapture" disabled>한 페이지 촬영 + OCR + 풀이</button>
+      <button id="btnReadAnswers" disabled>정답 다시 읽기 (숫자)</button>
     </div>
+  </header>
 
-    <div class="row">
-      <div class="col">
-        <div class="label">카메라 미리보기</div>
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="canvas" style="display:none;"></canvas>
+  <main>
+    <!-- 왼쪽: 카메라 + 로그 -->
+    <section class="panel">
+      <h2>카메라 · 상태</h2>
+      <div id="videoContainer">
+        <video id="video" autoplay playsinline></video>
       </div>
-      <div class="col">
-        <div class="label">OCR 결과(텍스트 확인용)</div>
-        <textarea id="ocrText" placeholder="OCR 결과 텍스트가 여기에 표시됩니다."></textarea>
-        <div class="label">정답 출력</div>
-        <div id="answers" class="answers"></div>
-        <button id="btnReadAnswers">정답 숫자로 TTS 재생</button>
+      <div class="row">
+        <span id="pageInfo">현재 페이지: <span id="pageNumber">1</span></span>
+        <span class="badge" id="modelInfo">model: (알 수 없음)</span>
       </div>
-    </div>
+      <div class="section-label">로그</div>
+      <div id="log"></div>
+    </section>
 
-    <div class="row">
-      <div class="col">
-        <div class="label">로그</div>
-        <div id="log" class="status"></div>
-      </div>
-    </div>
-  </div>
+    <!-- 오른쪽: OCR 결과 + 정답 -->
+    <section class="panel">
+      <h2>OCR · 정답</h2>
+
+      <div class="section-label">OCR 텍스트</div>
+      <textarea id="ocrText" readonly></textarea>
+
+      <div class="section-label">정답 (원문)</div>
+      <pre id="answers">(아직 풀이 전입니다)</pre>
+    </section>
+  </main>
 
   <script>
-    // ===== 공통 유틸 =====
-    function appendLog(msg) {
-      const logEl = document.getElementById("log");
-      const time = new Date().toTimeString().slice(0, 8);
-      logEl.textContent += `[${time}] ${msg}\n`;
-      logEl.scrollTop = logEl.scrollHeight;
-      console.log(msg);
+    // ===== 기본 DOM 참조 =====
+    const videoEl = document.getElementById("video");
+    const btnStartCam = document.getElementById("btnStartCam");
+    const btnCapture = document.getElementById("btnCapture");
+    const btnReadAnswers = document.getElementById("btnReadAnswers");
+    const logEl = document.getElementById("log");
+    const ocrTextEl = document.getElementById("ocrText");
+    const answersEl = document.getElementById("answers");
+    const pageNumberEl = document.getElementById("pageNumber");
+    const modelInfoEl = document.getElementById("modelInfo");
+
+    let currentStream = null;
+    let wakeLock = null;
+    let currentPage = 1; // 필요하면 나중에 페이지 증가 로직 추가 가능
+    let lastAnswerText = "";
+
+    // ===== 로그 유틸 =====
+    function nowTime() {
+      const d = new Date();
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
     }
 
-    function speak(text, options = {}) {
-      const { rate = 1.0, pitch = 1.0, lang = "ko-KR" } = options;
+    function appendLog(msg) {
+      const line = `[${nowTime()}] ${msg}`;
+      console.log(line);
+      if (!logEl) return;
+      logEl.textContent += (logEl.textContent ? "\n" : "") + line;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // ===== 화면 꺼짐 방지(wake lock) =====
+    async function requestWakeLock() {
       try {
-        const synth = window.speechSynthesis;
-        if (!synth) {
-          appendLog("⚠️ 이 브라우저는 speechSynthesis(TTS)를 지원하지 않습니다.");
-          return;
+        if ("wakeLock" in navigator && navigator.wakeLock.request) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          appendLog("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
+          wakeLock.addEventListener("release", () => {
+            appendLog("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
+          });
         }
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = rate;
-        utter.pitch = pitch;
-        utter.lang = lang;
-        synth.cancel(); // 이전 말하기 중단
-        synth.speak(utter);
-      } catch (e) {
-        console.error(e);
-        appendLog("⚠️ TTS 재생 중 오류 발생.");
+      } catch (err) {
+        appendLog(`STATUS: 화면 꺼짐 방지 설정 실패: ${err && err.message ? err.message : err}`);
       }
     }
 
-    // ===== 정답 A~E를 1~5 숫자로 읽어주는 모듈 =====
+    async function releaseWakeLock() {
+      try {
+        if (wakeLock) {
+          await wakeLock.release();
+          wakeLock = null;
+        }
+      } catch (err) {
+        appendLog(`STATUS: 화면 꺼짐 방지 해제 실패: ${err && err.message ? err.message : err}`);
+      }
+    }
+
+    // ===== TTS (기본) =====
+    function speak(text, opts = {}) {
+      if (!("speechSynthesis" in window)) {
+        appendLog("STATUS: 이 브라우저는 TTS(speechSynthesis)를 지원하지 않습니다.");
+        return;
+      }
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = opts.lang || "ko-KR";
+      utter.rate = typeof opts.rate === "number" ? opts.rate : 1.0;
+      utter.pitch = typeof opts.pitch === "number" ? opts.pitch : 1.0;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    }
+
+    // ===== ABCDE → 12345 숫자로 읽어주는 TTS 유틸 =====
     (function () {
       const choiceMap = {
         "A": "1",
@@ -189,107 +297,105 @@
         const spoken = [];
 
         for (const line of lines) {
-          // "1: D", "1 - D", "01: B" 등 포맷 처리
+          // 예: "19: B", "19 - B", "01: c"
           const m = line.match(/^(\d+)\s*[:\-]\s*([A-Ea-e])/);
           if (!m) {
-            // 인식 못한 줄은 그대로 읽어도 됨 (혹시 몰라서)
+            // 포맷이 다르면 그냥 원문 읽기
             spoken.push(line);
             continue;
           }
-          const qNum = m[1].replace(/^0+/, "") || m[1]; // 01 -> 1
+          const qNum = m[1].replace(/^0+/, "") || m[1];
           const letter = m[2].toUpperCase();
           const num = choiceMap[letter] || letter;
-
-          // 예: "19번, 2번 정답입니다."
           spoken.push(`${qNum}번, ${num}번 정답입니다.`);
         }
 
         return spoken.join(" ");
       }
 
-      function readAnswersAsNumbers(rawAnswerText) {
+      window.readAnswersAsNumbers = function (rawAnswerText) {
         const toSpeak = formatAnswersForTts(rawAnswerText);
         if (!toSpeak) {
-          appendLog("⚠️ 읽을 정답이 없습니다.");
+          appendLog("STATUS: ⚠️ 읽을 정답이 없습니다.");
           return;
         }
-        appendLog(`TTS(숫자) 재생: ${toSpeak}`);
+        appendLog(`STATUS: TTS(숫자) 재생: ${toSpeak}`);
         speak(toSpeak, { rate: 1.0, pitch: 1.0, lang: "ko-KR" });
-      }
-
-      // 전역으로 노출
-      window.readAnswersAsNumbers = readAnswersAsNumbers;
+      };
     })();
 
-    // ===== 카메라 & OCR & SOLVE 파이프라인 =====
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ocrTextEl = document.getElementById("ocrText");
-    const answersEl = document.getElementById("answers");
-
-    const btnStartCamera = document.getElementById("btnStartCamera");
-    const btnCapture = document.getElementById("btnCapture");
-    const btnStopCamera = document.getElementById("btnStopCamera");
-    const btnReadAnswers = document.getElementById("btnReadAnswers");
-
-    let stream = null;
-    let currentPage = 1;
-
+    // ===== 카메라 제어 =====
     async function startCamera() {
       try {
-        appendLog("STATUS: 카메라를 켜는 중...");
-        stream = await navigator.mediaDevices.getUserMedia({
+        appendLog("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
+        await requestWakeLock();
+
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: "environment"
           },
           audio: false
         });
-        video.srcObject = stream;
-        btnCapture.disabled = false;
-        btnStopCamera.disabled = false;
+
+        if (currentStream) {
+          currentStream.getTracks().forEach(t => t.stop());
+        }
+        currentStream = stream;
+        videoEl.srcObject = stream;
         appendLog("STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
-      } catch (e) {
-        console.error(e);
-        appendLog("ERROR: 카메라를 켜지 못했습니다. 권한/브라우저 설정을 확인해줘.");
+
+        btnCapture.disabled = false;
+      } catch (err) {
+        appendLog(`STATUS: 카메라 시작 실패: ${err && err.message ? err.message : err}`);
       }
     }
 
     function stopCamera() {
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-        video.srcObject = null;
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
+        appendLog("STATUS: 카메라를 종료했어.");
       }
+      releaseWakeLock();
       btnCapture.disabled = true;
-      btnStopCamera.disabled = true;
-      appendLog("STATUS: 카메라를 껐어.");
     }
 
+    // ===== 한 페이지 캡처 + OCR + solve =====
     async function captureAndSolve() {
-      if (!stream) {
-        appendLog("⚠️ 카메라가 켜져 있지 않습니다.");
+      if (!currentStream) {
+        appendLog("STATUS: 카메라가 없습니다. 먼저 카메라를 켜 주세요.");
         return;
       }
+
+      const track = currentStream.getVideoTracks()[0];
+      if (!track) {
+        appendLog("STATUS: 비디오 트랙을 찾을 수 없습니다.");
+        return;
+      }
+
+      appendLog(`STATUS: 페이지 ${currentPage} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+
+      // 비디오 프레임 해상도
+      const settings = track.getSettings();
+      const width = settings.width || videoEl.videoWidth || 1080;
+      const height = settings.height || videoEl.videoHeight || 1920;
+
+      // 캔버스에 원본 해상도로 캡처
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(videoEl, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+
+      appendLog(`capture size {"width":${width},"height":${height},"length":${dataUrl.length}}`);
+
+      // ===== 1) OCR 호출 =====
+      appendLog("STATUS: OCR 처리 중...");
+
+      let ocrJson;
       try {
-        const track = stream.getVideoTracks()[0];
-        const settings = track.getSettings();
-        const width = settings.width || video.videoWidth || 1080;
-        const height = settings.height || video.videoHeight || 1920;
-
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, width, height);
-
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        appendLog(
-          `STATUS: 페이지 ${currentPage} 촬영 중... capture size {width:${width},height:${height},length:${dataUrl.length}}`
-        );
-
-        // 1) OCR 호출
-        appendLog("STATUS: OCR 처리 중...");
-        const ocrRes = await fetch("/.netlify/functions/ocr", {
+        const res = await fetch("/.netlify/functions/ocr", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -298,82 +404,101 @@
           })
         });
 
-        const ocrJson = await ocrRes.json();
-        if (!ocrJson.ok) {
-          appendLog(`OCR 실패: ${ocrJson.error || "Unknown"}`);
-          return;
-        }
+        ocrJson = await res.json();
+        appendLog(`OCR response ${JSON.stringify(ocrJson)}`);
+      } catch (err) {
+        appendLog(`STATUS: OCR 요청 실패: ${err && err.message ? err.message : err}`);
+        return;
+      }
 
-        const text = String(ocrJson.text || "");
-        const page = ocrJson.page ?? currentPage;
-        ocrTextEl.value = text;
-        appendLog(
-          `OCR response ${JSON.stringify({
-            ok: ocrJson.ok,
-            page,
-            text: text.slice(0, 200) + (text.length > 200 ? "..." : "")
-          })}`
-        );
-        appendLog(
-          `STATUS: OCR 완료 (페이지 ${page}). 이제 정답을 생성할게.`
-        );
+      if (!ocrJson || !ocrJson.ok) {
+        appendLog("STATUS: OCR 실패: Unknown");
+        return;
+      }
 
-        // 2) solve 호출
-        const solveRes = await fetch("/.netlify/functions/solve", {
+      const ocrText = String(ocrJson.text || "");
+      ocrTextEl.value = ocrText;
+      appendLog(`STATUS: OCR 완료 (평균 신뢰도: ${ocrJson.confidence ?? 0}, 번호 패턴 수: ${ocrJson.numberPatternCount ?? 0}). 이제 정답을 생성할게.`);
+
+      // ===== 2) solve 호출 =====
+      let solveJson;
+      try {
+        const res2 = await fetch("/.netlify/functions/solve", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ocrText: text,
-            page
+            page: currentPage,
+            ocrText: ocrText
           })
         });
 
-        const solveJson = await solveRes.json();
-        if (!solveJson.ok) {
-          appendLog(
-            `STATUS: solve 실패: ${solveJson.error || "Unknown error"}`
-          );
-          if (solveJson.dataPreview) {
-            appendLog(`solve dataPreview: ${solveJson.dataPreview.slice(0, 200)}...`);
-          }
-          return;
-        }
-
-        const answerText = String(solveJson.text || "").trim();
-        answersEl.textContent = answerText || "(정답 없음)";
-        appendLog(
-          `solve response ${JSON.stringify({
-            ok: solveJson.ok,
-            text: answerText,
-            debug: solveJson.debug || null
-          }).slice(0, 400)}`
-        );
-        appendLog(`STATUS: 페이지 ${page} 정답을 생성했어.`);
-
-        // 3) 정답을 숫자로 바로 읽기
-        if (answerText) {
-          window.readAnswersAsNumbers(answerText);
-        }
-
-        currentPage += 1;
-      } catch (e) {
-        console.error(e);
-        appendLog(`ERROR: captureAndSolve 중 예외 발생: ${e.message || e}`);
+        solveJson = await res2.json();
+        appendLog(`solve response ${JSON.stringify(solveJson)}`);
+      } catch (err) {
+        appendLog(`STATUS: solve 요청 실패: ${err && err.message ? err.message : err}`);
+        return;
       }
+
+      if (!solveJson || !solveJson.ok) {
+        appendLog("STATUS: solve 실패 (ok:false).");
+        return;
+      }
+
+      const answerText = String(solveJson.text || "").trim();
+      lastAnswerText = answerText;
+      answersEl.textContent = answerText || "(정답 없음)";
+
+      if (solveJson.debug && solveJson.debug.model) {
+        modelInfoEl.textContent = `model: ${solveJson.debug.model}`;
+      }
+
+      appendLog(`STATUS: 페이지 ${currentPage} 정답을 생성했어.`);
+
+      // 자동 TTS (숫자)
+      if (answerText) {
+        window.readAnswersAsNumbers(answerText);
+      }
+
+      // 필요하면 페이지 번호 증가 로직 추가 가능:
+      // currentPage += 1;
+      // pageNumberEl.textContent = String(currentPage);
     }
 
     // ===== 이벤트 바인딩 =====
-    btnStartCamera.addEventListener("click", startCamera);
-    btnStopCamera.addEventListener("click", stopCamera);
-    btnCapture.addEventListener("click", captureAndSolve);
-
-    btnReadAnswers.addEventListener("click", () => {
-      const txt = answersEl.textContent || "";
-      window.readAnswersAsNumbers(txt);
+    btnStartCam.addEventListener("click", () => {
+      startCamera();
     });
 
-    // 초기 로그
-    appendLog("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
+    btnCapture.addEventListener("click", () => {
+      captureAndSolve();
+    });
+
+    btnReadAnswers.addEventListener("click", () => {
+      if (!lastAnswerText) {
+        appendLog("STATUS: 아직 정답이 없습니다.");
+        return;
+      }
+      window.readAnswersAsNumbers(lastAnswerText);
+    });
+
+    // 페이지 떠날 때 카메라/웬락 정리
+    window.addEventListener("beforeunload", () => {
+      stopCamera();
+    });
+
+    // ===== 초기 TTS 테스트 =====
+    window.addEventListener("load", () => {
+      appendLog("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
+      speak("음성 테스트입니다. 이후에는 자동으로 정답을 숫자로 읽어 줄게요.", {
+        lang: "ko-KR",
+        rate: 1.0,
+        pitch: 1.0
+      });
+
+      // 숫자로 읽기 버튼 활성화는 solve 성공 이후에 의미 있지만,
+      // 최소한 버튼 자체는 눌릴 수 있게만 두고, 내부에서 lastAnswerText 체크
+      btnReadAnswers.disabled = false;
+    });
   </script>
 </body>
 </html>
