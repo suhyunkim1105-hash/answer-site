@@ -1,62 +1,100 @@
 // netlify/functions/solve.js
-// 편입영어 객관식 기출 자동 채점용 solve 함수
-// - 입력: { page, ocrText } (또는 { text })
-// - 출력: { ok, text: "1: A\n2: D...", debug: { ... } }
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// Netlify Node 18+ 에서는 global fetch 가 있지만,
+// 만약 없을 경우를 대비해 node-fetch 로 폴백.
+const fetchFn = (...args) => {
+  if (typeof fetch !== "undefined") return fetch(...args);
+  return import("node-fetch").then(({ default: f }) => f(...args));
+};
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify(obj),
   };
 }
 
-// 모델 출력에서 "번호: 선택지"만 뽑아서 정리
-function parseAnswers(raw) {
-  if (!raw) return { questionNumbers: [], answers: {} };
+const SYSTEM_PROMPT = `
+You are an AI that answers Korean college transfer English multiple-choice exams.
 
-  const lines = raw
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+[Primary goals, in order]
+1) Minimize wrong answers.
+2) Never skip a question that appears in the text.
+3) Output only the final answer key in the required format.
 
-  const answers = {};
-  const questionNumbers = [];
+[Input]
+- OCR text of one or more exam pages.
+- The text can contain: question numbers, directions, passages, choices (A/B/C/D/E or ①②③④).
+- Some questions ask for the correct statement; some ask for the WRONG / NOT / EXCEPT statement; some ask which underlined word is NOT correct; some ask to reorder sentences, etc.
 
-  const choiceMapDigitToLetter = {
-    "1": "A",
-    "2": "B",
-    "3": "C",
-    "4": "D",
-    "5": "E",
-  };
+[Output format rules – MUST follow exactly]
+- One question per line.
+- Format: "<number>: <capital letter>" (examples: "7: D", "19: B").
+- No explanations, no Korean, no extra text, no blank lines, no punctuation other than colon and space.
+- Question numbers must be in ascending order if possible.
+- Exactly one answer for each visible question number.
 
-  for (const line of lines) {
-    // 기대 포맷: "12: A" 또는 "12:A" 또는 "12 - A"
-    const m = line.match(/^(\d+)\s*[:\-]\s*([A-E1-5])/i);
-    if (!m) continue;
+[General solving method – internal only]
+- First, scan the whole OCR text and list all clearly visible question numbers.
+- For each question:
+  - Gather its stem, passage (if any), and its choices.
+  - Then choose exactly one best option.
 
-    const qNum = parseInt(m[1], 10);
-    let choice = m[2].toUpperCase();
+[Special rules by question type]
 
-    if (choiceMapDigitToLetter[choice]) {
-      choice = choiceMapDigitToLetter[choice];
-    }
+1) Normal comprehension / vocabulary / inference questions
+- Use the passage meaning and logic to choose the option that is most strongly supported.
+- When several options look possible, prefer the one that matches the key idea and tone of the passage.
+- Do NOT guess based only on how “fancy” or “rare” a word looks.
 
-    if (!["A", "B", "C", "D", "E"].includes(choice)) continue;
+2) Questions like “Which is NOT correct?”, “Which is INCORRECT?”, “Which is WRONG?”, “EXCEPT”
+- Treat these as reverse questions.
+- INTERNAL PROCEDURE:
+  - For each choice A–E, decide if the statement is TRUE or FALSE with respect to the passage:
+    - TRUE = clearly stated, strongly implied, or naturally supported by the passage.
+    - FALSE = contradicts the passage OR there is no sufficient support in the passage.
+  - Mark exactly ONE choice as FALSE. That FALSE choice is the correct answer.
+- Very important:
+  - If the passage directly supports or clearly implies a choice, you MUST treat that choice as TRUE, even if it sounds negative, critical, or surprising.
+  - If a choice makes a stronger or exaggerated claim than the passage, treat it as FALSE.
 
-    answers[String(qNum)] = choice;
-    questionNumbers.push(qNum);
-  }
+3) “Which underlined word/phrase is NOT correct?” (word choice / usage questions)
+- For each underlined expression:
+  - Check its dictionary meaning and typical usage.
+  - Check if it fits both the grammatical structure AND the logical meaning of the sentence and passage.
+- Choose the ONLY underlined word that is wrong in meaning or usage.
+- Pay special attention to:
+  - Time/sequence words like “predate / postdate / precede / follow” and logical polarity (increase vs decrease, possible vs impossible).
+  - Words that reverse meaning (e.g., “cause” vs “prevent”).
+- Very important:
+  - Do NOT treat a word as wrong just because it is rare or looks unusual.
+  - Academic expressions such as “slippage between A and B”, “tension between A and B”, “microcosm of ~”, etc. can be correct if they match the context.
+  - Prefer the option whose literal meaning clearly contradicts the facts described in the passage (for example, saying that digital procedures “postdate” computers when the passage explains they existed long before computers).
 
-  // 중복 제거 + 정렬
-  const uniqNums = Array.from(new Set(questionNumbers)).sort((a, b) => a - b);
-  return { questionNumbers: uniqNums, answers };
-}
+4) Reordering sentence questions
+- Reconstruct a coherent paragraph that:
+  - Introduces the topic naturally.
+  - Respects time order and logic.
+  - Has smooth pronoun and article references (“this city”, “such a practice”, “these hotels”, etc.).
+- Choose the option whose order best matches this coherent structure.
+
+5) Inference questions (“What can be inferred…?”)
+- Choose only statements that are strongly supported by the passage.
+- Do NOT choose options that add new claims that the passage does not support (even if they sound reasonable).
+
+[If information seems partial]
+- Still choose exactly ONE answer per question.
+- Use the passage meaning and the strongest logical constraints (time order, cause/effect, contrast, definitions).
+- Never output “I don’t know” or any explanation.
+
+[Final reminder]
+- Follow all output format rules strictly: only lines like “19: B”.
+- Do not include any other text.
+`;
 
 exports.handler = async (event) => {
   try {
@@ -70,8 +108,8 @@ exports.handler = async (event) => {
     }
 
     const model = process.env.MODEL_NAME || "openai/gpt-4.1";
-    const temperature = Number(process.env.TEMPERATURE ?? 0.0);
-    const maxTokens = Number(process.env.MAX_TOKENS ?? 768);
+    const stopToken = process.env.STOP_TOKEN || "XURTH";
+    const temperature = Number(process.env.TEMPERATURE ?? 0.1);
 
     let body = {};
     try {
@@ -81,255 +119,97 @@ exports.handler = async (event) => {
     }
 
     const page = body.page ?? 1;
-    const ocrText = String(body.ocrText || body.text || "").trim();
+    const ocrTextRaw = String(body.ocrText || body.text || "");
+    const ocrText = ocrTextRaw.trim();
 
     if (!ocrText) {
-      return json(400, { ok: false, error: "Missing ocrText/text" });
+      return json(400, { ok: false, error: "Missing ocrText" });
     }
 
-    // ----------------- 프롬프트 (강화 버전) -----------------
-    const systemPrompt = `
-You are an answer-key generator for Korean university transfer English multiple-choice exams.
-You receive raw OCR text of one test page, including:
-- Question numbers (e.g., 1., 2., 16., 24., 33., etc.)
-- Question stems and options (A–E or ①–⑤)
-- Section headings like [QUESTIONS 1-4], instructions, etc.
+    const userPrompt = [
+      "You will receive OCR text from an English multiple-choice exam.",
+      `Page: ${page}`,
+      "",
+      "OCR TEXT:",
+      ocrText,
+      "",
+      `Remember: output only lines in the exact format "number: LETTER".`,
+    ].join("\n");
 
-Your ONLY job:
-- For EVERY visible question number in the OCR text,
-  output EXACTLY one final answer choice.
-
-==================================================
-STRICT FORMAT
-==================================================
-1) Output format
-   - One line per question
-   - Format: "<number>: <choice>"
-     - Example:
-       1: A
-       2: D
-       3: C
-   - <number> is the integer question number (1, 2, 3, ..., 40, etc.).
-   - <choice> is a SINGLE letter among A, B, C, D, E.
-   - DO NOT output anything else:
-     - No explanations
-     - No comments
-     - No extra words
-     - No "UNSURE"
-     - No headings
-   - If you accidentally think of any explanation, KEEP IT INTERNAL.
-     Only output the bare answer lines.
-
-2) Coverage (NO missing questions)
-   - Carefully scan the whole OCR text and detect ALL question numbers that truly belong to the page.
-   - If a question number appears with a stem and visible choices, you MUST output an answer line for it.
-   - Even if the last options are partially cut off or the OCR has minor noise,
-     you MUST still choose the BEST guess and output an answer.
-   - Never skip a visible, valid question number.
-
-3) Choices mapping
-   - If options appear as ①②③④⑤ (or 1,2,3,4,5), convert them internally:
-       1 → A, 2 → B, 3 → C, 4 → D, 5 → E
-   - Your final output must ALWAYS use letters A–E.
-
-==================================================
-LOGIC GUIDELINES BY QUESTION TYPE
-==================================================
-
-A. VOCABULARY / WORD MEANING (synonym, closest in meaning)
-----------------------------------------------------------
-- First, infer the core dictionary meaning from the sentence.
-- Then choose the option whose CORE meaning matches best in that context.
-- Ignore superficial similarity; match the key nuance:
-  * If a word implies "sacred place or holy site for gods or heroes"
-    (e.g., a 'pantheon' where heroes have a sacred place),
-    prefer an option like "temple, shrine, sacred place"
-    rather than "memorial" (a generic monument).
-  * If a word implies "group of gods or heroes collectively",
-    think of "a sacred group / shrine-like collection", not just "old things" or "legends".
-- Consider:
-  * positive/negative tone,
-  * strength (mild vs extreme),
-  * concrete vs abstract.
-- Do NOT be tricked by partial overlap. Choose the word that works
-  if you literally replace it in the sentence.
-
-B. NOT / EXCEPT / LEAST / FALSE questions
------------------------------------------
-- If the stem includes NOT, EXCEPT, LEAST, FALSE, INCORRECT, WRONG:
-  1) Determine the main claims and support in the passage.
-  2) For each option:
-     - Check if it is clearly supported, implied, or consistent → then it is NOT the answer.
-     - The correct answer is the one that is contradicted or not supported.
-  3) For "LEAST" questions:
-     - The correct answer is the one LEAST consistent with the overall passage, tone, and evidence.
-- Read carefully: if most options are clearly true, the odd one out (unsupported or opposite)
-  is the answer.
-
-C. TITLE / MAIN IDEA / BEST TITLE
----------------------------------
-- The BEST title:
-  - Captures the entire passage, not just an example or one detail.
-  - Matches the central focus (what the author mainly does or argues).
-  - Avoids being too narrow (only one place, time, or small detail) if the passage is broader.
-  - Avoids being too general if the passage is clearly specific.
-- Prefer titles that:
-  - Mention the true subject (e.g., origin of the American cowboy),
-  - Reflect the author’s perspective or purpose.
-- Eliminate titles that:
-  - Focus on side stories or one locale only (e.g., only “Texas”)
-    when the passage talks about earlier origins in Spain / Hispaniola, etc.
-  - Contradict the time frame or emphasis.
-
-D. TEXT TYPE / AUTHOR'S PRESENTATION (editorial vs ethnologist vs term paper etc.)
------------------------------------------------------------------------------------
-- Editorial for a conservative newspaper:
-  * Strong opinion, persuasive tone, focusing on current issues,
-    often normative ("should / must / we ought to").
-- Term paper from a graduate student:
-  * Structured, analytical, thesis + support, references to theory or examples.
-  * Academic but not necessarily describing fieldwork or cultures in detail.
-- Statement from an avant-garde artist:
-  * Very subjective, experimental language, focus on art, form, self-expression.
-- Cultural theory from an ethnologist:
-  * Describes and analyzes patterns across cultures or societies,
-    uses terms like "society", "culture", "ritual", "New World / Old World",
-    discusses canons, national literatures, etc.
-- For passages about "national literature", "young vs old societies", "canons", etc.,
-  the style is usually closer to cultural theory / ethnology than a newspaper editorial.
-
-E. PARAGRAPH / SENTENCE ORDER (reordering, e.g., A–E)
------------------------------------------------------
-- Use clear logical markers:
-  * Time: "By mid-December 1914" → should appear earlier than "By the end of the war".
-  * Cause-effect: context first, result next.
-  * Pronouns and definite descriptions must refer to something already introduced.
-- Typical structure:
-  1) Background or setting (often with dates or general context).
-  2) Development of situation (problems, conflicts).
-  3) Consequences or reactions.
-  4) Final outcome or conclusion (e.g., repeal, solution, new law).
-- Eliminate orders where:
-  * A sentence refers to "this" or "such a situation" before it is introduced.
-  * A conclusion appears before reasons.
-  * A time sequence is reversed without explanation.
-
-F. INFERENCE / ATTITUDE / PURPOSE
----------------------------------
-- Focus on what the passage as a whole is doing:
-  * explaining a conflict (e.g., between sugarcane and guinea grass),
-  * describing bio-cultural history,
-  * analyzing extinction events,
-  * etc.
-- For purpose:
-  * "To explain the bio-cultural conflict between X and Y" is better than
-    a narrow or alarmist option if the passage is broadly explanatory.
-- For attitude:
-  * Identify whether the tone is critical, nostalgic, analytical, etc.
-
-G. AMBIGUOUS / PARTIAL OCR
----------------------------
-- If some words are broken or letters are wrong (e.g., "21\" century"),
-  infer the intended phrase from context ("21st century").
-- If one or two options are slightly garbled but still recognizable,
-  decode them logically and still choose the best.
-
-==================================================
-FINAL OUTPUT REMINDER
-==================================================
-- Scan all visible question numbers on this page.
-- For each, decide the SINGLE best answer.
-- Output ONLY lines in the exact format: "<number>: <choice>"
-- Sort lines strictly by question number in ascending order.
-- Do NOT include explanations or any extra text.
-`;
-
-    const userPrompt = `
-Here is the raw OCR text of one exam page.
-
-OCR TEXT (page ${page}):
---------------------------------------------------
-${ocrText}
---------------------------------------------------
-
-Now:
-- Detect every question number that belongs to this page.
-- For each detected question number, choose the single best answer.
-- Output ONLY lines in the format "<number>: <choice>" (e.g., "16: B").
-- Sort lines by question number in ascending order.
-`;
-
-    // ----------------- OpenRouter 호출 -----------------
-    const resp = await fetch(OPENROUTER_URL, {
+    const res = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
-        "HTTP-Referer":
-          process.env.OPENROUTER_REFERRER ||
-          "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site-solve",
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site-solve-fn",
       },
       body: JSON.stringify({
         model,
         temperature,
-        max_tokens: maxTokens,
+        stop: [stopToken],
         messages: [
-          { role: "system", content: systemPrompt.trim() },
-          { role: "user", content: userPrompt.trim() },
+          { role: "system", content: SYSTEM_PROMPT.trim() },
+          { role: "user", content: userPrompt },
         ],
       }),
     });
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return json(502, {
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return json(res.status, {
         ok: false,
-        error: `OpenRouter request failed: ${resp.status}`,
-        detail: text.slice(0, 500),
+        error: `OpenRouter HTTP ${res.status}`,
+        details: text.slice(0, 500),
       });
     }
 
-    const data = await resp.json().catch(() => null);
-    const choice = data && data.choices && data.choices[0];
-    const content =
-      choice && choice.message && typeof choice.message.content === "string"
-        ? choice.message.content.trim()
-        : "";
+    const data = await res.json();
+    const raw = String(data.choices?.[0]?.message?.content || "").trim();
 
-    if (!content) {
-      return json(500, {
-        ok: false,
-        error: "Empty answer from model",
-        dataPreview: JSON.stringify(data || {}, null, 2).slice(0, 500),
-      });
+    // STOP_TOKEN 이전까지만 사용
+    const cleaned = raw.split(stopToken)[0].trim();
+
+    const lines = cleaned
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    const answers = {};
+    const questionNumbers = [];
+    const answerLines = [];
+
+    for (const line of lines) {
+      const m = line.match(/^(\d+)\s*[:\-]\s*([A-E])(\?)?\s*$/i);
+      if (!m) continue;
+      const qNum = Number(m[1]);
+      const choice = m[2].toUpperCase();
+      const unsure = !!m[3];
+
+      answers[qNum] = choice;
+      questionNumbers.push(qNum);
+      answerLines.push(`${qNum}: ${choice}${unsure ? "?" : ""}`);
     }
 
-    const { questionNumbers, answers } = parseAnswers(content);
-
-    const finalText = questionNumbers
-      .map((n) => `${n}: ${answers[String(n)]}`)
-      .join("\n");
+    const outputLines = answerLines.length > 0 ? answerLines : lines;
 
     return json(200, {
       ok: true,
-      text: finalText,
+      text: outputLines.join("\n"),
       debug: {
         page,
         model,
         questionNumbers,
         answers,
-        finishReason:
-          (choice && (choice.finish_reason || choice.native_finish_reason)) ||
-          "",
-        ocrTextPreview: ocrText.slice(0, 500),
+        finishReason: data.choices?.[0]?.finish_reason ?? null,
+        ocrTextPreview: ocrText.slice(0, 400),
       },
     });
   } catch (err) {
+    console.error("solve.js error", err);
     return json(500, {
       ok: false,
-      error: "solve internal error",
-      detail: String(err && err.message ? err.message : err),
+      error: err && err.message ? err.message : "Unknown error in solve function",
     });
   }
 };
