@@ -1,505 +1,507 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>answer-site (편입 자동 풀이)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>answer-site</title>
   <style>
+    :root { color-scheme: dark; }
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #111;
-      color: #eee;
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:#0b1020; color:#e9eefc;
     }
-
-    header {
-      padding: 10px 14px;
-      background: #181818;
-      border-bottom: 1px solid #333;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
+    .wrap { max-width: 980px; margin: 0 auto; padding: 18px; }
+    .card {
+      background:#0f1835;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius: 18px;
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.25);
     }
-
-    header h1 {
-      font-size: 16px;
-      margin: 0;
-      font-weight: 600;
-    }
-
-    header .controls {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
+    h2 { margin:0 0 10px 0; font-size: 18px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     button {
-      border: 1px solid #444;
-      background: #222;
-      color: #eee;
-      padding: 6px 10px;
-      border-radius: 4px;
+      background:#2b6cff;
+      border:none;
+      color:white;
+      padding:10px 14px;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor:pointer;
       font-size: 13px;
-      cursor: pointer;
     }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: default;
+    button.secondary { background:#243055; }
+    button.danger { background:#b8234a; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    input {
+      background:#0b1020; color:#e9eefc;
+      border:1px solid rgba(255,255,255,.14);
+      border-radius: 10px; padding:10px 12px;
     }
-
-    main {
-      flex: 1;
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-      gap: 8px;
-      padding: 8px;
+    .previewWrap {
+      height: 70vh;
+      min-height: 360px;
+      border-radius: 18px;
+      overflow:hidden;
+      background:#050a18;
+      border:1px solid rgba(255,255,255,.08);
     }
-
-    @media (max-width: 900px) {
-      main {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .panel {
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 8px;
-      background: #161616;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-height: 0;
-    }
-
-    .panel h2 {
-      margin: 0 0 4px;
-      font-size: 14px;
-      font-weight: 600;
-    }
-
-    #videoContainer {
-      position: relative;
-      width: 100%;
-      height: 70vh; /* 네가 말한 크게 보이는 프리뷰 */
-      max-height: 70vh;
-      background: #000;
-      border-radius: 6px;
-      overflow: hidden;
-    }
-
-    #video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000;
-    }
-
-    #pageInfo {
-      font-size: 12px;
-      opacity: 0.8;
-    }
-
-    textarea, pre {
-      width: 100%;
-      box-sizing: border-box;
-      border-radius: 4px;
-      border: 1px solid #333;
-      background: #111;
-      color: #eee;
-      font-size: 12px;
-      padding: 6px;
-      resize: vertical;
-      min-height: 80px;
-      font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    video { width:100%; height:100%; object-fit: contain; background:#000; }
+    .hint { opacity:.8; font-size: 13px; line-height: 1.5; margin-top: 10px; }
+    pre {
+      margin:0;
       white-space: pre-wrap;
-      word-break: break-all;
-    }
-
-    #log {
-      height: 140px;
-      overflow-y: auto;
-      font-size: 11px;
-      background: #000;
-      border-radius: 4px;
-      padding: 6px;
-      border: 1px solid #333;
-      white-space: pre-wrap;
-    }
-
-    .section-label {
+      word-break: break-word;
       font-size: 12px;
-      font-weight: 500;
-      margin-top: 4px;
+      line-height: 1.45;
     }
-
-    .row {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .row span {
+    textarea {
+      width:100%; min-height: 160px; resize: vertical;
+      background:#0b1020; color:#e9eefc;
+      border:1px solid rgba(255,255,255,.14);
+      border-radius: 12px; padding:12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 12px;
-      opacity: 0.9;
     }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 2px 6px;
-      border-radius: 999px;
-      background: #222;
-      border: 1px solid #444;
-      font-size: 11px;
-      opacity: 0.8;
-    }
+    .small { font-size: 12px; opacity: .85; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>answer-site · 편입 영어 자동 풀이</h1>
-    <div class="controls">
-      <button id="btnStartCam">카메라 켜기</button>
-      <button id="btnCapture" disabled>한 페이지 촬영 + OCR + 풀이</button>
-      <button id="btnReadAnswers" disabled>정답 다시 읽기 (숫자)</button>
+  <div class="wrap">
+    <div class="card">
+      <h2>카메라 / 자동 문제풀이</h2>
+      <div class="row" style="margin-bottom:8px;">
+        <button id="btnStart">카메라 시작</button>
+        <button id="btnShot" class="secondary">현재 페이지 촬영</button>
+        <span class="small">현재 페이지</span>
+        <input id="page" type="number" value="1" min="1" style="width:90px" />
+        <span id="res" class="small"></span>
+      </div>
+      <div class="row" style="margin-bottom:8px;">
+        <button id="btnTtsTest" class="secondary">음성 테스트</button>
+        <button id="btnAutoStart">자동 문제풀이 시작</button>
+        <button id="btnAutoStop" class="danger">자동 문제풀이 정지</button>
+      </div>
+
+      <div class="previewWrap">
+        <video id="video" playsinline autoplay muted></video>
+      </div>
+
+      <div class="hint">
+        ① 시험지를 화면에 꽉 채우고<br/>
+        ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
+        ③ 자동 문제풀이를 켜면, 페이지마다<br/>
+        &nbsp;&nbsp;&nbsp;- <b>“페이지 인식, 1 2 3”</b> (예고 TTS)<br/>
+        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 반복.
+      </div>
     </div>
-  </header>
 
-  <main>
-    <!-- 왼쪽: 카메라 + 로그 -->
-    <section class="panel">
-      <h2>카메라 · 상태</h2>
-      <div id="videoContainer">
-        <video id="video" autoplay playsinline></video>
-      </div>
-      <div class="row">
-        <span id="pageInfo">현재 페이지: <span id="pageNumber">1</span></span>
-        <span class="badge" id="modelInfo">model: (알 수 없음)</span>
-      </div>
-      <div class="section-label">로그</div>
-      <div id="log"></div>
-    </section>
+    <div class="card">
+      <h2>로그</h2>
+      <pre id="log"></pre>
+    </div>
 
-    <!-- 오른쪽: OCR 결과 + 정답 -->
-    <section class="panel">
-      <h2>OCR · 정답</h2>
+    <div class="card">
+      <h2>OCR 원문 확인</h2>
+      <div class="small">여기서 OCR이 얼마나 제대로 뽑혔는지 즉시 확인해. (정답률의 핵심)</div>
+      <div style="height:10px"></div>
+      <textarea id="ocrBox" placeholder="OCR 결과가 여기에 표시됨" readonly></textarea>
+    </div>
 
-      <div class="section-label">OCR 텍스트</div>
-      <textarea id="ocrText" readonly></textarea>
-
-      <div class="section-label">정답 (원문)</div>
-      <pre id="answers">(아직 풀이 전입니다)</pre>
-    </section>
-  </main>
+    <div class="card">
+      <h2>정답</h2>
+      <div class="small">정답은 "1: A" 같은 형식 + 마지막 줄에 UNSURE: ... 로 나옴. 음성으로도 읽어줌.</div>
+      <div style="height:10px"></div>
+      <textarea id="ansBox" placeholder="정답 결과가 여기에 표시됨" readonly></textarea>
+    </div>
+  </div>
 
   <script>
-    // ===== 기본 DOM 참조 =====
-    const videoEl = document.getElementById("video");
-    const btnStartCam = document.getElementById("btnStartCam");
-    const btnCapture = document.getElementById("btnCapture");
-    const btnReadAnswers = document.getElementById("btnReadAnswers");
-    const logEl = document.getElementById("log");
-    const ocrTextEl = document.getElementById("ocrText");
-    const answersEl = document.getElementById("answers");
-    const pageNumberEl = document.getElementById("pageNumber");
-    const modelInfoEl = document.getElementById("modelInfo");
+    const $ = (id) => document.getElementById(id);
 
-    let currentStream = null;
-    let wakeLock = null;
-    let currentPage = 1; // 필요하면 나중에 페이지 증가 로직 추가 가능
-    let lastAnswerText = "";
+    const video   = $("video");
+    const logEl   = $("log");
+    const ocrBox  = $("ocrBox");
+    const ansBox  = $("ansBox");
+    const btnShot = $("btnShot");
+    const btnStart = $("btnStart");
+    const btnTtsTest = $("btnTtsTest");
+    const btnAutoStart = $("btnAutoStart");
+    const btnAutoStop  = $("btnAutoStop");
+    const resEl  = $("res");
 
-    // ===== 로그 유틸 =====
-    function nowTime() {
+    function ts() {
       const d = new Date();
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      const ss = String(d.getSeconds()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mm = String(d.getMinutes()).padStart(2,"0");
+      const ss = String(d.getSeconds()).padStart(2,"0");
       return `${hh}:${mm}:${ss}`;
     }
 
-    function appendLog(msg) {
-      const line = `[${nowTime()}] ${msg}`;
-      console.log(line);
-      if (!logEl) return;
-      logEl.textContent += (logEl.textContent ? "\n" : "") + line;
+    function log(msg) {
+      logEl.textContent += `[${ts()}] ${msg}\n`;
       logEl.scrollTop = logEl.scrollHeight;
     }
 
-    // ===== 화면 꺼짐 방지(wake lock) =====
-    async function requestWakeLock() {
-      try {
-        if ("wakeLock" in navigator && navigator.wakeLock.request) {
-          wakeLock = await navigator.wakeLock.request("screen");
-          appendLog("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
-          wakeLock.addEventListener("release", () => {
-            appendLog("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
-          });
+    let stream = null;
+    let busy = false;       // 수동 촬영 락
+    let autoMode = false;   // 자동 모드 on/off
+    let autoTimer = null;
+    let lastOcrNonEmpty = false; // 직전 자동 OCR에서 글자가 있었는지
+    let wakeLock = null;
+
+    // ---- 공통 유틸 ----
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    // ---- 카메라 ----
+    async function startCamera() {
+      if (stream) return;
+
+      log("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
+
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width:  { min: 1280, ideal: 1920 },
+          height: { min: 720,  ideal: 1080 },
         }
-      } catch (err) {
-        appendLog(`STATUS: 화면 꺼짐 방지 설정 실패: ${err && err.message ? err.message : err}`);
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+
+      await new Promise((r) => {
+        video.onloadedmetadata = () => r();
+      });
+
+      try {
+        const track = stream.getVideoTracks()[0];
+        await track.applyConstraints({
+          advanced: [
+            { width: 1920, height: 1080 },
+            { width: 1280, height: 720 }
+          ]
+        });
+      } catch (_) {}
+
+      setTimeout(() => {
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        resEl.textContent = vw && vh ? `캠 해상도: ${vw}×${vh}` : "";
+        log("STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
+      }, 200);
+    }
+
+    function captureDataURL() {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) throw new Error("Video not ready");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = vw;
+      canvas.height = vh;
+
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, vw, vh);
+
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      return { dataUrl, vw, vh, length: dataUrl.length };
+    }
+
+    async function doOCR(page, dataUrl) {
+      const res = await fetch("/.netlify/functions/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page, image: dataUrl }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok && data.ok, ...data };
+    }
+
+    async function doSolve(page, ocrText) {
+      const res = await fetch("/.netlify/functions/solve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page, ocrText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok && data.ok, ...data };
+    }
+
+    // ---- Wake Lock (화면 꺼짐 방지) ----
+    async function enableWakeLock() {
+      try {
+        if ("wakeLock" in navigator && !wakeLock) {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener("release", () => {
+            log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
+            wakeLock = null;
+          });
+          log("STATUS: 화면 꺼짐 방지(wake lock) 설정됨.");
+        }
+      } catch (e) {
+        log(`STATUS: wake lock 설정 실패: ${e?.message || e}`);
       }
     }
 
-    async function releaseWakeLock() {
+    async function disableWakeLock() {
       try {
         if (wakeLock) {
           await wakeLock.release();
           wakeLock = null;
+          log("STATUS: 화면 꺼짐 방지(wake lock) 해제됨.");
         }
-      } catch (err) {
-        appendLog(`STATUS: 화면 꺼짐 방지 해제 실패: ${err && err.message ? err.message : err}`);
+      } catch (e) {
+        // 무시
       }
     }
 
-    // ===== TTS (기본) =====
-    function speak(text, opts = {}) {
-      if (!("speechSynthesis" in window)) {
-        appendLog("STATUS: 이 브라우저는 TTS(speechSynthesis)를 지원하지 않습니다.");
-        return;
-      }
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = opts.lang || "ko-KR";
-      utter.rate = typeof opts.rate === "number" ? opts.rate : 1.0;
-      utter.pitch = typeof opts.pitch === "number" ? opts.pitch : 1.0;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utter);
+    // ---- TTS ----
+    let ttsEnabled = false;
+
+    function speakNow(text) {
+      return new Promise((resolve) => {
+        if (!("speechSynthesis" in window)) return resolve();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "ko-KR";  // 유사 '유나' 스타일 한국어 여성 보이스 선택될 가능성↑
+        utter.rate = 1.0;
+        utter.pitch = 1.0;
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        window.speechSynthesis.speak(utter);
+      });
     }
 
-    // ===== ABCDE → 12345 숫자로 읽어주는 TTS 유틸 =====
-    (function () {
-      const choiceMap = {
-        "A": "1",
-        "B": "2",
-        "C": "3",
-        "D": "4",
-        "E": "5"
-      };
+    async function speakTest() {
+      ttsEnabled = true;
+      await speakNow("테스트");
+      log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
+    }
 
-      function formatAnswersForTts(rawAnswerText) {
-        if (!rawAnswerText || typeof rawAnswerText !== "string") return "";
+    // ★ 여기: 페이지 인식 1 2 3 (예고용)
+    async function speakPageCountdown() {
+      if (!ttsEnabled) return;
+      await speakNow("페이지 인식, 일");
+      await sleep(400);
+      await speakNow("이");
+      await sleep(400);
+      await speakNow("삼");
+    }
 
-        const lines = rawAnswerText
-          .split(/\r?\n/)
-          .map(line => line.trim())
-          .filter(line => line.length > 0);
+    function parseSolveTextForTts(text) {
+      const items = [];
+      let unsureList = [];
 
-        const spoken = [];
+      const lines = String(text || "").split(/\r?\n/);
+      for (const raw of lines) {
+        const ln = raw.trim();
+        if (!ln) continue;
 
-        for (const line of lines) {
-          // 예: "19: B", "19 - B", "01: c"
-          const m = line.match(/^(\d+)\s*[:\-]\s*([A-Ea-e])/);
-          if (!m) {
-            // 포맷이 다르면 그냥 원문 읽기
-            spoken.push(line);
-            continue;
-          }
-          const qNum = m[1].replace(/^0+/, "") || m[1];
-          const letter = m[2].toUpperCase();
-          const num = choiceMap[letter] || letter;
-          spoken.push(`${qNum}번, ${num}번 정답입니다.`);
+        let m = ln.match(/^(\d{1,3})\s*:\s*([A-E]|[1-5])\b/i);
+        if (m) {
+          const num = Number(m[1]);
+          const ans = m[2].toUpperCase();
+          items.push({ num, ans });
+          continue;
         }
+        m = ln.match(/^UNSURE\s*:\s*(.+)$/i);
+        if (m) {
+          const parts = m[1].split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+          unsureList = parts.map(x => Number(x)).filter(n => !isNaN(n));
+        }
+      }
+      return { items, unsure: unsureList };
+    }
 
-        return spoken.join(" ");
+    async function speakAnswers(text) {
+      if (!ttsEnabled) return;
+      const { items, unsure } = parseSolveTextForTts(text);
+
+      for (const { num, ans } of items) {
+        let spokenAns = ans;
+        if ("ABCDE".includes(ans)) {
+          const map = { A:"에이", B:"비", C:"씨", D:"디", E:"이" };
+          spokenAns = map[ans] || ans;
+        }
+        await speakNow(`${num}번, ${spokenAns}`);
+        await sleep(1500); // 문항 사이 1.5초 정도 쉼
       }
 
-      window.readAnswersAsNumbers = function (rawAnswerText) {
-        const toSpeak = formatAnswersForTts(rawAnswerText);
-        if (!toSpeak) {
-          appendLog("STATUS: ⚠️ 읽을 정답이 없습니다.");
+      if (unsure.length) {
+        await speakNow(`불확실한 번호, ${unsure.join(", ")}`);
+        await sleep(1500);
+      }
+    }
+
+    // ---- 수동 촬영 ----
+    btnStart.addEventListener("click", async () => {
+      try {
+        await startCamera();
+        await enableWakeLock();
+      } catch (e) {
+        log(`STATUS: 카메라 실패: ${e?.message || e}`);
+      }
+    });
+
+    btnShot.addEventListener("click", async () => {
+      if (busy) return;
+      busy = true;
+      btnShot.disabled = true;
+
+      try {
+        await startCamera();
+
+        const page = Number($("page").value || 1);
+
+        log(`STATUS: 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+        const cap = captureDataURL();
+        log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
+
+        log("STATUS: OCR 처리 중...");
+        const ocr = await doOCR(page, cap.dataUrl);
+        log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
+
+        if (!ocr.ok) {
+          log(`STATUS: OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
           return;
         }
-        appendLog(`STATUS: TTS(숫자) 재생: ${toSpeak}`);
-        speak(toSpeak, { rate: 1.0, pitch: 1.0, lang: "ko-KR" });
-      };
-    })();
 
-    // ===== 카메라 제어 =====
-    async function startCamera() {
-      try {
-        appendLog("STATUS: 카메라를 켜고, 페이지 1부터 한 페이지씩 촬영해.");
-        await requestWakeLock();
+        ocrBox.value = ocr.text || "";
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "environment"
-          },
-          audio: false
-        });
+        log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+        const solved = await doSolve(page, ocr.text || "");
+        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
 
-        if (currentStream) {
-          currentStream.getTracks().forEach(t => t.stop());
+        if (!solved.ok) {
+          log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
+          if (ttsEnabled) await speakNow("실패");
+          return;
         }
-        currentStream = stream;
-        videoEl.srcObject = stream;
-        appendLog("STATUS: 카메라가 켜졌어. 시험지를 화면에 꽉 차게 맞춰줘.");
 
-        btnCapture.disabled = false;
-      } catch (err) {
-        appendLog(`STATUS: 카메라 시작 실패: ${err && err.message ? err.message : err}`);
+        ansBox.value = solved.text || "";
+        log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
+        await speakAnswers(solved.text || "");
+      } catch (e) {
+        log(`STATUS: 처리 실패: ${e?.message || e}`);
+      } finally {
+        busy = false;
+        btnShot.disabled = false;
       }
-    }
+    });
 
-    function stopCamera() {
-      if (currentStream) {
-        currentStream.getTracks().forEach(t => t.stop());
-        currentStream = null;
-        appendLog("STATUS: 카메라를 종료했어.");
-      }
-      releaseWakeLock();
-      btnCapture.disabled = true;
-    }
+    // ---- 자동 문제풀이 ----
+    const AUTO_EMPTY_RETRY_MS = 4000;
+    const AUTO_AFTER_SOLVE_MS = 5000;
 
-    // ===== 한 페이지 캡처 + OCR + solve =====
-    async function captureAndSolve() {
-      if (!currentStream) {
-        appendLog("STATUS: 카메라가 없습니다. 먼저 카메라를 켜 주세요.");
-        return;
-      }
-
-      const track = currentStream.getVideoTracks()[0];
-      if (!track) {
-        appendLog("STATUS: 비디오 트랙을 찾을 수 없습니다.");
-        return;
-      }
-
-      appendLog(`STATUS: 페이지 ${currentPage} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
-
-      // 비디오 프레임 해상도
-      const settings = track.getSettings();
-      const width = settings.width || videoEl.videoWidth || 1080;
-      const height = settings.height || videoEl.videoHeight || 1920;
-
-      // 캔버스에 원본 해상도로 캡처
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(videoEl, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-
-      appendLog(`capture size {"width":${width},"height":${height},"length":${dataUrl.length}}`);
-
-      // ===== 1) OCR 호출 =====
-      appendLog("STATUS: OCR 처리 중...");
-
-      let ocrJson;
-      try {
-        const res = await fetch("/.netlify/functions/ocr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image: dataUrl,
-            page: currentPage
-          })
+    function scheduleAutoStep(delayMs) {
+      if (!autoMode) return;
+      if (autoTimer) clearTimeout(autoTimer);
+      autoTimer = setTimeout(() => {
+        autoStep().catch((e) => {
+          log(`STATUS: [자동] 처리 실패: ${e?.message || e}`);
+          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
         });
-
-        ocrJson = await res.json();
-        appendLog(`OCR response ${JSON.stringify(ocrJson)}`);
-      } catch (err) {
-        appendLog(`STATUS: OCR 요청 실패: ${err && err.message ? err.message : err}`);
-        return;
-      }
-
-      if (!ocrJson || !ocrJson.ok) {
-        appendLog("STATUS: OCR 실패: Unknown");
-        return;
-      }
-
-      const ocrText = String(ocrJson.text || "");
-      ocrTextEl.value = ocrText;
-      appendLog(`STATUS: OCR 완료 (평균 신뢰도: ${ocrJson.confidence ?? 0}, 번호 패턴 수: ${ocrJson.numberPatternCount ?? 0}). 이제 정답을 생성할게.`);
-
-      // ===== 2) solve 호출 =====
-      let solveJson;
-      try {
-        const res2 = await fetch("/.netlify/functions/solve", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            page: currentPage,
-            ocrText: ocrText
-          })
-        });
-
-        solveJson = await res2.json();
-        appendLog(`solve response ${JSON.stringify(solveJson)}`);
-      } catch (err) {
-        appendLog(`STATUS: solve 요청 실패: ${err && err.message ? err.message : err}`);
-        return;
-      }
-
-      if (!solveJson || !solveJson.ok) {
-        appendLog("STATUS: solve 실패 (ok:false).");
-        return;
-      }
-
-      const answerText = String(solveJson.text || "").trim();
-      lastAnswerText = answerText;
-      answersEl.textContent = answerText || "(정답 없음)";
-
-      if (solveJson.debug && solveJson.debug.model) {
-        modelInfoEl.textContent = `model: ${solveJson.debug.model}`;
-      }
-
-      appendLog(`STATUS: 페이지 ${currentPage} 정답을 생성했어.`);
-
-      // 자동 TTS (숫자)
-      if (answerText) {
-        window.readAnswersAsNumbers(answerText);
-      }
-
-      // 필요하면 페이지 번호 증가 로직 추가 가능:
-      // currentPage += 1;
-      // pageNumberEl.textContent = String(currentPage);
+      }, delayMs);
     }
 
-    // ===== 이벤트 바인딩 =====
-    btnStartCam.addEventListener("click", () => {
-      startCamera();
-    });
+    async function autoStep() {
+      if (!autoMode) return;
+      const page = Number($("page").value || 1);
 
-    btnCapture.addEventListener("click", () => {
-      captureAndSolve();
-    });
+      // ★ 이미 한 번 이상 텍스트가 인식된 이후에는, 다음 촬영 전에 "페이지 인식 1 2 3" 예고
+      if (lastOcrNonEmpty) {
+        log("STATUS: [자동] 페이지 인식 1 2 3 (예고).");
+        await speakPageCountdown();
+      }
 
-    btnReadAnswers.addEventListener("click", () => {
-      if (!lastAnswerText) {
-        appendLog("STATUS: 아직 정답이 없습니다.");
+      log(`STATUS: [자동] 페이지 ${page} 촬영 중... 시험지를 흔들리지 않게 잡고 있어줘.`);
+      const cap = captureDataURL();
+      log(`capture size ${JSON.stringify({ width: cap.vw, height: cap.vh, length: Math.floor(cap.length/4) })}`);
+
+      log("STATUS: [자동] OCR 처리 중...");
+      const ocr = await doOCR(page, cap.dataUrl);
+      log(`OCR response ${JSON.stringify(ocr).slice(0, 1200)}`);
+
+      if (!ocr.ok) {
+        log(`STATUS: [자동] OCR 실패: ${ocr.error || "Unknown"}${ocr.detail ? " / " + ocr.detail : ""}`);
+        if (ttsEnabled) await speakNow("실패");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
         return;
       }
-      window.readAnswersAsNumbers(lastAnswerText);
+
+      const text = (ocr.text || "").trim();
+      if (!text) {
+        lastOcrNonEmpty = false;
+        log("STATUS: [자동] 아직 인식할 시험지가 없는 것 같아. 잠시 후 다시 시도할게.");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        return;
+      }
+
+      lastOcrNonEmpty = true;
+      ocrBox.value = ocr.text || "";
+      log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+
+      const solved = await doSolve(page, ocr.text || "");
+      log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+      if (!solved.ok) {
+        log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
+        if (ttsEnabled) await speakNow("실패");
+        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+        return;
+      }
+
+      ansBox.value = solved.text || "";
+      log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
+
+      await speakAnswers(solved.text || "");
+
+      // 다음 페이지/동일 페이지 다시 인식까지 5초 쉼
+      scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
+    }
+
+    btnAutoStart.addEventListener("click", async () => {
+      if (autoMode) return;
+      try {
+        await startCamera();
+        await enableWakeLock();
+        autoMode = true;
+        lastOcrNonEmpty = false;
+        log("STATUS: 자동 문제풀이 모드를 시작할게.");
+        scheduleAutoStep(0);
+      } catch (e) {
+        log(`STATUS: 자동 모드 시작 실패: ${e?.message || e}`);
+      }
     });
 
-    // 페이지 떠날 때 카메라/웬락 정리
+    btnAutoStop.addEventListener("click", async () => {
+      if (!autoMode) return;
+      autoMode = false;
+      if (autoTimer) {
+        clearTimeout(autoTimer);
+        autoTimer = null;
+      }
+      await disableWakeLock();
+      log("STATUS: 자동 문제풀이 모드를 종료할게.");
+    });
+
+    btnTtsTest.addEventListener("click", () => {
+      speakTest();
+    });
+
+    // 페이지 나갈 때 wake lock 해제
     window.addEventListener("beforeunload", () => {
-      stopCamera();
-    });
-
-    // ===== 초기 TTS 테스트 =====
-    window.addEventListener("load", () => {
-      appendLog("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
-      speak("음성 테스트입니다. 이후에는 자동으로 정답을 숫자로 읽어 줄게요.", {
-        lang: "ko-KR",
-        rate: 1.0,
-        pitch: 1.0
-      });
-
-      // 숫자로 읽기 버튼 활성화는 solve 성공 이후에 의미 있지만,
-      // 최소한 버튼 자체는 눌릴 수 있게만 두고, 내부에서 lastAnswerText 체크
-      btnReadAnswers.disabled = false;
+      autoMode = false;
+      if (autoTimer) clearTimeout(autoTimer);
+      disableWakeLock();
     });
   </script>
 </body>
 </html>
+
 
