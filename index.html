@@ -79,6 +79,12 @@
         <input id="page" type="number" value="1" min="1" style="width:90px" />
         <span id="res" class="small"></span>
       </div>
+      <!-- ★ 중앙대용: 여러 페이지를 한 세트로 합쳐서 풀이 -->
+      <div class="row" style="margin-bottom:8px;">
+        <span class="small">이번 세트에 포함할 페이지 수</span>
+        <input id="mergeTarget" type="number" value="1" min="1" max="5" style="width:90px" />
+        <span id="mergeStatus" class="small"></span>
+      </div>
       <div class="row" style="margin-bottom:8px;">
         <button id="btnTtsTest" class="secondary">음성 테스트</button>
         <button id="btnAutoStart">자동 문제풀이 시작</button>
@@ -94,7 +100,11 @@
         ② 글자/문항번호/보기(A~E)까지 선명하게 보이게 맞춘 뒤<br/>
         ③ 자동 문제풀이를 켜면, 페이지마다<br/>
         &nbsp;&nbsp;&nbsp;- <b>“페이지 인식, 1 2 3”</b> (예고 TTS)<br/>
-        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 반복.
+        &nbsp;&nbsp;&nbsp;- 촬영 → OCR → 정답 생성 → 정답 음성 낭독 순서로 반복.<br/>
+        <br/>
+        중앙대처럼 긴 지문/선지가 <b>두 페이지 이상에 나뉘어 있을 때</b>는<br/>
+        아래 <b>“이번 세트에 포함할 페이지 수”</b>를 2 또는 3으로 맞추고<br/>
+        그 페이지 수만큼 연속으로 촬영하면, OCR을 합쳐서 한 번에 풀어준다.
       </div>
     </div>
 
@@ -131,6 +141,8 @@
     const btnAutoStart = $("btnAutoStart");
     const btnAutoStop  = $("btnAutoStop");
     const resEl  = $("res");
+    const mergeTargetInput = $("mergeTarget");
+    const mergeStatus = $("mergeStatus");
 
     function ts() {
       const d = new Date();
@@ -151,6 +163,33 @@
     let autoTimer = null;
     let lastOcrNonEmpty = false; // 직전 자동 OCR에서 글자가 있었는지
     let wakeLock = null;
+
+    // ★ 여러 페이지 누적용 버퍼
+    let mergeBuffer = "";
+    let mergeCount = 0;
+
+    function getMergeTarget() {
+      if (!mergeTargetInput) return 1;
+      const n = Number(mergeTargetInput.value || "1");
+      if (!Number.isFinite(n) || n < 1) return 1;
+      return Math.min(n, 5);
+    }
+
+    function resetMergeState() {
+      mergeBuffer = "";
+      mergeCount = 0;
+    }
+
+    function updateMergeStatus(target) {
+      if (!mergeStatus) return;
+      if (target <= 1) {
+        mergeStatus.textContent = "한 페이지 단위로 바로 풀이.";
+      } else if (mergeCount === 0) {
+        mergeStatus.textContent = `이번 세트: ${target}페이지를 합쳐서 한 번에 풀이 (0/${target} 촬영).`;
+      } else {
+        mergeStatus.textContent = `이번 세트 누적 중: ${mergeCount}/${target}페이지 촬영됨.`;
+      }
+    }
 
     // ---- 공통 유틸 ----
     function sleep(ms) {
@@ -268,7 +307,7 @@
       return new Promise((resolve) => {
         if (!("speechSynthesis" in window)) return resolve();
         const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = "ko-KR";  // 유사 '유나' 스타일 한국어 여성 보이스 선택될 가능성↑
+        utter.lang = "ko-KR";  // 한국어 보이스
         utter.rate = 1.0;
         utter.pitch = 1.0;
         utter.onend = () => resolve();
@@ -283,7 +322,7 @@
       log("STATUS: 음성 테스트를 재생했어. 이후 자동 풀이 정답도 소리로 읽어줄게.");
     }
 
-    // ★ 여기: 페이지 인식 1 2 3 (예고용)
+    // ★ 페이지 인식 1 2 3 (예고용)
     async function speakPageCountdown() {
       if (!ttsEnabled) return;
       await speakNow("페이지 인식, 일");
@@ -318,7 +357,7 @@
       return { items, unsure: unsureList };
     }
 
-    // ★ 여기만 수정: ABCDE를 숫자(1~5)로 읽도록 변경
+    // ★ ABCDE를 숫자(1~5)로 읽도록
     async function speakAnswers(text) {
       if (!ttsEnabled) return;
       const { items, unsure } = parseSolveTextForTts(text);
@@ -326,13 +365,10 @@
       for (const { num, ans } of items) {
         let choiceNumber = null;
 
-        // solve가 A~E로 줄 때 → 1~5번으로 매핑
         if ("ABCDE".includes(ans)) {
           const map = { A: 1, B: 2, C: 3, D: 4, E: 5 };
           choiceNumber = map[ans] ?? null;
-        }
-        // 혹시 이미 1~5로 들어오면 그대로 사용
-        else if ("12345".includes(ans)) {
+        } else if ("12345".includes(ans)) {
           choiceNumber = Number(ans);
         }
 
@@ -340,13 +376,11 @@
         if (choiceNumber != null) {
           spokenAns = `${choiceNumber}번`;
         } else {
-          // 예외 상황(문자 이상)에서는 그냥 원문 읽기
           spokenAns = ans;
         }
 
-        // "19번, 1번" 이런 식으로 읽음
         await speakNow(`${num}번, ${spokenAns}`);
-        await sleep(1500); // 문항 사이 1.5초 정도 쉼
+        await sleep(1500);
       }
 
       if (unsure.length) {
@@ -388,21 +422,56 @@
           return;
         }
 
-        ocrBox.value = ocr.text || "";
+        const target = getMergeTarget();
+        const text = ocr.text || "";
 
-        log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
-        const solved = await doSolve(page, ocr.text || "");
-        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+        if (target > 1) {
+          // 여러 페이지 누적 모드
+          mergeBuffer += (mergeBuffer ? "\n\n" : "") + text;
+          mergeCount += 1;
+          ocrBox.value = mergeBuffer;
+          updateMergeStatus(target);
 
-        if (!solved.ok) {
-          log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
-          if (ttsEnabled) await speakNow("실패");
-          return;
+          if (mergeCount < target) {
+            log(`STATUS: [수동] 누적 모드 (${mergeCount}/${target}). 다음 페이지도 촬영해줘.`);
+            return;
+          }
+
+          const mergedText = mergeBuffer;
+          resetMergeState();
+          updateMergeStatus(target);
+
+          log(`STATUS: [수동] ${target}페이지를 합쳐서 정답을 생성할게.`);
+          const solved = await doSolve(page, mergedText);
+          log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+          if (!solved.ok) {
+            log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
+            if (ttsEnabled) await speakNow("실패");
+            return;
+          }
+
+          ansBox.value = solved.text || "";
+          log(`STATUS: 페이지 ${page} (누적 ${target}페이지) 정답을 생성했어.`);
+          await speakAnswers(solved.text || "");
+        } else {
+          // 기존: 한 페이지당 바로 풀이
+          ocrBox.value = text;
+
+          log(`STATUS: OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+          const solved = await doSolve(page, text);
+          log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+          if (!solved.ok) {
+            log(`STATUS: solve 실패: ${solved.error || "Unknown"}`);
+            if (ttsEnabled) await speakNow("실패");
+            return;
+          }
+
+          ansBox.value = solved.text || "";
+          log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
+          await speakAnswers(solved.text || "");
         }
-
-        ansBox.value = solved.text || "";
-        log(`STATUS: 페이지 ${page} 정답을 생성했어.`);
-        await speakAnswers(solved.text || "");
       } catch (e) {
         log(`STATUS: 처리 실패: ${e?.message || e}`);
       } finally {
@@ -429,8 +498,9 @@
     async function autoStep() {
       if (!autoMode) return;
       const page = Number($("page").value || 1);
+      const target = getMergeTarget();
 
-      // ★ 이미 한 번 이상 텍스트가 인식된 이후에는, 다음 촬영 전에 "페이지 인식 1 2 3" 예고
+      // 이미 한 번 이상 텍스트가 인식된 이후에는, 다음 촬영 전에 "페이지 인식 1 2 3" 예고
       if (lastOcrNonEmpty) {
         log("STATUS: [자동] 페이지 인식 1 2 3 (예고).");
         await speakPageCountdown();
@@ -460,26 +530,62 @@
       }
 
       lastOcrNonEmpty = true;
-      ocrBox.value = ocr.text || "";
-      log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
 
-      const solved = await doSolve(page, ocr.text || "");
-      log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+      if (target > 1) {
+        // 자동 모드에서도 여러 페이지 누적
+        mergeBuffer += (mergeBuffer ? "\n\n" : "") + text;
+        mergeCount += 1;
+        ocrBox.value = mergeBuffer;
+        updateMergeStatus(target);
 
-      if (!solved.ok) {
-        log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
-        if (ttsEnabled) await speakNow("실패");
-        scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
-        return;
+        log(`STATUS: [자동] OCR 누적 중 (${mergeCount}/${target}).`);
+
+        if (mergeCount < target) {
+          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+          return;
+        }
+
+        const mergedText = mergeBuffer;
+        resetMergeState();
+        updateMergeStatus(target);
+
+        log(`STATUS: [자동] ${target}페이지를 합쳐서 정답을 생성할게.`);
+        const solved = await doSolve(page, mergedText);
+        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+        if (!solved.ok) {
+          log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
+          if (ttsEnabled) await speakNow("실패");
+          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+          return;
+        }
+
+        ansBox.value = solved.text || "";
+        log(`STATUS: [자동] 페이지 ${page} (누적 ${target}페이지) 정답을 생성했어.`);
+
+        await speakAnswers(solved.text || "");
+        scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
+      } else {
+        // 기존: 한 페이지씩 바로 풀이
+        ocrBox.value = text;
+        log(`STATUS: [자동] OCR 완료 (평균 신뢰도: ${ocr.conf ?? 0}, 번호 패턴 수: ${ocr.hits ?? 0}). 이제 정답을 생성할게.`);
+
+        const solved = await doSolve(page, text);
+        log(`solve response ${JSON.stringify(solved).slice(0, 1200)}`);
+
+        if (!solved.ok) {
+          log(`STATUS: [자동] solve 실패: ${solved.error || "Unknown"}`);
+          if (ttsEnabled) await speakNow("실패");
+          scheduleAutoStep(AUTO_EMPTY_RETRY_MS);
+          return;
+        }
+
+        ansBox.value = solved.text || "";
+        log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
+
+        await speakAnswers(solved.text || "");
+        scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
       }
-
-      ansBox.value = solved.text || "";
-      log(`STATUS: [자동] 페이지 ${page} 정답을 생성했어.`);
-
-      await speakAnswers(solved.text || "");
-
-      // 다음 페이지/동일 페이지 다시 인식까지 5초 쉼
-      scheduleAutoStep(AUTO_AFTER_SOLVE_MS);
     }
 
     btnAutoStart.addEventListener("click", async () => {
@@ -489,6 +595,8 @@
         await enableWakeLock();
         autoMode = true;
         lastOcrNonEmpty = false;
+        resetMergeState();
+        updateMergeStatus(getMergeTarget());
         log("STATUS: 자동 문제풀이 모드를 시작할게.");
         scheduleAutoStep(0);
       } catch (e) {
@@ -511,6 +619,19 @@
       speakTest();
     });
 
+    // mergeTarget 변경 시 상태 초기화
+    if (mergeTargetInput) {
+      mergeTargetInput.addEventListener("change", () => {
+        const t = getMergeTarget();
+        mergeTargetInput.value = String(t);
+        resetMergeState();
+        updateMergeStatus(t);
+      });
+      const initial = getMergeTarget();
+      mergeTargetInput.value = String(initial);
+      updateMergeStatus(initial);
+    }
+
     // 페이지 나갈 때 wake lock 해제
     window.addEventListener("beforeunload", () => {
       autoMode = false;
@@ -520,5 +641,3 @@
   </script>
 </body>
 </html>
-
-
