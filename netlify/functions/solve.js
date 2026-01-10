@@ -1,13 +1,13 @@
 // netlify/functions/solve.js
-// -------------------------
-// 역할: 편입 영어 객관식 기출 "정답만" 생성하는 함수
+// --------------------------------------
+// 역할: 편입 영어 객관식 기출 "정답번호만" 생성하는 함수
 // 입력: { ocrText: string, page?: number }
-// 출력: { ok: true, text: "1: 4\n2: 3\n...", debug: {...} } 또는 { ok: false, error: "..." }
+// 출력: { ok: true, text: "1: 4\n2: 3\n...", debug: {...} }
 //
-// 필요한 환경변수 (Netlify 에서 설정):
+// 환경변수 (Netlify):
 // - OPENROUTER_API_KEY  (필수)
-// - MODEL_NAME          (선택, 예: "openai/gpt-4.1", 기본값: "openai/gpt-4.1")
-// - TEMPERATURE         (선택, 기본 0.1)
+// - MODEL_NAME          (선택, 예: "openai/gpt-4.1")
+// - TEMPERATURE         (선택, 기본 0.0)
 // - STOP_TOKEN          (선택, 기본 "XURTH")
 
 function json(statusCode, obj) {
@@ -21,179 +21,65 @@ function json(statusCode, obj) {
   };
 }
 
-// ---- 유틸: 문자열 트리밍 ----
-function safeString(x) {
-  if (x === undefined || x === null) return "";
-  return String(x);
-}
+// LLM이 준 텍스트에서 "번호: 선택지" + UNSURE 목록만 추출
+function parseModelAnswers(rawText) {
+  const answers = {};
+  const unsureSet = new Set();
 
-// ---- OCR에서 문항 번호 추출 (1~80 사이) ----
-function extractQuestionNumbers(ocrText) {
-  const text = safeString(ocrText);
-  const nums = new Set();
-  const re = /\b(\d{1,3})\s*[.)]/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const n = parseInt(m[1], 10);
-    if (!Number.isNaN(n) && n >= 1 && n <= 80) {
-      nums.add(n);
-    }
-  }
-  const arr = Array.from(nums);
-  arr.sort((a, b) => a - b);
-  return arr;
-}
-
-// ---- OpenRouter 호출 ----
-async function callOpenRouter({ apiKey, model, stopToken, temperature, system, user }) {
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-  const payload = {
-    model,
-    temperature,
-    stop: stopToken ? [stopToken] : undefined,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-  };
-
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
-
-  const maxRetry = 3;
-  let lastErr = null;
-
-  for (let attempt = 1; attempt <= maxRetry; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        lastErr = new Error(`OpenRouter HTTP ${res.status}: ${txt.slice(0, 500)}`);
-        continue;
-      }
-
-      const data = await res.json();
-      if (!data.choices || !data.choices.length) {
-        lastErr = new Error("No choices from OpenRouter");
-        continue;
-      }
-
-      const choice = data.choices[0];
-      const content = safeString(choice.message && choice.message.content);
-      const finishReason = choice.finish_reason || "unknown";
-
-      return { ok: true, content, finishReason, raw: data };
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-
-  return { ok: false, error: lastErr ? String(lastErr.message || lastErr) : "OpenRouter error" };
-}
-
-// ---- 모델 출력 파싱 ----
-// 목표:
-// - questionNumbers 에 있는 번호들에 대해 항상 답 하나씩 채우기
-// - A~E → 1~5로 변환
-// - 이상한 답(텍스트 등)은 "2번"으로 강제 + UNSURE에 포함
-// - 마지막에 "UNSURE: ..." 한 줄 생성
-function parseModelOutput(rawText, questionNumbers) {
-  const text = safeString(rawText);
-  const lines = text
+  const lines = String(rawText || "")
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  const answers = {}; // { [q]: number(1~5) }
-  const unsureSet = new Set();
-
   for (const line of lines) {
-    // UNSURE 라인
-    const mUnsure = line.match(/^UNSURE\s*:\s*(.*)$/i);
-    if (mUnsure) {
-      const nums = mUnsure[1]
-        .split(/[\s,]+/)
-        .map((x) => parseInt(x, 10))
-        .filter((n) => !Number.isNaN(n));
-      for (const n of nums) {
-        unsureSet.add(n);
-      }
+    // "12: 3" 또는 "12-3" 형식
+    const m = line.match(/^(\d{1,3})\s*[:\-]\s*([1-4])\s*(\?)?$/);
+    if (m) {
+      const q = Number(m[1]);
+      const a = Number(m[2]);
+      answers[q] = a;
+      if (m[3]) unsureSet.add(q);
       continue;
     }
 
-    // "번호: 선택지" 패턴 (강하게 우선)
-    let m = line.match(/^(\d{1,3})\s*[:\-\.]?\s*([A-Ea-e1-5])/);
-    if (m) {
-      const q = parseInt(m[1], 10);
-      let aRaw = m[2].toString().trim().toUpperCase();
-      let choice = null;
-
-      if ("ABCDE".includes(aRaw)) {
-        choice = "ABCDE".indexOf(aRaw) + 1; // A→1, ..., E→5
-      } else if ("12345".includes(aRaw)) {
-        choice = parseInt(aRaw, 10);
-      }
-
-      if (choice !== null && choice >= 1 && choice <= 5) {
-        answers[q] = choice;
-        continue;
-      }
-    }
-
-    // 여기까지 안 걸리면 "번호: pillaging?" 같은 이상한 형식일 수 있음
-    m = line.match(/^(\d{1,3})\s*[:\-\.]?\s*(.+)$/);
-    if (m) {
-      const q = parseInt(m[1], 10);
-      if (!Number.isNaN(q)) {
-        // 형식 이상 → 기본값 2번으로 넣고 UNSURE에 추가
-        if (!(q in answers)) {
-          answers[q] = 2;
-        }
-        unsureSet.add(q);
+    // "UNSURE: 3 5 12"
+    const u = line.match(/^UNSURE\s*:\s*(.*)$/i);
+    if (u) {
+      const rest = u[1] || "";
+      for (const token of rest.split(/[\s,]+/)) {
+        if (!token) continue;
+        const n = Number(token);
+        if (!Number.isNaN(n)) unsureSet.add(n);
       }
     }
   }
 
-  // questionNumbers 기준으로 누락 채우기
-  const finalAnswers = {};
-  const finalUnsure = new Set(unsureSet);
-
-  for (const q of questionNumbers) {
-    if (answers[q] !== undefined) {
-      finalAnswers[q] = answers[q];
-    } else {
-      // 모델이 아예 안 준 번호 → 2번으로 채우고 UNSURE에 넣기
-      finalAnswers[q] = 2;
-      finalUnsure.add(q);
-    }
-  }
-
-  const sortedQs = [...questionNumbers].sort((a, b) => a - b);
-  const linesOut = [];
-  for (const q of sortedQs) {
-    const a = finalAnswers[q];
-    linesOut.push(`${q}: ${a}`);
-  }
-
-  const unsureArr = [...finalUnsure].filter((n) => questionNumbers.includes(n)).sort((a, b) => a - b);
-  linesOut.push(`UNSURE: ${unsureArr.join(" ")}`);
-
-  return {
-    text: linesOut.join("\n"),
-    answers: finalAnswers,
-    unsure: unsureArr,
-    raw: text,
-  };
+  const unsure = Array.from(unsureSet).sort((a, b) => a - b);
+  return { answers, unsure, raw: String(rawText || "") };
 }
 
-// ---- 메인 핸들러 ----
+// "1: 4\n2: 3\n...\nUNSURE: 10 11" 형식으로 다시 렌더링
+function renderOutput(answers, unsure) {
+  const qs = Object.keys(answers)
+    .map((n) => Number(n))
+    .sort((a, b) => a - b);
+
+  const lines = [];
+  for (const q of qs) {
+    const a = answers[q];
+    if (!a) continue;
+    lines.push(`${q}: ${a}`);
+  }
+
+  if (unsure && unsure.length > 0) {
+    lines.push(`UNSURE: ${unsure.join(" ")}`);
+  } else {
+    lines.push("UNSURE:");
+  }
+
+  return lines.join("\n");
+}
+
 exports.handler = async (event) => {
   try {
     if (event.httpMethod !== "POST") {
@@ -207,104 +93,141 @@ exports.handler = async (event) => {
 
     const model = process.env.MODEL_NAME || "openai/gpt-4.1";
     const stopToken = process.env.STOP_TOKEN || "XURTH";
-    const temperature = Number(process.env.TEMPERATURE ?? 0.1);
+    const temperature = Number(
+      process.env.TEMPERATURE === undefined ? 0.0 : process.env.TEMPERATURE
+    );
 
     let body = {};
     try {
       body = JSON.parse(event.body || "{}");
-    } catch {
+    } catch (e) {
       return json(400, { ok: false, error: "Invalid JSON body" });
     }
 
     const page = body.page ?? 1;
-    const ocrText = safeString(body.ocrText || body.text || "");
+    const ocrTextRaw = body.ocrText || body.text || "";
+    const ocrText = String(ocrTextRaw || "").trim();
 
-    if (!ocrText.trim()) {
+    if (!ocrText) {
+      // OCR이 비었으면 모델을 호출해도 의미 없으니 바로 실패 반환
       return json(400, { ok: false, error: "ocrText is empty" });
     }
 
-    // 1) 문항 번호 추출
-    const questionNumbers = extractQuestionNumbers(ocrText);
-    if (!questionNumbers.length) {
-      // 문항 번호를 하나도 못 찾으면, 일단 에러로 돌려주자 (이 케이스는 거의 없음)
-      return json(400, { ok: false, error: "No question numbers found in OCR text" });
-    }
+    // 시스템 프롬프트: 한/영 섞어서 매우 엄격하게 포맷 지시
+    const systemPrompt =
+      [
+        "너는 '편입영어 객관식 기출 채점/정답키 생성' 전용 AI다.",
+        "",
+        "[최우선 목표]",
+        "1) 오답 최소화 (정답률 극대화)",
+        "2) 보이는 문항번호는 절대 누락하지 말 것 (문항 누락 0)",
+        "3) 출력은 오직 정답번호만: 한 줄에 하나 '문항번호: 선택지번호' (예: '13: 2')",
+        "4) 불확실한 문항은 임의로 비워두지 말고, 가장 가능성 높은 번호를 선택한 뒤 UNSURE 목록에 추가한다.",
+        "   - 예: 13번이 애매하면 본문에는 '13: 2'라고 쓰고, 마지막 줄에 'UNSURE: 13'이라고 적는다.",
+        "5) 그 외 어떤 설명/해설/머리말/구분선/마크다운도 절대 출력하지 말 것.",
+        "",
+        "[포맷 규칙 – 지켜야 할 것만]",
+        "1) 정답 줄 형식: '문항번호: 선택지번호'",
+        "   - 예시: '1: 4', '10: 2'",
+        "   - 선택지번호는 1,2,3,4 중 하나인 숫자만 써라. (A,B,C,D, 단어, 기호, 영어단어 모두 금지)",
+        "2) 마지막 줄은 항상 'UNSURE: ...' 형식으로 끝낸다.",
+        "   - 애매한 번호가 없으면 'UNSURE:' 만 출력.",
+        "   - 있으면 'UNSURE: 3 5 12' 처럼 공백으로 번호만 나열.",
+        "3) 물음표( ? )나 괄호, 영어 단어, 심볼을 정답 줄에 섞지 마라.",
+        "   - 나쁜 예: '7: pillaging?', '24: D', '11: C (maybe)'",
+        "   - 좋은 예: '7: 2', '24: 3'",
+        "",
+        "[풀이 내부 절차(생각은 네가 알아서 하고, 출력은 위 포맷만 사용)]",
+        "1) OCR 텍스트에서 문항번호(1, 2, 3, ...), 지문, 선택지를 모두 모은다.",
+        "2) 같은 페이지에 여러 세트(예: [1-7], [8-9], [10-12])가 섞여 있어도 모두 처리한다.",
+        "3) 각 문항에 대해 지문과 선택지를 끝까지 읽고, 가장 타당한 보기를 1~4 중 하나로 고른다.",
+        "4) '보이는 문항번호'는 모두 답을 찍는다. 절대 건너뛰지 말 것.",
+        "5) 매우 애매한 경우에도 가장 가능성이 높은 번호를 하나 고르고, 그 번호를 UNSURE 목록에 따로 표시한다.",
+        "",
+        "이제부터 어떤 추가 설명도 하지 말고, 오직 정답과 UNSURE 줄만 출력해라."
+      ].join("\n");
 
-    // 2) 프롬프트 구성
-    const system = [
-      "너는 한국 대학 편입 영어 객관식 기출 문제를 채점하는 AI이다.",
-      "입력으로 시험지 OCR 텍스트가 주어진다.",
-      "반드시 다음 규칙을 지켜라.",
-      "- '문항 번호 목록'에 있는 번호만 정답을 생성한다.",
-      "- 각 문항에 대해 보기 중 정답 하나를 고른다.",
-      "- 출력 형식은 오직 다음과 같다:",
-      "  1: 3",
-      "  2: 4",
-      "  3: 2",
-      "  ...",
-      "  UNSURE: 3 10 12",
-      "- 각 줄 맨 앞은 문항 번호(정수), 콜론(:), 공백, 그리고 선택지 번호(1~5) 또는 A~E 중 하나이다.",
-      "- 마지막 줄은 반드시 'UNSURE:'로 시작하며, 불확실한 문항 번호들을 공백으로 나열한다. 없으면 'UNSURE:' 뒤를 비워 둔다.",
-      "- 이 형식 이외의 설명, 해설, 이유, 문장은 절대 출력하지 말 것.",
-      "- 매우 확신이 가지 않으면 (예: 확신도 70% 미만) 해당 문항을 UNSURE 목록에 포함시켜라.",
-      "- 머릿속으로는 충분히 단계적으로 추론하되, 최종 출력에는 절대 그 과정을 드러내지 말고 형식만 지켜라.",
-    ].join("\n");
+    const userPrompt =
+      [
+        `다음은 편입 영어 시험지의 OCR 텍스트다. (page ${page})`,
+        "",
+        "=== OCR TEXT ===",
+        ocrText,
+        "=== END ===",
+        "",
+        "위 시험지에서 보이는 모든 객관식 문항에 대해 정답만 출력해라.",
+        "출력 형식은 아래 예시를 100% 그대로 따른다.",
+        "",
+        "1: 4",
+        "2: 3",
+        "3: 1",
+        "UNSURE: 2 3",
+        "",
+        "위 예시는 단지 형식 예시일 뿐 실제 정답이 아니다. 실제 문제를 보고 네가 판단한 정답번호로 채워 넣어라."
+      ].join("\n");
 
-    const user = [
-      "다음은 편입 영어 객관식 시험지의 OCR 텍스트이다.",
-      "한 지문에 문제가 여러 개 있을 수 있다.",
-      "",
-      "[문항 번호 목록]",
-      questionNumbers.join(", "),
-      "",
-      "[OCR 텍스트]",
-      ocrText,
-      "",
-      "[지시사항]",
-      "- 위 OCR 텍스트와 문항 번호 목록을 기준으로, 각 문항의 정답을 선택하라.",
-      "- 선택지는 보통 1~4 또는 1~5개이다. 보기 옆에 붙어 있는 번호/기호(①②③④, A~D 등)를 기준으로 정답을 판단하라.",
-      "- 출력 형식을 다시 한 번 강조한다:",
-      "  (예시)",
-      "  1: 3",
-      "  2: 4",
-      "  3: 2",
-      "  UN SURE: 3",
-      "- 형식을 정확히 지키고, 다른 내용은 절대 출력하지 말 것.",
-    ].join("\n");
-
-    // 3) OpenRouter 호출
-    const orRes = await callOpenRouter({
-      apiKey,
+    const payload = {
       model,
-      stopToken,
       temperature,
-      system,
-      user,
+      stop: [stopToken],
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    };
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
+        "X-Title": "answer-site-solve",
+      },
+      body: JSON.stringify(payload),
     });
 
-    if (!orRes.ok) {
-      return json(500, { ok: false, error: "OpenRouter call failed", detail: orRes.error });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      return json(response.status, {
+        ok: false,
+        error: `OpenRouter API error: ${response.status}`,
+        detail: text,
+      });
     }
 
-    // 4) 모델 출력 파싱 & 후처리
-    const parsed = parseModelOutput(orRes.content, questionNumbers);
+    const data = await response.json().catch(() => null);
+    if (!data || !data.choices || !data.choices[0] || !data.choices[0].message) {
+      return json(502, { ok: false, error: "Invalid OpenRouter response" });
+    }
 
-    const debug = {
-      page,
-      model,
-      finishReason: orRes.finishReason,
-      questionNumbers,
-      answers: parsed.answers,
-      unsure: parsed.unsure,
-      raw: parsed.raw,
-    };
+    const message = data.choices[0].message;
+    const content = typeof message.content === "string"
+      ? message.content
+      : (Array.isArray(message.content)
+          ? message.content.map((c) => (typeof c === "string" ? c : c.text || "")).join("\n")
+          : "");
+
+    const { answers, unsure, raw } = parseModelAnswers(content);
+    const text = renderOutput(answers, unsure);
 
     return json(200, {
       ok: true,
-      text: parsed.text,
-      debug,
+      text,
+      debug: {
+        page,
+        model,
+        finishReason: data.choices[0].finish_reason || data.choices[0].finishReason,
+        answers,
+        unsure,
+        raw,
+      },
     });
-  } catch (e) {
-    return json(500, { ok: false, error: "Unhandled error in solve function", detail: String(e && e.message ? e.message : e) });
+  } catch (err) {
+    return json(500, {
+      ok: false,
+      error: "solve.js runtime error",
+      detail: String(err && err.stack ? err.stack : err),
+    });
   }
 };
