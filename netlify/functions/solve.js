@@ -22,13 +22,16 @@ function json(statusCode, obj) {
 }
 
 // OCR 텍스트에서 문항 번호 추출 (예: "1.", "2)", "10 ." 등)
+// ★ 수정: 1~60 범위만 문항번호로 인정 (271 같은 꼬리번호 제거용)
 function extractQuestionNumbers(ocrText) {
   const numbers = new Set();
   const re = /(^|\n)\s*(\d{1,3})\s*[\.\)]/g;
   let m;
   while ((m = re.exec(ocrText)) !== null) {
     const num = parseInt(m[2], 10);
-    if (!Number.isNaN(num)) numbers.add(num);
+    if (!Number.isNaN(num) && num > 0 && num <= 60) {
+      numbers.add(num);
+    }
   }
   return Array.from(numbers).sort((a, b) => a - b);
 }
@@ -102,13 +105,14 @@ async function callOpenRouter({ apiKey, model, stopToken, temperature, systemPro
 // - knownNumbers(문항 번호 목록)를 기준으로 정리
 // - 정답은 항상 "번호: 숫자(1~5)" 형식으로 강제
 // - 숫자로 못 바꾸는 이상한 답은 모두 2번으로 교정 + UNSURE에 추가
+// - ★ 수정: knownNumbers가 연속 범위(예: 1~12)이면 그 사이 번호 전부(5,10 포함)를 강제로 포함
 function postProcessCompletion(rawText, knownNumbers) {
   const text = String(rawText || "");
   const lines = text.split(/\r?\n/);
 
-  const knownSet = new Set(
-    (knownNumbers || []).filter((n) => Number.isInteger(n))
-  );
+  const filteredKnown = (knownNumbers || [])
+    .filter((n) => Number.isInteger(n) && n > 0 && n <= 60);
+  const knownSet = new Set(filteredKnown);
 
   const answers = {};
   const unsureSet = new Set();
@@ -125,7 +129,7 @@ function postProcessCompletion(rawText, knownNumbers) {
         .filter(Boolean);
       for (const p of parts) {
         const num = parseInt(p, 10);
-        if (!Number.isNaN(num)) {
+        if (!Number.isNaN(num) && num > 0 && num <= 60) {
           if (!knownSet.size || knownSet.has(num)) {
             unsureSet.add(num);
           }
@@ -143,7 +147,7 @@ function postProcessCompletion(rawText, knownNumbers) {
     if (!m) continue;
 
     const num = parseInt(m[1], 10);
-    if (!Number.isInteger(num)) continue;
+    if (!Number.isInteger(num) || num <= 0 || num > 60) continue;
     if (knownSet.size && !knownSet.has(num)) continue;
 
     const ansRaw = m[2].trim();
@@ -158,12 +162,30 @@ function postProcessCompletion(rawText, knownNumbers) {
     }
   }
 
-  // 3) 정답이 비어 있는 번호에 대해서도 안전하게 채워넣기 (기본 2번 + UNSURE)
-  const finalNums = (knownNumbers && knownNumbers.length
-    ? Array.from(new Set(knownNumbers))
-    : Object.keys(answers).map((x) => parseInt(x, 10))
-  ).filter((n) => Number.isInteger(n)).sort((a, b) => a - b);
+  // 3) 최종 문항 번호 목록 구성
+  let finalNums;
+  if (filteredKnown.length) {
+    const sorted = Array.from(new Set(filteredKnown)).sort((a, b) => a - b);
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
 
+    // ★ 연속 범위 가정: 범위가 60 이하이면 min~max 모든 번호 포함 (누락 문항 자동 생성)
+    if (max - min <= 60) {
+      finalNums = [];
+      for (let i = min; i <= max; i++) {
+        finalNums.push(i);
+      }
+    } else {
+      finalNums = sorted;
+    }
+  } else {
+    finalNums = Object.keys(answers)
+      .map((x) => parseInt(x, 10))
+      .filter((n) => Number.isInteger(n) && n > 0 && n <= 60)
+      .sort((a, b) => a - b);
+  }
+
+  // 4) 정답이 비어 있는 번호에 대해서도 안전하게 채워넣기 (기본 2번 + UNSURE)
   for (const num of finalNums) {
     if (!(num in answers)) {
       answers[num] = 2;
@@ -171,7 +193,7 @@ function postProcessCompletion(rawText, knownNumbers) {
     }
   }
 
-  // 4) 최종 출력 문자열 생성
+  // 5) 최종 출력 문자열 생성
   const outLines = [];
   for (const num of finalNums) {
     outLines.push(`${num}: ${answers[num]}`);
@@ -179,7 +201,9 @@ function postProcessCompletion(rawText, knownNumbers) {
 
   let unsureLine = "UNSURE:";
   if (unsureSet.size) {
-    const arr = Array.from(unsureSet).filter((n) => Number.isInteger(n)).sort((a, b) => a - b);
+    const arr = Array.from(unsureSet)
+      .filter((n) => Number.isInteger(n) && n > 0 && n <= 60)
+      .sort((a, b) => a - b);
     if (arr.length) {
       unsureLine = `UNSURE: ${arr.join(" ")}`;
     }
@@ -190,7 +214,9 @@ function postProcessCompletion(rawText, knownNumbers) {
   return {
     text: finalText,
     answers,
-    unsure: Array.from(unsureSet).filter((n) => Number.isInteger(n)).sort((a, b) => a - b),
+    unsure: Array.from(unsureSet)
+      .filter((n) => Number.isInteger(n) && n > 0 && n <= 60)
+      .sort((a, b) => a - b),
   };
 }
 
@@ -267,10 +293,10 @@ exports.handler = async (event) => {
 
     if (questionNumbers.length) {
       userPromptParts.push(
-        `위 텍스트에서 인식된 문항 번호: ${questionNumbers.join(", ")}`
+        `위 텍스트에서 인식된 문항 번호(1~60 범위): ${questionNumbers.join(", ")}`
       );
       userPromptParts.push(
-        "위에 나열된 문항 번호 각각에 대해, 보기 내용을 분석해서 가장 가능성 높은 정답 번호(1~5)만 골라라."
+        "위 번호들을 포함하는 연속 구간 전체(예: 1~12)에 대해, 각 문항의 정답 번호(1~5)만 골라라."
       );
       userPromptParts.push(
         "각 줄은 '<문항번호>: <정답번호>' 형식으로, 마지막 줄은 'UNSURE: ...' 형식으로 출력하라."
@@ -320,3 +346,4 @@ exports.handler = async (event) => {
     });
   }
 };
+
