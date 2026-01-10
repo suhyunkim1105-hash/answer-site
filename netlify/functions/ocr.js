@@ -1,73 +1,22 @@
 // netlify/functions/ocr.js
-// OCR.Space PRO 호출 (apipro1/apipro2). JSON(dataURL base64) 받아서 base64Image로 전달.
-// - env: OCR_SPACE_API_KEY (필수)
-// - env: OCR_SPACE_API_ENDPOINT (권장: https://apipro1.ocr.space/parse/image)
-// - env: OCR_SPACE_API_ENDPOINT_BACKUP (권장: https://apipro2.ocr.space/parse/image)
-// - env: OCR_SPACE_TIMEOUT_MS (옵션, 기본 30000)
+// -------------------------
+// 역할: OCR.Space PRO로 시험지 이미지(OCR) 돌려서 텍스트만 반환
+// 입력(JSON): { image: "data:image/jpeg;base64,...", page?: number }
+// 출력(JSON): { ok: true, page, text, conf?, hits? } 또는 { ok: false, error, detail? }
+//
+// 필요한 환경변수:
+// - OCR_SPACE_API_KEY       (필수)
+// - OCR_SPACE_API_ENDPOINT  (선택, 예: "https://apipro1.ocr.space/parse/image")
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
       "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify(obj),
   };
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function callOcrOnce(endpoint, apiKey, image, timeoutMs) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const form = new URLSearchParams();
-    form.append("base64Image", image);
-    form.append("language", "eng");
-    form.append("isOverlayRequired", "false");
-    form.append("scale", "true");
-    // PRO 엔진
-    form.append("OCREngine", "2");
-
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        apikey: apiKey,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: form.toString(),
-      signal: controller.signal,
-    });
-
-    const text = await res.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error("Invalid JSON from OCR.Space: " + text.slice(0, 200));
-    }
-
-    if (!res.ok) {
-      throw new Error(
-        `HTTP ${res.status} from OCR.Space: ${text.slice(0, 200)}`
-      );
-    }
-
-    if (data.IsErroredOnProcessing) {
-      const msg =
-        (Array.isArray(data.ErrorMessage) ? data.ErrorMessage.join("; ") : data.ErrorMessage) ||
-        data.ErrorDetails ||
-        "Unknown OCR error";
-      throw new Error("OCR.Space processing error: " + msg);
-    }
-
-    return data;
-  } finally {
-    clearTimeout(id);
-  }
 }
 
 exports.handler = async (event) => {
@@ -81,53 +30,61 @@ exports.handler = async (event) => {
       return json(500, { ok: false, error: "OCR_SPACE_API_KEY is not set" });
     }
 
-    const primaryEndpoint =
+    const endpoint =
       process.env.OCR_SPACE_API_ENDPOINT ||
       "https://apipro1.ocr.space/parse/image";
-    const backupEndpoint =
-      process.env.OCR_SPACE_API_ENDPOINT_BACKUP ||
-      "https://apipro2.ocr.space/parse/image";
-    const timeoutMs = Number(process.env.OCR_SPACE_TIMEOUT_MS ?? 30000);
 
     let body = {};
     try {
       body = JSON.parse(event.body || "{}");
-    } catch {
+    } catch (e) {
       return json(400, { ok: false, error: "Invalid JSON body" });
     }
 
-    const image = body.image;
     const page = body.page ?? 1;
-
-    if (!image || typeof image !== "string" || !image.startsWith("data:")) {
-      return json(400, { ok: false, error: "Missing or invalid 'image' (dataURL) field" });
+    const image = body.image;
+    if (!image || typeof image !== "string") {
+      return json(400, { ok: false, error: "image(dataURL) is required" });
     }
 
-    let data = null;
-    let lastError = null;
+    // OCR.Space API 호출
+    // language: "auto"  → 한국어 + 영어 포함해서 자동 인식 (한양대 때처럼 한국어도 인식되도록)
+    const form = new URLSearchParams();
+    form.append("apikey", apiKey);
+    form.append("language", "auto");
+    form.append("isOverlayRequired", "false");
+    form.append("OCREngine", "2");
+    form.append("base64Image", image); // data:image/jpeg;base64,... 그대로 전달
 
-    // 1차: primary
+    const res = await fetch(endpoint, {
+      method: "POST",
+      body: form,
+    });
+
+    let data;
     try {
-      data = await callOcrOnce(primaryEndpoint, apiKey, image, timeoutMs);
-    } catch (err) {
-      lastError = err;
-    }
-
-    // 2차: backup
-    if (!data) {
-      await sleep(300); // 잠깐 쉬고
-      try {
-        data = await callOcrOnce(backupEndpoint, apiKey, image, timeoutMs);
-      } catch (err) {
-        lastError = err;
-      }
-    }
-
-    if (!data) {
+      data = await res.json();
+    } catch (e) {
       return json(502, {
         ok: false,
-        error: "Both OCR endpoints failed",
-        detail: String(lastError || "Unknown"),
+        error: "Invalid OCR API response",
+        detail: String(e?.message || e),
+      });
+    }
+
+    if (!res.ok) {
+      return json(res.status, {
+        ok: false,
+        error: "HTTP error from OCR API",
+        detail: data,
+      });
+    }
+
+    if (data.IsErroredOnProcessing) {
+      return json(500, {
+        ok: false,
+        error: "OCR API processing error",
+        detail: data.ErrorMessage || data.ErrorDetails || null,
       });
     }
 
@@ -135,45 +92,35 @@ exports.handler = async (event) => {
       ? data.ParsedResults
       : [];
 
-    const texts = [];
-    const confidences = [];
+    const text = parsedResults
+      .map((r) => r.ParsedText || "")
+      .join("\n")
+      .trim();
 
-    for (const pr of parsedResults) {
-      if (pr && typeof pr.ParsedText === "string") {
-        texts.push(pr.ParsedText);
-      }
-      if (pr && typeof pr.MeanConfidence === "number") {
-        confidences.push(pr.MeanConfidence);
-      }
-    }
+    // 평균 신뢰도(있으면)와 문항번호 패턴 수(옵션)
+    const conf =
+      parsedResults[0] && typeof parsedResults[0].MeanConfidenceLevel === "number"
+        ? parsedResults[0].MeanConfidenceLevel
+        : null;
 
-    const fullText = texts.join("\n\n---PAGE BREAK---\n\n").trim();
-    const avgConfidence =
-      confidences.length > 0
-        ? confidences.reduce((a, b) => a + b, 0) / confidences.length
-        : 0;
-
-    // 대략적인 "문항 번호 패턴" 카운트 (1. 2. or 1) 2) 등)
-    let questionPatternCount = 0;
-    if (fullText) {
-      const matches = fullText.match(/\b\d{1,2}\s*[\.\)]/g);
-      questionPatternCount = matches ? matches.length : 0;
+    let hits = null;
+    if (text) {
+      const m = text.match(/\b\d{1,2}\s*[.)]/g);
+      hits = m ? m.length : 0;
     }
 
     return json(200, {
       ok: true,
       page,
-      text: fullText,
-      avgConfidence,
-      questionPatternCount,
-      rawExitCode: data.OCRExitCode,
-      isErroredOnProcessing: !!data.IsErroredOnProcessing,
+      text,
+      conf,
+      hits,
     });
-  } catch (err) {
+  } catch (e) {
     return json(500, {
       ok: false,
-      error: "ocr internal error",
-      detail: String(err && err.message ? err.message : err),
+      error: "Unhandled error in ocr function",
+      detail: String(e?.message || e),
     });
   }
 };
