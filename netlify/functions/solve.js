@@ -1,134 +1,58 @@
 // netlify/functions/solve.js
-
-// Netlify Node 18+ 에서는 global fetch 가 있지만,
-// 만약 없을 경우를 대비해 node-fetch 로 폴백.
-const fetchFn = (...args) => {
-  if (typeof fetch !== "undefined") return fetch(...args);
-  return import("node-fetch").then(({ default: f }) => f(...args));
-};
+// --------------------------------------
+// 중앙대학교 편입 영어 객관식 기출 "정답만" 생성 전용 함수
+// 입력: { ocrText: string, page?: number }
+// 출력: { ok: true, text: "1: 3\n2: 4\n..." , debug: {...} }
+//
+// 환경변수 (Netlify):
+// - OPENROUTER_API_KEY  (필수)
+// - MODEL_NAME          (선택, 기본 "openai/gpt-4.1")
+// - TEMPERATURE         (선택, 기본 0.1)
+// - STOP_TOKEN          (선택, 기본 "XURTH")
 
 function json(statusCode, obj) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
+      "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify(obj),
   };
 }
 
-const SYSTEM_PROMPT = `
-You are an AI that solves Korean college transfer ENGLISH multiple-choice exams.
+// OCR 텍스트에서 문항번호 후보 뽑기 (예: "12.", "12)" 이런 패턴)
+function extractQuestionNumbers(ocrText) {
+  if (!ocrText) return [];
+  const found = new Set();
+  const regex = /(?:^|\n)\s*(\d{1,3})\s*[.)]/g;
+  let m;
+  while ((m = regex.exec(ocrText)) !== null) {
+    const n = Number(m[1]);
+    if (!Number.isNaN(n) && n > 0 && n <= 100) {
+      found.add(n);
+    }
+  }
+  return Array.from(found).sort((a, b) => a - b);
+}
 
-[Primary goals, in order]
-1) Minimize wrong answers.
-2) Never skip a question that appears in the text.
-3) Output only the final answer key in the required format.
+// 모델 출력에서 "번호: 정답" 구조 파싱 (디버그용)
+function parseAnswersFromText(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const answers = {};
+  const regex = /^(\d{1,3})\s*[:\-]\s*([A-E1-5])\??\b/i;
 
-[Input]
-- OCR text of one or more exam pages.
-- The text can contain: question numbers, directions, passages, choices (A/B/C/D/E or ①②③④).
-- Some questions ask for the correct statement; some ask for the WRONG / NOT / EXCEPT statement; some ask which underlined word is NOT correct; some ask to reorder sentences; some ask for the main idea, best title, author’s attitude, etc.
-
-[Output format rules – MUST follow exactly]
-- One question per line.
-- Format: "<number>: <capital letter>" (examples: "7: D", "19: B").
-- No explanations, no Korean, no extra text, no blank lines.
-- No punctuation other than a colon and a single space after the colon.
-- Question numbers must be in ascending order if possible.
-- Exactly one answer for each visible question number.
-
-[Global solving procedure – internal only]
-1) Read the WHOLE OCR text once from top to bottom.
-2) List all clearly visible question numbers.
-3) For each question number:
-   - Collect its stem, the relevant passage sentences, and all choices A–E.
-   - Identify the question type (vocabulary, NOT/EXCEPT, main idea, inference, reordering, grammar, etc.).
-   - Then choose exactly ONE best option according to the rules below.
-
---------------------------------------------------
-[Type-specific rules]
-
-1) Vocabulary / closest meaning / synonym questions
-- Treat these as “meaning IN CONTEXT” questions.
-- Steps:
-  1) Infer the meaning of the underlined word from the sentence and passage
-     (who/what it refers to, positive/negative, concrete/abstract, person/place/event, etc.).
-  2) For each option A–E, recall its core dictionary meaning.
-  3) Eliminate any option whose semantic TYPE clearly does not match the underlined word
-     (for example: person vs building, event vs object, cause vs result).
-- Prefer the option that:
-  - matches both the semantic type AND nuance (formal/informal, approving/critical),
-  - fits naturally if you substitute it back into the sentence.
-- Do NOT choose an option only because it looks rare, fancy, or “harder”.
-- If two words seem close, choose the one that most exactly matches the meaning required by the sentence and passage.
-
-2) “NOT / INCORRECT / EXCEPT / FALSE” questions
-- These are reverse questions.
-- INTERNAL PROCEDURE:
-  1) For each choice A–E, decide:
-     - TRUE: clearly stated, strongly implied, or naturally supported by the passage.
-     - FALSE: contradicts the passage OR goes beyond what the passage supports.
-  2) Among A–E, select EXACTLY ONE FALSE choice as the answer.
-- Important:
-  - If the passage clearly supports or implies a statement (even if it is negative or surprising), treat it as TRUE.
-  - If a choice exaggerates the passage, adds new claims not mentioned, or reverses the point of the passage, treat it as FALSE.
-  - Do NOT pick “the vaguest” option. Pick the one that most clearly conflicts with the passage’s content.
-
-3) “Which underlined word/phrase is NOT correct?” (word choice / usage)
-- For each underlined expression:
-  - Check grammar (tense, agreement, preposition, usual collocations).
-  - Check logical meaning in context.
-- Exactly ONE underlined part must be wrong.
-- Pay special attention to:
-  - time/order verbs (precede/follow, predate/postdate, earlier/later),
-  - polarity (increase/decrease, cause/prevent, possible/impossible),
-  - conjunctions (because/although, despite/because of).
-- Do NOT mark a word wrong just because it is rare or academic.
-  If the literal meaning and usage fit the sentence and passage, treat it as correct.
-
-4) Reordering sentence questions
-- Construct a coherent mini-paragraph:
-  - Start with the most general background or topic-introducing sentence.
-  - Then follow natural time order and cause→effect order.
-  - Ensure pronouns and references (“this change”, “such a law”, “these problems”) clearly refer back to something already mentioned.
-- Compare each candidate order carefully and choose the one that yields the smoothest logical progression from start to finish.
-
-5) Main idea / best title / purpose of the passage
-- First, internally summarize the passage in one short sentence:
-  - WHAT is the topic?
-  - WHAT is the author mainly doing? (explaining / arguing / criticizing / comparing / narrating)
-- Then choose the option that:
-  - covers the ENTIRE passage, not just one example, one time period, or one detail,
-  - matches the overall attitude and purpose (neutral explanation vs strong criticism vs praise).
-- Reject options that:
-  - focus only on a minor detail,
-  - introduce a purpose (warning, proposal, campaign, recommendation, etc.) that the passage does not clearly support.
-
-6) Inference questions (“What can be inferred…?”)
-- Choose only statements that are STRONGLY supported by the passage.
-- Do NOT select options that make new claims not grounded in the text, even if they sound realistic in the real world.
-- If the passage leaves something open, do NOT treat a specific guess as a valid inference.
-
-7) Ordinary comprehension / detail questions
-- Match each option directly against the passage.
-- If the passage explicitly states the opposite, that option is wrong.
-- If the passage never mentions or supports the claim, treat it as unsupported and wrong.
-
---------------------------------------------------
-[If information seems partial or OCR is imperfect]
-- Even if the OCR text is cut off or some letters are noisy, you MUST still output exactly ONE answer per visible question number.
-- Use all available context and constraints (time order, cause/effect, contrast, definitions, synonyms) to select the most defensible option.
-- Never output “I don’t know” or any explanation.
-- Even when unsure, choose the best single option.
-
-[Final reminder]
-- Follow ALL output format rules strictly: only lines like "19: B".
-- Do NOT output Korean.
-- Do NOT output explanations.
-- Do NOT output anything else.
-`;
+  for (const raw of lines) {
+    const ln = raw.trim();
+    if (!ln) continue;
+    const m = ln.match(regex);
+    if (!m) continue;
+    const qNum = Number(m[1]);
+    let ans = m[2].toUpperCase();
+    answers[qNum] = ans;
+  }
+  return answers;
+}
 
 exports.handler = async (event) => {
   try {
@@ -153,100 +77,148 @@ exports.handler = async (event) => {
     }
 
     const page = body.page ?? 1;
-    const ocrTextRaw = String(body.ocrText || body.text || "");
-    const ocrText = ocrTextRaw.trim();
+    const ocrText = String(body.ocrText || body.text || "");
 
-    if (!ocrText) {
-      return json(400, { ok: false, error: "Missing ocrText" });
+    if (!ocrText.trim()) {
+      return json(400, { ok: false, error: "ocrText is empty" });
     }
 
-    const userPrompt = [
-      "You will receive OCR text from an English multiple-choice exam.",
-      `Page: ${page}`,
-      "",
-      "OCR TEXT:",
-      ocrText,
-      "",
-      `Remember: output only lines in the exact format "number: LETTER".`,
-    ].join("\n");
+    const questionNumbers = extractQuestionNumbers(ocrText);
+    const qNumHint =
+      questionNumbers.length > 0
+        ? `이 페이지 OCR에서 탐지된 문항번호 후보: ${questionNumbers.join(
+            ", "
+          )}.`
+        : "이 페이지의 OCR에서 문항번호를 직접 찾아야 한다.";
 
-    const res = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
+    // ---- OpenRouter 요청 ----
+    const promptUser = `
+너는 "중앙대학교 편입 영어 객관식 기출 채점 AI"이다.
+
+[시험 유형]
+- 대상: 중앙대학교 인문/사회계열 편입 영어 기출 (여러 연도, 여러 유형 혼합).
+- 한 페이지에 여러 유형이 섞여 있을 수 있다:
+  - 어휘: 밑줄 친 단어와 가장 가까운 의미, 반의어, 문맥상 적절한 단어 등.
+  - 문장삽입/순서: (A)(B)(C)(D) 문단, 문장 배치.
+  - 제목/요지/주장/함의.
+  - 내용일치/불일치.
+- 선택지는 보통 ①~④ 또는 ①~⑤ 형태이고, OCR 과정에서 "1,2,3,4,5"나 "A,B,C,D,E" 등으로 깨질 수 있다.
+
+[입력]
+- 아래에 중앙대 편입 영어 시험지의 한 페이지 전체가 OCR 텍스트로 주어진다.
+- OCR 특성상 줄바꿈/띄어쓰기/철자/번호/동그라미 숫자(①②③④⑤)가 다소 깨져 있을 수 있다.
+- ${qNumHint}
+
+[최우선 목표]
+1) 오답 최소화 (가능한 한 정확한 정답 선택)
+2) 문항 누락 0: OCR에 '보이는 모든 문항번호'는 전부 답을 출력한다.
+3) 형식 준수:
+   - 각 줄은 반드시 "문항번호: 정답번호" 형식으로만 출력.
+   - 정답번호는 **숫자 1~5** 또는 알파벳 A~E 둘 중 하나로만 사용.
+     (예: "3: 2" 또는 "3: B")
+   - 한 줄에 하나의 문항만.
+   - 그 외 아무 텍스트(해설, 이유, 설명, 머리말, 마크다운, 공백 줄 등)도 출력하지 말 것.
+4) 불확실한 경우:
+   - 그래도 가장 가능성 높은 선택지를 하나 고른다.
+   - 그 줄 끝에 "?"를 붙여라. (예: "12: 3?")
+   - 그리고 마지막 줄에 "UNSURE: 12, 17" 처럼 불확실한 문항번호를 콤마로 나열한다.
+   - 확실한 문항이 없으면 UNSURE 줄 생략 가능.
+
+[해석/추론 규칙]
+- 지문과 선택지를 최대한 정상적인 시험지 형식으로 복원해서 읽는다.
+- 번호/선지 사이의 줄바꿈·공백·특수문자는 전부 무시하고 의미 단위로 다시 묶어서 이해하라.
+- ①②③④ 같은 기호가 깨져 있어도, 순서를 보고 1~4번 선택지로 매핑해서 판단할 것.
+- "다음 글을 읽고 물음에 답하시오" 같은 안내 문구, 연도, A형/B형, 페이지 번호([6-1] 등)는 전부 무시한다.
+- 지문과 보기가 앞뒤 페이지로 나뉘어 있을 수 있으므로, **주어진 전체 텍스트를 한 덩어리의 시험지**처럼 보고,
+  그 안에서 보이는 모든 문항번호에 대해 정답을 결정하라.
+
+[출력 형식 요약]
+- 예시 1 (확실한 경우):
+  1: 3
+  2: 4
+  3: 1
+
+- 예시 2 (일부 불확실한 경우):
+  1: 3
+  2: 4?
+  3: 1
+  UNSURE: 2
+
+지금부터 아래 OCR 텍스트를 보고,
+보이는 **모든 객관식 문항**에 대해 위의 형식으로만 정답을 출력하라.
+
+----- OCR TEXT START -----
+${ocrText}
+----- OCR TEXT END -----
+`.trim();
+
+    const payload = {
+      model,
+      temperature,
+      top_p: 0.95,
+      presence_penalty: 0,
+      frequency_penalty: 0,
+      stop: [stopToken],
+      messages: [
+        {
+          role: "system",
+          content:
+            "너는 중앙대학교 편입 영어 객관식 시험의 정답만 출력하는 채점 AI이다. 항상 형식을 엄격히 지키고, 다른 설명 문장은 절대 출력하지 마라.",
+        },
+        {
+          role: "user",
+          content: promptUser,
+        },
+      ],
+    };
+
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
-        "HTTP-Referer": "https://beamish-alpaca-e3df59.netlify.app",
-        "X-Title": "answer-site-solve-fn",
+        "HTTP-Referer": "https://answer-site.netlify.app/",
+        "X-Title": "CAU Transfer English Auto Solver",
       },
-      body: JSON.stringify({
-        model,
-        temperature,
-        stop: [stopToken],
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT.trim() },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return json(res.status, {
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      return json(resp.status, {
         ok: false,
-        error: `OpenRouter HTTP ${res.status}`,
-        details: text.slice(0, 500),
+        error: `OpenRouter request failed: ${resp.status}`,
+        detail: errText.slice(0, 500),
       });
     }
 
-    const data = await res.json();
-    const raw = String(data.choices?.[0]?.message?.content || "").trim();
-
-    // STOP_TOKEN 이전까지만 사용
-    const cleaned = raw.split(stopToken)[0].trim();
-
-    const lines = cleaned
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-
-    const answers = {};
-    const questionNumbers = [];
-    const answerLines = [];
-
-    for (const line of lines) {
-      const m = line.match(/^(\d+)\s*[:\-]\s*([A-E])(\?)?\s*$/i);
-      if (!m) continue;
-      const qNum = Number(m[1]);
-      const choice = m[2].toUpperCase();
-      const unsure = !!m[3];
-
-      answers[qNum] = choice;
-      questionNumbers.push(qNum);
-      answerLines.push(`${qNum}: ${choice}${unsure ? "?" : ""}`);
+    const data = await resp.json().catch(() => null);
+    if (!data) {
+      return json(500, { ok: false, error: "Failed to parse OpenRouter response" });
     }
 
-    const outputLines = answerLines.length > 0 ? answerLines : lines;
+    const choice = data.choices && data.choices[0];
+    const content = choice?.message?.content || "";
+    const finishReason = choice?.finish_reason || "unknown";
+
+    const answers = parseAnswersFromText(content);
 
     return json(200, {
       ok: true,
-      text: outputLines.join("\n"),
+      text: content.trim(),
       debug: {
         page,
         model,
         questionNumbers,
         answers,
-        finishReason: data.choices?.[0]?.finish_reason ?? null,
-        ocrTextPreview: ocrText.slice(0, 400),
+        finishReason,
       },
     });
-  } catch (err) {
-    console.error("solve.js error", err);
+  } catch (e) {
     return json(500, {
       ok: false,
-      error:
-        err && err.message
-          ? err.message
-          : "Unknown error in solve function",
+      error: "Unhandled error in solve function",
+      detail: e?.message || String(e),
     });
   }
 };
